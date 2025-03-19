@@ -9,16 +9,18 @@ export enum EventState {
   Finished = "Finished",
 }
 
+export type Process = (
+  sim: Simulation,
+  event: Event,
+) => Generator<Event | void, void, void>;
+
 export interface Event {
   id: string;
   status: EventState;
   fired_at: number;
   scheduled_at: number;
   finished_at?: number;
-  callback: (
-    sim: Simulation,
-    event: Event,
-  ) => Generator<Event | void, void, void>;
+  callback: Process;
 }
 
 export function initialize_simulation(): Simulation {
@@ -29,9 +31,9 @@ export function initialize_simulation(): Simulation {
 }
 
 export function run_simulation(sim: Simulation): void {
-  const current_time = sim.current_time;
-
   while (true) {
+    const current_time = sim.current_time;
+
     const events_todo = sim.events.filter((event) =>
       (event.scheduled_at >= current_time) &&
       (event.status === EventState.Scheduled)
@@ -56,10 +58,7 @@ export function run_simulation(sim: Simulation): void {
 export function create_event(
   sim: Simulation,
   scheduled_at: number,
-  callback: (
-    sim: Simulation,
-    event: Event,
-  ) => Generator<Event | void, void, void>,
+  callback: Process,
 ): Event {
   return {
     id: crypto.randomUUID(),
@@ -71,13 +70,13 @@ export function create_event(
 }
 
 export function schedule_event(sim: Simulation, event: Event): Event[] {
-  return [...sim.events, { ...event, status: EventState.Scheduled }];
+  return [{ ...event, status: EventState.Scheduled }, ...sim.events];
 }
 
 export function handle_event(sim: Simulation, event: Event): Event {
   const next_event = event.callback(sim, event).next();
 
-  if (next_event.value) {
+  if (next_event.value && !next_event.done) {
     sim.events = schedule_event(sim, next_event.value);
   }
 
@@ -88,51 +87,77 @@ export function handle_event(sim: Simulation, event: Event): Event {
   };
 }
 
-export function* timeout(sim: Simulation, duration: number): Generator<Event | void, void, void> {
-  yield create_event(
+export function* timeout(
+  sim: Simulation,
+  duration: number,
+  callback: Process | void,
+): Generator<Event | void, void, void> {
+  const empty_callback = function* () {
+    yield;
+  };
+
+  const timeout_callback = callback ? callback : empty_callback;
+
+  const timeout_event = create_event(
     sim,
     sim.current_time + duration,
-    function* (
-      sim: Simulation,
-      event: Event,
-    ): Generator<Event | void, void, void> {
-      yield void 0;
-    },
+    timeout_callback,
   );
+
+  sim.events = schedule_event(sim, timeout_event);
+
+  yield timeout_event;
 }
 
 if (import.meta.main) {
   // Initialization simulation
   const sim = initialize_simulation();
 
-  const hi = function* (
+  const hi: Process = function* (
     sim: Simulation,
     event: Event,
   ): Generator<Event | void, void, void> {
+    // Print hi
     console.log(`[${sim.current_time}] hi`);
-    yield void 0;
-  };
-
-  const bye = function* (
-    sim: Simulation,
-    event: Event,
-  ): Generator<Event | void, void, void> {
-    yield timeout(sim, 15).next().value;
-    console.log(`[${sim.current_time}] bye`);
     yield;
   };
 
-  // Schedule an event at timestamp 10
+  const bye: Process = function* (
+    sim: Simulation,
+    event: Event,
+  ): Generator<Event | void, void, void> {
+    const cb = function* (
+      sim: Simulation,
+      event: Event,
+    ): Generator<Event | void, void, void> {
+      // Print bye
+      console.log(`[${sim.current_time}] bye`);
+
+      yield* timeout(sim, 3);
+      yield;
+
+      return;
+    };
+    // Sleep for 15 steps and execute callback
+    yield* timeout(sim, 15, cb);
+
+    // BUG
+    console.log(sim.current_time);
+    console.log("yo");
+  };
+
   const e1 = create_event(sim, 10, hi);
   sim.events = schedule_event(sim, e1);
 
-  // Simulation ends when the end event has been handled
   const e2 = create_event(sim, 20, bye);
   sim.events = schedule_event(sim, e2);
 
-  // ...
   const e3 = create_event(sim, 33, hi);
   sim.events = schedule_event(sim, e3);
+
+  const e4 = create_event(sim, 50, hi);
+  sim.events = schedule_event(sim, e4);
+
   run_simulation(sim);
 
   console.log(`Simulation ended at ${sim.current_time}`);
