@@ -1,5 +1,5 @@
 export interface Simulation {
-  current_time: number;
+  currentTime: number;
   events: Event[];
 }
 
@@ -17,8 +17,8 @@ export type Process = (
 export interface Event {
   id: string;
   status: EventState;
-  fired_at: number;
-  scheduled_at: number;
-  finished_at?: number;
+  firedAt: number;
+  scheduledAt: number;
+  finishedAt?: number;
   callback: Process;
 }
