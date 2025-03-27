@@ -50,7 +50,7 @@ Deno.test("event callbacks scheduling", () => {
 Deno.test("event timeout scheduling", () => {
   const sim = initialize_simulation();
 
-  const e1 = create_event(sim, 10, function* (sim: Simulation, event: Event) {
+  const e1 = create_event(sim, 10, function* (sim: Simulation, _event: Event) {
     yield* timeout(sim, 15);
   });
 

@@ -12,7 +12,7 @@ if (import.meta.main) {
 
   const foo: Process = function* (
     sim: Simulation,
-    event: Event,
+    _event: Event,
   ): Generator<Event | void, void, void> {
     console.log(`[${sim.current_time}] foo`);
     yield;
@@ -20,11 +20,11 @@ if (import.meta.main) {
 
   const bar: Process = function* (
     sim: Simulation,
-    event: Event,
+    _event: Event,
   ): Generator<Event | void, void, void> {
     const cb = function* (
       sim: Simulation,
-      event: Event,
+      _event: Event,
     ): Generator<Event | void, void, void> {
       console.log(`[${sim.current_time}] callback from bar before timeout`);
       yield* timeout(sim, 5);

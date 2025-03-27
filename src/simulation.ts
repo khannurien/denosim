@@ -61,7 +61,7 @@ export function handle_event(sim: Simulation, event: Event): Event {
       ...event,
       status: EventState.Scheduled,
       scheduled_at: scheduled_at,
-      callback: function* (sim: Simulation, event: Event) {
+      callback: function* (_sim: Simulation, _event: Event) {
         yield* generator;
       },
     });
