@@ -23,7 +23,6 @@ if (import.meta.main) {
   const e1 = createEvent(sim, 0, foo);
   sim.events = scheduleEvent(sim, e1);
 
-  // error: Uncaught (in promise) RangeError: Maximum call stack size exceeded
   const stats = runSimulation(sim);
 
   console.log(`Simulation ended at ${sim.currentTime}`);

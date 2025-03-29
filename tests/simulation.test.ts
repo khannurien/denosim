@@ -24,6 +24,16 @@ Deno.test("basic event scheduling", () => {
   assert(sim.events.every((event) => event.status == EventState.Finished));
 });
 
+Deno.test("zero-duration events", () => {
+  const sim = initializeSimulation();
+
+  const e1 = createEvent(sim, sim.currentTime);
+  sim.events = scheduleEvent(sim, e1);
+
+  const _stats = runSimulation(sim);
+  assertEquals(sim.events[0].finishedAt, 0);
+});
+
 Deno.test("basic out of order scheduling", () => {
   const sim = initializeSimulation();
 
@@ -46,12 +56,18 @@ Deno.test("basic out of order scheduling", () => {
 Deno.test("basic event ordering", () => {
   const sim = initializeSimulation();
 
-  const e1 = createEvent(sim, 10);
-  const e2 = createEvent(sim, 0);
-  const e3 = createEvent(sim, 15);
-  const e4 = createEvent(sim, 5);
-  const e5 = createEvent(sim, 2);
-  const e6 = createEvent(sim, 50);
+  const processedOrder: number[] = [];
+  const cb = function* (_sim: Simulation, event: Event) {
+    processedOrder.push(event.scheduledAt);
+    yield;
+  };
+
+  const e1 = createEvent(sim, 10, cb);
+  const e2 = createEvent(sim, 0, cb);
+  const e3 = createEvent(sim, 15, cb);
+  const e4 = createEvent(sim, 5, cb);
+  const e5 = createEvent(sim, 2, cb);
+  const e6 = createEvent(sim, 50, cb);
 
   sim.events = scheduleEvent(sim, e1);
   sim.events = scheduleEvent(sim, e2);
@@ -62,6 +78,7 @@ Deno.test("basic event ordering", () => {
 
   const _stats = runSimulation(sim);
   assertEquals(sim.events.length, 6);
+  assertEquals(processedOrder, [0, 2, 5, 10, 15, 50]);
   assert(sim.events.every((event) => event.status == EventState.Finished));
 });
 
@@ -125,6 +142,10 @@ Deno.test("event timeout scheduling", () => {
 
   const _stats = runSimulation(sim);
   assertEquals(sim.events.length, 2);
+
+  const timeoutEvents = sim.events.filter(e => e.id !== e1.id);
+  assertEquals(timeoutEvents.length, 1);
+  assertEquals(timeoutEvents[0].scheduledAt, 25);
 
   assert(sim.events.every((event) => event.status == EventState.Finished));
 });
