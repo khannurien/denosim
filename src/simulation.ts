@@ -1,4 +1,10 @@
-import { Event, EventState, Process, Simulation } from "./model.ts";
+import {
+  Event,
+  EventState,
+  Process,
+  Simulation,
+  SimulationStats,
+} from "./model.ts";
 
 export function initializeSimulation(): Simulation {
   return {
@@ -7,7 +13,9 @@ export function initializeSimulation(): Simulation {
   };
 }
 
-export function runSimulation(sim: Simulation) {
+export function runSimulation(sim: Simulation): SimulationStats {
+  const start = performance.now();
+
   while (true) {
     const eventsTodo = sim.events.filter((event) =>
       (event.scheduledAt >= sim.currentTime) &&
@@ -24,6 +32,12 @@ export function runSimulation(sim: Simulation) {
     const finished = handleEvent(sim, event);
     sim.events = [finished, ...sim.events];
   }
+
+  const end = performance.now();
+
+  return {
+    duration: end - start,
+  };
 }
 
 export function createEvent(
@@ -43,7 +57,14 @@ export function createEvent(
 }
 
 export function scheduleEvent(sim: Simulation, event: Event): Event[] {
-  return [{ ...event, status: EventState.Scheduled }, ...sim.events];
+  if (event.scheduledAt < sim.currentTime) {
+    throw RangeError(
+      `Event scheduled at a point in time in the past: ${event.id} ` +
+        `(scheduled at: ${event.scheduledAt}; current time: ${sim.currentTime})`,
+    );
+  }
+
+  return [...sim.events, { ...event, status: EventState.Scheduled }];
 }
 
 export function handleEvent(sim: Simulation, event: Event): Event {
@@ -53,14 +74,9 @@ export function handleEvent(sim: Simulation, event: Event): Event {
   sim.events = sim.events.filter((previous) => previous.id !== event.id);
 
   if (!done && value) {
-    const scheduledAt = value.scheduledAt > sim.currentTime
-      ? value.scheduledAt
-      : sim.currentTime;
-
     sim.events = scheduleEvent(sim, {
       ...event,
-      status: EventState.Scheduled,
-      scheduledAt: scheduledAt,
+      scheduledAt: value.scheduledAt,
       callback: function* (_sim: Simulation, _event: Event) {
         yield* generator;
       },
@@ -82,9 +98,7 @@ export function* timeout(
   const timeoutEvent = createEvent(
     sim,
     sim.currentTime + duration,
-    callback ?? function* () {
-      yield;
-    },
+    callback,
   );
 
   sim.events = scheduleEvent(sim, timeoutEvent);

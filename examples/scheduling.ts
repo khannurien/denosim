@@ -48,8 +48,9 @@ if (import.meta.main) {
   const e4 = createEvent(sim, 50, foo);
   sim.events = scheduleEvent(sim, e4);
 
-  runSimulation(sim);
+  const stats = runSimulation(sim);
 
   console.log(`Simulation ended at ${sim.currentTime}`);
+  console.log(`Simulation took: ${stats.duration} ms`);
   console.log("Events:", JSON.stringify(sim.events, null, 2));
 }

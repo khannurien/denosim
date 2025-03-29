@@ -22,3 +22,7 @@ export interface Event {
   finishedAt?: number;
   callback: Process;
 }
+
+export interface SimulationStats {
+  duration: number;
+}
