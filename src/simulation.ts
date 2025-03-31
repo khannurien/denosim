@@ -141,6 +141,7 @@ export function handleEvent<T>(sim: Simulation<T>, event: Event<T>): Event<T> {
     ...event,
     finishedAt: sim.currentTime,
     status: EventState.Finished,
+    generator: undefined, // Clear the generator after the event is finished
   };
 }
 
