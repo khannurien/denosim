@@ -11,6 +11,8 @@ export interface Simulation<T = unknown> {
   events: Event<T>[];
 }
 
+export type { Event, Process };
+
 /**
  * Initializes a new simulation instance with:
  * - currentTime set to 0 (starting point of simulation)

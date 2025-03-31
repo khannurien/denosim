@@ -1,11 +1,13 @@
 import { assert, assertEquals, assertThrows } from "@std/assert";
-import { Event, EventState, Process } from "../src/model.ts";
-import { Simulation } from "../src/simulation.ts";
+import { EventState } from "../src/model.ts";
 import {
   createEvent,
+  Event,
   initializeSimulation,
+  Process,
   runSimulation,
   scheduleEvent,
+  Simulation,
   timeout,
 } from "../src/simulation.ts";
 
@@ -58,7 +60,7 @@ Deno.test("basic event ordering", () => {
   const sim = initializeSimulation<undefined>();
 
   const processedOrder: number[] = [];
-  const cb: Process<undefined> = function* (_sim: Simulation<undefined>, event: Event<undefined>): Generator<void, void, undefined> {
+  const cb: Process<undefined> = function* (_sim: Simulation<undefined>, event: Event<undefined>) {
     processedOrder.push(event.scheduledAt);
     yield;
   };
@@ -86,7 +88,7 @@ Deno.test("basic event ordering", () => {
 Deno.test("scheduling events in the past", () => {
   const sim = initializeSimulation<void>();
 
-  const cb: Process<void> = function* (sim: Simulation<void>, _event: Event<void>): Generator<void, void, void> {
+  const cb: Process<void> = function* (sim: Simulation<void>, _event: Event<void>) {
     const past = createEvent(sim, sim.currentTime - 1);
     sim.events = scheduleEvent(sim, past);
     yield;
@@ -110,7 +112,7 @@ Deno.test("event callbacks scheduling", () => {
 
   const results: Record<number, Event<void>> = {};
 
-  const cb: Process<void> = function* (sim: Simulation<void>, event: Event<void>): Generator<void, void, void> {
+  const cb: Process<void> = function* (sim: Simulation<void>, event: Event<void>) {
     results[sim.currentTime] = event;
     yield;
   };
@@ -134,7 +136,7 @@ Deno.test("event callbacks scheduling", () => {
 Deno.test("event timeout scheduling", () => {
   const sim = initializeSimulation<void>();
 
-  const cb: Process<void> = function* (sim: Simulation<void>, _event: Event<void>): Generator<void, void, void> {
+  const cb: Process<void> = function* (sim: Simulation<void>, _event: Event<void>) {
     yield* timeout(sim, 15);
   };
 
