@@ -97,7 +97,7 @@ export function createEvent<T = void>(
 export function scheduleEvent<T = void>(
   sim: Simulation,
   event: Event<T>,
-): Event<unknown>[] {
+): Event<T>[] {
   if (event.scheduledAt < sim.currentTime) {
     throw RangeError(
       `Event scheduled at a point in time in the past: ${event.id} ` +
@@ -105,7 +105,7 @@ export function scheduleEvent<T = void>(
     );
   }
 
-  return [...sim.events, { ...event, status: EventState.Scheduled }];
+  return [...sim.events, { ...event, status: EventState.Scheduled }] as Event<T>[];
 }
 
 /**
