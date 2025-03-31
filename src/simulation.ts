@@ -131,7 +131,7 @@ export function handleEvent<T>(sim: Simulation<T>, event: Event<T>): Event<T> {
     // Schedule the yielded event and update the current event's generator state
     sim.events = scheduleEvent(sim, {
       ...event,
-      scheduledAt: value.scheduledAt,
+      scheduledAt: (value as Event<T>).scheduledAt,
       generator, // Save generator state for next execution
     });
   }
@@ -167,5 +167,5 @@ export function* timeout<T>(
   sim.events = scheduleEvent(sim, timeoutEvent);
 
   // Yield control (allowing other code to run until timeout completes)
-  yield timeoutEvent;
+  yield timeoutEvent as Event<void | T>;
 }
