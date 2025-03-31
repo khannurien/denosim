@@ -3,16 +3,20 @@ import {
   EventState,
   Process,
   ProcessStep,
-  Simulation,
   SimulationStats,
 } from "./model.ts";
+
+export interface Simulation<T = unknown> {
+  currentTime: number;
+  events: Event<T>[];
+}
 
 /**
  * Initializes a new simulation instance with:
  * - currentTime set to 0 (starting point of simulation)
  * - empty events array (no scheduled events)
  */
-export function initializeSimulation(): Simulation {
+export function initializeSimulation<T = unknown>(): Simulation<T> {
   return {
     currentTime: 0,
     events: [],
@@ -24,7 +28,7 @@ export function initializeSimulation(): Simulation {
  * The simulation processes events in chronological order (earliest first).
  * Returns statistics about the simulation run.
  */
-export function runSimulation(sim: Simulation): SimulationStats {
+export function runSimulation<T>(sim: Simulation<T>): SimulationStats {
   const start = performance.now();
 
   while (true) {
@@ -71,8 +75,8 @@ export function runSimulation(sim: Simulation): SimulationStats {
  * - Optional callback process (defaults to empty generator)
  * - Option item to carry (defaults to undefined)
  */
-export function createEvent<T = void>(
-  sim: Simulation,
+export function createEvent<T>(
+  sim: Simulation<T>,
   scheduledAt: number,
   callback?: Process<T>,
   item?: T,
@@ -94,8 +98,8 @@ export function createEvent<T = void>(
  * Validates that the event isn't scheduled in the past.
  * Returns updated events array with the new scheduled event.
  */
-export function scheduleEvent<T = void>(
-  sim: Simulation,
+export function scheduleEvent<T>(
+  sim: Simulation<T>,
   event: Event<T>,
 ): Event<T>[] {
   if (event.scheduledAt < sim.currentTime) {
@@ -105,7 +109,7 @@ export function scheduleEvent<T = void>(
     );
   }
 
-  return [...sim.events, { ...event, status: EventState.Scheduled }] as Event<T>[];
+  return [...sim.events, { ...event, status: EventState.Scheduled }];
 }
 
 /**
@@ -113,7 +117,7 @@ export function scheduleEvent<T = void>(
  * Handles both immediate completion and yielding of new events.
  * Returns the completed event with updated status and timestamps.
  */
-export function handleEvent<T>(sim: Simulation, event: Event<T>): Event<T> {
+export function handleEvent<T>(sim: Simulation<T>, event: Event<T>): Event<T> {
   // Get the generator - either from previous partial execution or a new one
   const generator = event.generator ?? event.callback(sim, event);
   // Execute next step of the generator
@@ -145,8 +149,8 @@ export function handleEvent<T>(sim: Simulation, event: Event<T>): Event<T> {
  * This is a utility for creating delayed events in the simulation.
  * Yields control until the timeout duration has passed.
  */
-export function* timeout<T = void>(
-  sim: Simulation,
+export function* timeout<T>(
+  sim: Simulation<T>,
   duration: number,
   callback?: Process<T>,
   item?: T,
