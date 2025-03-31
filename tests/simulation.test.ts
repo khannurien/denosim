@@ -9,9 +9,9 @@ import {
 } from "../src/simulation.ts";
 
 Deno.test("basic event scheduling", () => {
-  const sim = initializeSimulation();
+  const sim = initializeSimulation<undefined>();
 
-  const e1 = createEvent<undefined>(sim, 10);
+  const e1 = createEvent(sim, 10);
   assertEquals(sim.events.length, 0);
 
   sim.events = scheduleEvent(sim, e1);
@@ -25,7 +25,7 @@ Deno.test("basic event scheduling", () => {
 });
 
 Deno.test("zero-duration events", () => {
-  const sim = initializeSimulation();
+  const sim = initializeSimulation<undefined>();
 
   const e1 = createEvent(sim, sim.currentTime);
   sim.events = scheduleEvent(sim, e1);
@@ -35,7 +35,7 @@ Deno.test("zero-duration events", () => {
 });
 
 Deno.test("basic out of order scheduling", () => {
-  const sim = initializeSimulation();
+  const sim = initializeSimulation<undefined>();
 
   const e1 = createEvent(sim, 10);
   const e2 = createEvent(sim, 5);
@@ -54,10 +54,10 @@ Deno.test("basic out of order scheduling", () => {
 });
 
 Deno.test("basic event ordering", () => {
-  const sim = initializeSimulation();
+  const sim = initializeSimulation<undefined>();
 
   const processedOrder: number[] = [];
-  const cb = function* (_sim: Simulation, event: Event) {
+  const cb = function* (_sim: Simulation<undefined>, event: Event<undefined>) {
     processedOrder.push(event.scheduledAt);
     yield;
   };
@@ -83,9 +83,9 @@ Deno.test("basic event ordering", () => {
 });
 
 Deno.test("scheduling events in the past", () => {
-  const sim = initializeSimulation();
+  const sim = initializeSimulation<void>();
 
-  const cb: Process<void> = function* (sim: Simulation, _event: Event) {
+  const cb: Process<void> = function* (sim: Simulation<void>, _event: Event<void>) {
     const past = createEvent(sim, sim.currentTime - 1);
     sim.events = scheduleEvent(sim, past);
     yield;
@@ -105,11 +105,11 @@ Deno.test("scheduling events in the past", () => {
 });
 
 Deno.test("event callbacks scheduling", () => {
-  const sim = initializeSimulation();
+  const sim = initializeSimulation<void>();
 
-  const results: Record<number, Event> = {};
+  const results: Record<number, Event<void>> = {};
 
-  const cb: Process<void> = function* (sim: Simulation, event: Event) {
+  const cb: Process<void> = function* (sim: Simulation<void>, event: Event<void>) {
     results[sim.currentTime] = event;
     yield;
   };
@@ -131,9 +131,9 @@ Deno.test("event callbacks scheduling", () => {
 });
 
 Deno.test("event timeout scheduling", () => {
-  const sim = initializeSimulation();
+  const sim = initializeSimulation<void>();
 
-  const cb: Process<void> = function* (sim: Simulation, _event: Event) {
+  const cb: Process<void> = function* (sim: Simulation<void>, _event: Event<void>) {
     yield* timeout(sim, 15);
   };
 
