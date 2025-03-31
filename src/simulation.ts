@@ -1,7 +1,6 @@
 import {
   Event,
   EventState,
-  Process,
   ProcessStep,
   SimulationStats,
 } from "./model.ts";
@@ -11,7 +10,8 @@ export interface Simulation<T = unknown> {
   events: Event<T>[];
 }
 
-export type { Event, Process };
+export type { Event };
+export type Process<T> = (sim: Simulation<T>, event: Event<T>) => ProcessStep<T>;
 
 /**
  * Initializes a new simulation instance with:
@@ -143,7 +143,7 @@ export function handleEvent<T>(sim: Simulation<T>, event: Event<T>): Event<T> {
     ...event,
     finishedAt: sim.currentTime,
     status: EventState.Finished,
-    generator: undefined, // Clear the generator after the event is finished
+    generator: done ? undefined : generator, // Clear the generator only if it's done
   };
 }
 
