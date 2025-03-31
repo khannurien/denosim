@@ -3,7 +3,7 @@
  * - The current virtual time of the simulation
  * - All events that have been scheduled
  */
-export interface Simulation {
+export interface Simulation<T = unknown> {
   /**
    * The current virtual time in the simulation.
    * Represents the timestamp up to which the simulation has processed.
@@ -18,7 +18,7 @@ export interface Simulation {
    * - Partially processed events with generator state
    * - Completed events (for historical tracking)
    */
-  events: Event<unknown>[];
+  events: Event<T>[];
 }
 
 /**

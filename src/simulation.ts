@@ -32,10 +32,10 @@ export function runSimulation<T>(sim: Simulation<T>): SimulationStats {
   while (true) {
     // Get all scheduled events that haven't been processed yet,
     // sorted in descending order so we can efficiently pop the earliest event
-    const eventsTodo = sim.events.filter((event) =>
+    const eventsTodo = sim.events.filter((event: Event<T>) =>
       (event.scheduledAt >= sim.currentTime) &&
       (event.status === EventState.Scheduled)
-    ).sort((a, b) => b.scheduledAt - a.scheduledAt);
+    ).sort((a: Event<T>, b: Event<T>) => b.scheduledAt - a.scheduledAt);
 
     const event = eventsTodo.pop();
 
@@ -115,7 +115,7 @@ export function scheduleEvent<T>(
  * Handles both immediate completion and yielding of new events.
  * Returns the completed event with updated status and timestamps.
  */
-export function handleEvent<T>(sim: Simulation, event: Event<T>): Event<T> {
+export function handleEvent<T>(sim: Simulation<T>, event: Event<T>): Event<T> {
   // Get the generator - either from previous partial execution or a new one
   const generator = event.generator ?? event.callback(sim, event);
   // Execute next step of the generator

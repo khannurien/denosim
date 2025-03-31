@@ -24,7 +24,7 @@ Deno.test("basic event scheduling", () => {
   assertEquals(sim.events.length, 1);
   assertEquals(sim.events[0].finishedAt, 10);
 
-  assert(sim.events.every((event) => event.status == EventState.Finished));
+  assert(sim.events.every((event: Event<unknown>) => event.status == EventState.Finished));
 });
 
 Deno.test("zero-duration events", () => {
@@ -148,7 +148,7 @@ Deno.test("event timeout scheduling", () => {
   const _stats = runSimulation(sim);
   assertEquals(sim.events.length, 2);
 
-  const timeoutEvents = sim.events.filter((e) => e.id !== e1.id);
+  const timeoutEvents = sim.events.filter((e: Event<void>) => e.id !== e1.id);
   assertEquals(timeoutEvents.length, 1);
   assertEquals(timeoutEvents[0].scheduledAt, 25);
 
