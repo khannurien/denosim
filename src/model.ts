@@ -45,7 +45,10 @@ export enum EventState {
   Finished = "Finished",
 }
 
-export type ProcessStep<T = unknown> = Generator<
+/**
+ * TODO: Event process state.
+ */
+export type ProcessStep<T = void> = Generator<
   Event<T | void> | void,
   void,
   T | void
@@ -55,8 +58,9 @@ export type ProcessStep<T = unknown> = Generator<
  * Type definition for event process logic.
  * Generator function that defines an event's behavior.
  * Can yield to pause execution and schedule intermediate events.
+ * TODO: Can yield a final value when processing is over.
  */
-export type Process<T = unknown> = (
+export type Process<T = void> = (
   sim: Simulation, // Reference to the running simulation
   event: Event<T>, // The event instance being processed
 ) => ProcessStep<T>; // Generator that can yield events or nothing
@@ -65,7 +69,7 @@ export type Process<T = unknown> = (
  * Represents a discrete event in the simulation system.
  * Events are immutable - state changes create new instances.
  */
-export interface Event<T = unknown> {
+export interface Event<T = void> {
   /** Unique identifier for the event */
   id: string;
 
@@ -106,17 +110,6 @@ export interface Event<T = unknown> {
    * Generator function that can yield to pause/resume execution.
    */
   callback: Process<T>;
-}
-
-export interface GetRequest<T> {
-  event: Event<T>;
-}
-
-export interface Store<T> {
-  id: string;
-  capacity: number;
-  items: T[];
-  pending: GetRequest<T>[];
 }
 
 /**

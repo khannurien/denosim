@@ -85,7 +85,7 @@ Deno.test("basic event ordering", () => {
 Deno.test("scheduling events in the past", () => {
   const sim = initializeSimulation();
 
-  const cb: Process<void> = function* (sim: Simulation, _event: Event) {
+  const cb: Process<void> = function* (sim: Simulation, _event: Event<void>) {
     const past = createEvent(sim, sim.currentTime - 1);
     sim.events = scheduleEvent(sim, past);
     yield;
@@ -107,9 +107,9 @@ Deno.test("scheduling events in the past", () => {
 Deno.test("event callbacks scheduling", () => {
   const sim = initializeSimulation();
 
-  const results: Record<number, Event> = {};
+  const results: Record<number, Event<void>> = {};
 
-  const cb: Process<void> = function* (sim: Simulation, event: Event) {
+  const cb: Process<void> = function* (sim: Simulation, event: Event<void>) {
     results[sim.currentTime] = event;
     yield;
   };
@@ -133,7 +133,7 @@ Deno.test("event callbacks scheduling", () => {
 Deno.test("event timeout scheduling", () => {
   const sim = initializeSimulation();
 
-  const cb: Process<void> = function* (sim: Simulation, _event: Event) {
+  const cb: Process<void> = function* (sim: Simulation, _event: Event<void>) {
     yield* timeout(sim, 15);
   };
 
