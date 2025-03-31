@@ -105,7 +105,7 @@ export function scheduleEvent<T = void>(
     );
   }
 
-  return [...sim.events, { ...event, status: EventState.Scheduled }];
+  return [...sim.events, { ...event, status: EventState.Scheduled } as Event<unknown>];
 }
 
 /**
@@ -137,6 +137,7 @@ export function handleEvent<T>(sim: Simulation, event: Event<T>): Event<T> {
     ...event,
     finishedAt: sim.currentTime,
     status: EventState.Finished,
+    generator: done ? undefined : generator,
   };
 }
 
@@ -163,5 +164,5 @@ export function* timeout<T = void>(
   sim.events = scheduleEvent(sim, timeoutEvent);
 
   // Yield control (allowing other code to run until timeout completes)
-  yield timeoutEvent;
+  yield timeoutEvent as Event<void | T>;
 }
