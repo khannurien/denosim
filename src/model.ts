@@ -3,7 +3,7 @@
  * - The current virtual time of the simulation
  * - All events that have been scheduled
  */
-export interface Simulation<T = unknown> {
+export interface Simulation<T> {
   /**
    * The current virtual time in the simulation.
    * Represents the timestamp up to which the simulation has processed.
@@ -56,8 +56,8 @@ export type ProcessStep<T = unknown> = Generator<
  * Generator function that defines an event's behavior.
  * Can yield to pause execution and schedule intermediate events.
  */
-export type Process<T = unknown> = (
-  sim: Simulation, // Reference to the running simulation
+export type Process<T> = (
+  sim: Simulation<T>, // Reference to the running simulation
   event: Event<T>, // The event instance being processed
 ) => ProcessStep<T>; // Generator that can yield events or nothing
 

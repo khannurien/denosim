@@ -24,7 +24,7 @@ Deno.test("basic event scheduling", () => {
   assertEquals(sim.events.length, 1);
   assertEquals(sim.events[0].finishedAt, 10);
 
-  assert(sim.events.every((event: Event<unknown>) => event.status == EventState.Finished));
+  assert(sim.events.every((event) => event.status == EventState.Finished));
 });
 
 Deno.test("zero-duration events", () => {

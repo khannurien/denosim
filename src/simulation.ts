@@ -74,7 +74,7 @@ export function runSimulation<T>(sim: Simulation<T>): SimulationStats {
  * - Option item to carry (defaults to undefined)
  */
 export function createEvent<T>(
-  sim: Simulation,
+  sim: Simulation<T>,
   scheduledAt: number,
   callback?: Process<T>,
   item?: T,
