@@ -22,7 +22,7 @@ if (import.meta.main) {
     sim: Simulation,
     _event: Event,
   ): Generator<Event | void, void, void> {
-    const cb = function* (
+    const cb: Process = function* (
       sim: Simulation,
       _event: Event,
     ): Generator<Event | void, void, void> {

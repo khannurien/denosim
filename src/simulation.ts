@@ -2,6 +2,7 @@ import {
   Event,
   EventState,
   Process,
+  ProcessStep,
   Simulation,
   SimulationStats,
 } from "./model.ts";
@@ -68,12 +69,14 @@ export function runSimulation(sim: Simulation): SimulationStats {
  * - Initial state set to "Fired"
  * - Timestamps for when it was created and scheduled
  * - Optional callback process (defaults to empty generator)
+ * - Option item to carry (defaults to undefined)
  */
-export function createEvent(
+export function createEvent<T = void>(
   sim: Simulation,
   scheduledAt: number,
-  callback?: Process,
-): Event {
+  callback?: Process<T>,
+  item?: T,
+): Event<T> {
   return {
     id: crypto.randomUUID(),
     status: EventState.Fired,
@@ -82,6 +85,7 @@ export function createEvent(
     callback: callback ?? function* () {
       yield;
     },
+    item,
   };
 }
 
@@ -90,7 +94,10 @@ export function createEvent(
  * Validates that the event isn't scheduled in the past.
  * Returns updated events array with the new scheduled event.
  */
-export function scheduleEvent(sim: Simulation, event: Event): Event[] {
+export function scheduleEvent<T = void>(
+  sim: Simulation,
+  event: Event<T>,
+): Event<unknown>[] {
   if (event.scheduledAt < sim.currentTime) {
     throw RangeError(
       `Event scheduled at a point in time in the past: ${event.id} ` +
@@ -106,11 +113,11 @@ export function scheduleEvent(sim: Simulation, event: Event): Event[] {
  * Handles both immediate completion and yielding of new events.
  * Returns the completed event with updated status and timestamps.
  */
-export function handleEvent(sim: Simulation, event: Event): Event {
+export function handleEvent<T>(sim: Simulation, event: Event<T>): Event<T> {
   // Get the generator - either from previous partial execution or a new one
   const generator = event.generator ?? event.callback(sim, event);
   // Execute next step of the generator
-  const { value, done } = generator.next();
+  const { value, done } = generator.next(event.item);
 
   // Remove the original event from the queue
   sim.events = sim.events.filter((previous) => previous.id !== event.id);
@@ -122,9 +129,6 @@ export function handleEvent(sim: Simulation, event: Event): Event {
       ...event,
       scheduledAt: value.scheduledAt,
       generator, // Save generator state for next execution
-      callback: function* (_sim: Simulation, _event: Event) {
-        yield; // Dummy callback since we're using the generator directly
-      },
     });
   }
 
@@ -141,16 +145,18 @@ export function handleEvent(sim: Simulation, event: Event): Event {
  * This is a utility for creating delayed events in the simulation.
  * Yields control until the timeout duration has passed.
  */
-export function* timeout(
+export function* timeout<T = void>(
   sim: Simulation,
   duration: number,
-  callback?: Process,
-): Generator<Event | void, void, void> {
+  callback?: Process<T>,
+  item?: T,
+): ProcessStep<T> {
   // Fire an event that will be scheduled after specified duration
-  const timeoutEvent = createEvent(
+  const timeoutEvent = createEvent<T>(
     sim,
     sim.currentTime + duration,
     callback,
+    item,
   );
 
   // Schedule the timeout event
