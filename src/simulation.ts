@@ -1,17 +1,13 @@
 import {
   Event,
   EventState,
+  Process,
   ProcessStep,
+  Simulation,
   SimulationStats,
 } from "./model.ts";
 
-export interface Simulation<T = unknown> {
-  currentTime: number;
-  events: Event<T>[];
-}
-
-export type { Event };
-export type Process<T> = (sim: Simulation<T>, event: Event<T>) => ProcessStep<T>;
+export type { Event, Process, Simulation };
 
 /**
  * Initializes a new simulation instance with:
@@ -78,7 +74,7 @@ export function runSimulation<T>(sim: Simulation<T>): SimulationStats {
  * - Option item to carry (defaults to undefined)
  */
 export function createEvent<T>(
-  sim: Simulation<T>,
+  sim: Simulation,
   scheduledAt: number,
   callback?: Process<T>,
   item?: T,
@@ -88,9 +84,9 @@ export function createEvent<T>(
     status: EventState.Fired,
     firedAt: sim.currentTime,
     scheduledAt,
-    callback: callback ?? function* () {
+    callback: callback ?? (function* () {
       yield;
-    },
+    } as Process<T>),
     item,
   };
 }
@@ -119,7 +115,7 @@ export function scheduleEvent<T>(
  * Handles both immediate completion and yielding of new events.
  * Returns the completed event with updated status and timestamps.
  */
-export function handleEvent<T>(sim: Simulation<T>, event: Event<T>): Event<T> {
+export function handleEvent<T>(sim: Simulation, event: Event<T>): Event<T> {
   // Get the generator - either from previous partial execution or a new one
   const generator = event.generator ?? event.callback(sim, event);
   // Execute next step of the generator
