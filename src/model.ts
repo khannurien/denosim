@@ -46,7 +46,8 @@ export enum EventState {
 }
 
 /**
- * Event process state.
+ * Holds the state of the ongoing process for an event.
+ * Can yield an event for execution continuation.
  */
 export type ProcessStep<T = void> = Generator<
   Event<T | void> | void,
@@ -58,7 +59,6 @@ export type ProcessStep<T = void> = Generator<
  * Type definition for event process logic.
  * Generator function that defines an event's behavior.
  * Can yield to pause execution and schedule intermediate events.
- * Can yield a final value when processing is over.
  */
 export type Process<T = void> = (
   sim: Simulation, // Reference to the running simulation

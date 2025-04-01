@@ -1,5 +1,11 @@
 import { assert, assertEquals, assertThrows } from "@std/assert";
-import { Event, EventState, Process, ProcessStep, Simulation } from "../src/model.ts";
+import {
+  Event,
+  EventState,
+  Process,
+  ProcessStep,
+  Simulation,
+} from "../src/model.ts";
 import {
   createEvent,
   initializeSimulation,
@@ -177,9 +183,12 @@ Deno.test("event timeout scheduling", () => {
   const timings: Record<string, number> = {
     "before": -1,
     "after": -1,
-  }
+  };
 
-  const cb: Process<Record<string, number>> = function* (sim: Simulation, event: Event<Record<string, number>>) {
+  const cb: Process<Record<string, number>> = function* (
+    sim: Simulation,
+    event: Event<Record<string, number>>,
+  ) {
     if (!event.item) {
       throw Error("Event item not set.");
     }
