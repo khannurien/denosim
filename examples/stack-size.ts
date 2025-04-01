@@ -1,4 +1,4 @@
-import { Event, Process, Simulation } from "../src/model.ts";
+import { Event, Process, ProcessStep, Simulation } from "../src/model.ts";
 import {
   createEvent,
   initializeSimulation,
@@ -13,7 +13,7 @@ if (import.meta.main) {
   const foo: Process = function* (
     sim: Simulation,
     _event: Event,
-  ): Generator<Event | void, void, void> {
+  ): ProcessStep {
     while (sim.currentTime < 1000000) {
       console.log(`[${sim.currentTime}] foo`);
       yield* timeout(sim, 1);

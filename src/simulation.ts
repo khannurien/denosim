@@ -105,7 +105,7 @@ export function scheduleEvent<T = void>(
     );
   }
 
-  return [...sim.events, { ...event, status: EventState.Scheduled } as Event<unknown>];
+  return [...sim.events, { ...event, status: EventState.Scheduled } as Event<unknown | void>];
 }
 
 /**
@@ -137,7 +137,6 @@ export function handleEvent<T>(sim: Simulation, event: Event<T>): Event<T> {
     ...event,
     finishedAt: sim.currentTime,
     status: EventState.Finished,
-    generator: done ? undefined : generator,
   };
 }
 
