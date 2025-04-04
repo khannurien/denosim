@@ -63,7 +63,7 @@ export type ProcessStep<T = void> = Generator<
 export type Process<T = void> = (
   sim: Simulation, // Reference to the running simulation
   event: Event<T>, // The event instance being processed
-) => ProcessStep<T>; // Generator that can yield events or nothing
+) => ProcessStep<T | void>; // Generator that can yield events or nothing
 
 /**
  * Represents a discrete event in the simulation system.

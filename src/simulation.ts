@@ -153,7 +153,7 @@ export function* timeout<T = void>(
   duration: number,
   callback?: Process<T>,
   item?: T,
-): ProcessStep<T> {
+): ProcessStep<T | void> {
   // Fire an event that will be scheduled after specified duration
   const timeoutEvent = createEvent<T>(
     sim,
@@ -166,5 +166,5 @@ export function* timeout<T = void>(
   sim.events = scheduleEvent(sim, timeoutEvent);
 
   // Yield control (allowing other code to run until timeout completes)
-  yield timeoutEvent as Event<void | T>;
+  yield timeoutEvent as Event<T | void>;
 }
