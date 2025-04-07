@@ -52,7 +52,7 @@ export enum EventState {
 export type ProcessStep<T = void> = Generator<
   Event<T | void> | void,
   void,
-  T | void
+  void
 >;
 
 /**
@@ -122,4 +122,24 @@ export interface Event<T = void> {
 export interface SimulationStats {
   /** Real-world time (in milliseconds) the simulation took to complete */
   duration: number;
+}
+
+/**
+ * Utility data structure for inter-process synchronization.
+ */
+export interface Store<T> {
+  /** Unique identifier for the store */
+  id: string;
+
+  /**
+   * Array of items immediately available in the store.
+   * Put/Get operations (see resources.ts) work in a FIFO fashion.
+   */
+  items: T[];
+
+  /**
+   * Array of pending requests in the store.
+   * Earliest requests will be handled first.
+   */
+  requests: Event<T>[];
 }

@@ -10,7 +10,7 @@ import {
 /**
  * Initializes a new simulation instance with:
  * - currentTime set to 0 (starting point of simulation)
- * - empty events array (no scheduled events)
+ * - Empty events array (no scheduled events)
  */
 export function initializeSimulation(): Simulation {
   return {
@@ -69,7 +69,7 @@ export function runSimulation(sim: Simulation): SimulationStats {
  * - Initial state set to "Fired"
  * - Timestamps for when it was created and scheduled
  * - Optional callback process (defaults to empty generator)
- * - Option item to carry (defaults to undefined)
+ * - Optional item to carry (defaults to undefined)
  */
 export function createEvent<T = void>(
   sim: Simulation,
@@ -120,7 +120,7 @@ export function handleEvent<T>(sim: Simulation, event: Event<T>): Event<T> {
   // Get the generator - either from previous partial execution or a new one
   const generator = event.generator ?? event.callback(sim, event);
   // Execute next step of the generator
-  const { value, done } = generator.next(event.item);
+  const { value, done } = generator.next();
 
   // Remove the original event from the queue
   sim.events = sim.events.filter((previous) => previous.id !== event.id);

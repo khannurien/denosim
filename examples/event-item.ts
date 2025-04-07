@@ -4,7 +4,6 @@ import {
   initializeSimulation,
   runSimulation,
   scheduleEvent,
-  timeout,
 } from "../src/simulation.ts";
 
 if (import.meta.main) {
