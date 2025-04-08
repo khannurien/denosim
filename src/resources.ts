@@ -47,7 +47,7 @@ export function* get<T>(
   sim.events = scheduleEvent(sim, getRequest);
 
   // Yield control (allowing other code to run until request completes)
-  yield getRequest as Event<T | void>;
+  yield getRequest;
 }
 
 /**

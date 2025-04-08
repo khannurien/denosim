@@ -63,7 +63,7 @@ Deno.test("basic event ordering", () => {
   const sim = initializeSimulation();
 
   const processedOrder: number[] = [];
-  const cb = function* (_sim: Simulation, event: Event) {
+  const cb: Process = function* (_sim: Simulation, event: Event) {
     processedOrder.push(event.scheduledAt);
     yield;
   };

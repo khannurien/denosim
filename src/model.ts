@@ -50,7 +50,7 @@ export enum EventState {
  * Can yield an event for execution continuation.
  */
 export type ProcessStep<T = void> = Generator<
-  Event<T | void> | void,
+  Event<T> | undefined,
   void,
   void
 >;
@@ -63,7 +63,7 @@ export type ProcessStep<T = void> = Generator<
 export type Process<T = void> = (
   sim: Simulation, // Reference to the running simulation
   event: Event<T>, // The event instance being processed
-) => ProcessStep<T | void>; // Generator that can yield events or nothing
+) => ProcessStep<T>; // Generator that can yield events or nothing
 
 /**
  * Represents a discrete event in the simulation system.

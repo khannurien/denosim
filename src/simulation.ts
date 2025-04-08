@@ -71,7 +71,7 @@ export function runSimulation(sim: Simulation): SimulationStats {
  * - Optional callback process (defaults to empty generator)
  * - Optional item to carry (defaults to undefined)
  */
-export function createEvent<T = void>(
+export function createEvent<T>(
   sim: Simulation,
   scheduledAt: number,
   callback?: Process<T>,
@@ -94,10 +94,10 @@ export function createEvent<T = void>(
  * Validates that the event isn't scheduled in the past.
  * Returns updated events array with the new scheduled event.
  */
-export function scheduleEvent<T = void>(
+export function scheduleEvent<T>(
   sim: Simulation,
   event: Event<T>,
-): Event<unknown | void>[] {
+): Event<unknown>[] {
   if (event.scheduledAt < sim.currentTime) {
     throw RangeError(
       `Event scheduled at a point in time in the past: ${event.id} ` +
@@ -107,7 +107,7 @@ export function scheduleEvent<T = void>(
 
   return [
     ...sim.events,
-    { ...event, status: EventState.Scheduled } as Event<unknown | void>,
+    { ...event, status: EventState.Scheduled } as Event<unknown>,
   ];
 }
 
@@ -148,12 +148,12 @@ export function handleEvent<T>(sim: Simulation, event: Event<T>): Event<T> {
  * This is a utility for creating delayed events in the simulation.
  * Yields control until the timeout duration has passed.
  */
-export function* timeout<T = void>(
+export function* timeout<T>(
   sim: Simulation,
   duration: number,
   callback?: Process<T>,
   item?: T,
-): ProcessStep<T | void> {
+): ProcessStep<T> {
   // Fire an event that will be scheduled after specified duration
   const timeoutEvent = createEvent<T>(
     sim,
@@ -166,5 +166,5 @@ export function* timeout<T = void>(
   sim.events = scheduleEvent(sim, timeoutEvent);
 
   // Yield control (allowing other code to run until timeout completes)
-  yield timeoutEvent as Event<T | void>;
+  yield timeoutEvent;
 }
