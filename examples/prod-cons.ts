@@ -25,18 +25,29 @@ if (import.meta.main) {
     sim: Simulation,
     event: Event<string>,
   ) {
-    yield* get(sim, event, store);
-    const item = event.item;
+    const item = yield* get(sim, event, store);
     console.log(
       `[${sim.currentTime}] Cons -- item: ${JSON.stringify(item, null, 2)}`,
     );
   };
 
-  const e1 = createEvent(sim, 30, cons);
+  const e1 = createEvent(sim, 20, cons);
   sim.events = scheduleEvent(sim, e1);
 
   const e2 = createEvent(sim, 25, prod);
   sim.events = scheduleEvent(sim, e2);
+
+  const e3 = createEvent(sim, 45, prod);
+  sim.events = scheduleEvent(sim, e3);
+
+  const e4 = createEvent(sim, 50, cons);
+  sim.events = scheduleEvent(sim, e4);
+
+  const e5 = createEvent(sim, 60, prod);
+  sim.events = scheduleEvent(sim, e5);
+
+  const e6 = createEvent(sim, 60, cons);
+  sim.events = scheduleEvent(sim, e6);
 
   const stats = runSimulation(sim);
 

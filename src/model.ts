@@ -51,7 +51,7 @@ export enum EventState {
  */
 export type ProcessStep<T = void> = Generator<
   Event<T> | undefined,
-  void,
+  T | void,
   void
 >;
 

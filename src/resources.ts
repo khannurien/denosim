@@ -1,5 +1,4 @@
 import { Event, ProcessStep, Simulation, Store } from "./model.ts";
-import { scheduleEvent } from "./simulation.ts";
 
 /**
  * Creates a new store with:
@@ -17,8 +16,9 @@ export function createStore<T>(initialItems: T[] = []): Store<T> {
 
 /**
  * Gets an item from a store.
- * If there is none in store, yields control and resumes when an item becomes available.
- * The requested item will eventually be stored in the event.item property.
+ * Pops an item from the store if available, returning it immediately.
+ * If there is no item in store, yields control and resumes on the next put operation.
+ * Returns the item that has been put into the request.
  */
 export function* get<T>(
   sim: Simulation,
@@ -27,27 +27,32 @@ export function* get<T>(
 ): ProcessStep<T> {
   // If an item has already been fetched into the request, return it
   // Otherwise, if an item is already available in the store, fetch it
+  // TODO: Avoid side-effect on store.items
   const item = event.item ?? store.items.pop();
 
-  // FIXME: Footgunned with immutability
-  // Problem: callback has already returned a generator which is tied to the OG event
-  // This generator won't operate on the new event!
-  // const getRequest = { ...event, scheduledAt: sim.currentTime, item };
-  const getRequest = event;
-  getRequest.scheduledAt = sim.currentTime;
-  getRequest.item = item;
+  // Return the item immediately if found
+  if (item) {
+    return item;
+  }
+
+  // Update the event with the item if it exists
+  // Emit a get request for when an item will be made available in the store
+  const getRequest: Event<T> = {
+    ...event,
+    firedAt: sim.currentTime,
+    scheduledAt: sim.currentTime,
+  };
 
   // If there is no item available, emit a get request
   if (!item) {
     // Store the event in request queue
     store.requests = [...store.requests, getRequest];
+    // Yield control
+    yield;
+  } else {
+    // Yield continuation
+    yield getRequest;
   }
-
-  // Reschedule the event
-  sim.events = scheduleEvent(sim, getRequest);
-
-  // Yield control (allowing other code to run until request completes)
-  yield getRequest;
 }
 
 /**
@@ -71,12 +76,17 @@ export function* put<T>(
   if (!request) {
     // There was no pending request, just store the item
     store.items = [item, ...store.items];
+    // Yield control
+    yield;
   } else {
-    // Put the item in the request and reschedule it
-    const putRequest = { ...request, scheduledAt: sim.currentTime, item };
-    sim.events = scheduleEvent(sim, putRequest);
+    // Put the item in the request
+    const putRequest = {
+      ...request,
+      firedAt: sim.currentTime,
+      scheduledAt: sim.currentTime,
+      item,
+    };
+    // Yield continuation
+    yield putRequest;
   }
-
-  // Yield control
-  yield;
 }

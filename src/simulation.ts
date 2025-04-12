@@ -47,13 +47,10 @@ export function runSimulation(sim: Simulation): SimulationStats {
     // Process the event and get its final state
     const finished = handleEvent(sim, event);
 
-    // If the event yielded new events during processing, handle those too
-    const nextEvent = finished.generator
-      ? handleEvent(sim, finished)
-      : finished;
-
-    // Update the simulation's events with the processed event
-    sim.events = [...sim.events, nextEvent];
+    // Update the simulation's events queue
+    sim.events = sim.events.map((previous) =>
+      (previous.id === event.id) ? finished : previous
+    );
   }
 
   const end = performance.now();
@@ -122,17 +119,28 @@ export function handleEvent<T>(sim: Simulation, event: Event<T>): Event<T> {
   // Execute next step of the generator
   const { value, done } = generator.next();
 
-  // Remove the original event from the queue
-  sim.events = sim.events.filter((previous) => previous.id !== event.id);
-
   // If generator yielded a value (new event to schedule) and isn't done
   if (!done && value) {
-    // Schedule the yielded event and update the current event's generator state
-    sim.events = scheduleEvent(sim, {
+    // Schedule the new event
+    if (value.id !== event.id) {
+      sim.events = scheduleEvent(sim, value);
+    }
+
+    // Return the continuation event,
+    // by updating the original event with continuation data
+    return {
       ...event,
+      firedAt: sim.currentTime,
       scheduledAt: value.scheduledAt,
+      item: value.item,
       generator, // Save generator state for next execution
-    });
+    };
+  }
+
+  // Exhaust last step in generator
+  // TODO: Investigate if this is hacky or necessary
+  if (!done && !value) {
+    const _empty = generator.next();
   }
 
   // Return completed event with updated metadata
@@ -162,9 +170,6 @@ export function* timeout<T>(
     item,
   );
 
-  // Schedule the timeout event
-  sim.events = scheduleEvent(sim, timeoutEvent);
-
-  // Yield control (allowing other code to run until timeout completes)
+  // Yield continuation (allowing other code to run until timeout completes)
   yield timeoutEvent;
 }

@@ -7,6 +7,19 @@ import {
   timeout,
 } from "../src/simulation.ts";
 
+/**
+ * Expected output:
+ *
+ * [10] foo
+ * [20] bar before timeout
+ * [30] foo
+ * [35] callback from bar before timeout
+ * [35] bar after timeout
+ * [37] foo
+ * [40] callback from bar after timeout
+ * [50] foo
+ * Simulation ended at 50
+ */
 if (import.meta.main) {
   const sim = initializeSimulation();
 
@@ -45,8 +58,11 @@ if (import.meta.main) {
   const e3 = createEvent(sim, 30, foo);
   sim.events = scheduleEvent(sim, e3);
 
-  const e4 = createEvent(sim, 50, foo);
+  const e4 = createEvent(sim, 37, foo);
   sim.events = scheduleEvent(sim, e4);
+
+  const e5 = createEvent(sim, 50, foo);
+  sim.events = scheduleEvent(sim, e5);
 
   const stats = runSimulation(sim);
 
