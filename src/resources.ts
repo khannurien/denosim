@@ -14,7 +14,7 @@ export function createStore<T>(): Store<T> {
 }
 
 /**
- * Gets an item from a store.
+ * Blocking operations that gets an item from a store.
  * Pops an item from the store if available, returning it immediately.
  * If there is no item in store, yields control and resumes on the next put operation.
  * Returns the item that has been put into the request.
@@ -35,6 +35,7 @@ export function* get<T>(
     const putRequest = store.putRequests.sort((a, b) =>
       b.scheduledAt - a.scheduledAt
     ).pop();
+
     return putRequest?.item;
   }
 
@@ -50,14 +51,13 @@ export function* get<T>(
   store.getRequests = [...store.getRequests, getRequest];
 
   // Yield continuation
-  yield getRequest;
+  yield;
 }
 
 /**
- * Puts an item in a store.
+ * Non-blocking operation that puts an item in a store.
  * If there are pending get requests, handles the earliest one with said item.
- * Otherwise, stores the item for future requests.
- * Yields control immediately.
+ * Otherwise, stores the item in a put request for future use.
  */
 export function* put<T>(
   sim: Simulation,
