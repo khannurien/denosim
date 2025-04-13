@@ -1,4 +1,4 @@
-import { Event, Process, Simulation } from "../src/model.ts";
+import { Event, Process, ProcessStep, Simulation } from "../src/model.ts";
 import {
   createEvent,
   initializeSimulation,
@@ -10,13 +10,17 @@ import {
 if (import.meta.main) {
   const sim = initializeSimulation();
 
+  let FOO = 0;
+
   const foo: Process = function* (
     sim: Simulation,
-    _event: Event,
-  ): Generator<Event | void, void, void> {
-    while (sim.currentTime < 1000000) {
-      console.log(`[${sim.currentTime}] foo`);
+    event: Event,
+  ): ProcessStep {
+    while (sim.currentTime < 10000000) {
+      console.log(`[${sim.currentTime}] ${event.id} -- foo @ sleep: ${FOO}`);
       yield* timeout(sim, 1);
+      FOO += 1;
+      console.log(`[${sim.currentTime}] ${event.id} -- foo @ wake up: ${FOO}`);
     }
   };
 
@@ -27,5 +31,4 @@ if (import.meta.main) {
 
   console.log(`Simulation ended at ${sim.currentTime}`);
   console.log(`Simulation took: ${stats.duration} ms`);
-  console.log("Events:", JSON.stringify(sim.events, null, 2));
 }

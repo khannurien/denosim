@@ -18,7 +18,7 @@ export interface Simulation {
    * - Partially processed events with generator state
    * - Completed events (for historical tracking)
    */
-  events: Event[];
+  events: Event<unknown>[];
 }
 
 /**
@@ -46,20 +46,30 @@ export enum EventState {
 }
 
 /**
+ * Holds the state of the ongoing process for an event.
+ * Can yield an event for execution continuation.
+ */
+export type ProcessStep<T = void> = Generator<
+  Event<T> | undefined,
+  T | void,
+  void
+>;
+
+/**
  * Type definition for event process logic.
  * Generator function that defines an event's behavior.
  * Can yield to pause execution and schedule intermediate events.
  */
-export type Process = (
+export type Process<T = void> = (
   sim: Simulation, // Reference to the running simulation
-  event: Event, // The event instance being processed
-) => Generator<Event | void, void, void>; // Generator that can yield events or nothing
+  event: Event<T>, // The event instance being processed
+) => ProcessStep<T>; // Generator that can yield events or nothing
 
 /**
  * Represents a discrete event in the simulation system.
  * Events are immutable - state changes create new instances.
  */
-export interface Event {
+export interface Event<T = void> {
   /** Unique identifier for the event */
   id: string;
 
@@ -88,13 +98,18 @@ export interface Event {
    * Optional generator state for multi-step events.
    * Preserves execution context between partial processing runs.
    */
-  generator?: Generator<Event | void, void, void>;
+  generator?: ProcessStep<T>;
+
+  /**
+   * Optional item that can be passed through the event.
+   */
+  item?: T;
 
   /**
    * The process logic to execute when this event is processed.
    * Generator function that can yield to pause/resume execution.
    */
-  callback: Process;
+  callback: Process<T>;
 }
 
 /**
@@ -107,4 +122,24 @@ export interface Event {
 export interface SimulationStats {
   /** Real-world time (in milliseconds) the simulation took to complete */
   duration: number;
+}
+
+/**
+ * Utility data structure for inter-process synchronization.
+ */
+export interface Store<T> {
+  /** Unique identifier for the store */
+  id: string;
+
+  /**
+   * Array of items immediately available in the store.
+   * Put/Get operations (see resources.ts) work in a FIFO fashion.
+   */
+  items: T[];
+
+  /**
+   * Array of pending requests in the store.
+   * Earliest requests will be handled first.
+   */
+  requests: Event<T>[];
 }
