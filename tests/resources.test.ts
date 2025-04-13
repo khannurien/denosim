@@ -65,5 +65,6 @@ Deno.test("ordered inter-process synchronization", () => {
   assertEquals(result[e9.id], "foobar");
   assertEquals(result[e10.id], undefined);
   assertEquals(result[e11.id], undefined);
-  assertEquals(store.requests.length, 2);
+  assertEquals(store.getRequests.length, 2);
+  assertEquals(store.putRequests.length, 0);
 });

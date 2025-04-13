@@ -6,11 +6,10 @@ import { Event, ProcessStep, Simulation, Store } from "./model.ts";
  * - Array of initial items (defaults to an empty array)
  * - Empty requests array (no scheduled get requests)
  */
-export function createStore<T>(initialItems: T[] = []): Store<T> {
+export function createStore<T>(): Store<T> {
   return {
-    id: crypto.randomUUID(),
-    items: initialItems,
-    requests: [],
+    getRequests: [],
+    putRequests: [],
   };
 }
 
@@ -25,14 +24,18 @@ export function* get<T>(
   event: Event<T>,
   store: Store<T>,
 ): ProcessStep<T> {
-  // If an item has already been fetched into the request, return it
-  // Otherwise, if an item is already available in the store, fetch it
-  // TODO: Avoid side-effect on store.items
-  const item = event.item ?? store.items.pop();
+  // Return the item immediately if it has already been fetched into the request
+  if (event.item) {
+    return event.item;
+  }
 
-  // Return the item immediately if found
-  if (item) {
-    return item;
+  // If a put request has already been fired, pop it from the queue
+  // Return the item immediately
+  if (store.putRequests.length > 0) {
+    const putRequest = store.putRequests.sort((a, b) =>
+      b.scheduledAt - a.scheduledAt
+    ).pop();
+    return putRequest?.item;
   }
 
   // Update the event with the item if it exists
@@ -44,15 +47,10 @@ export function* get<T>(
   };
 
   // If there is no item available, emit a get request
-  if (!item) {
-    // Store the event in request queue
-    store.requests = [...store.requests, getRequest];
-    // Yield control
-    yield;
-  } else {
-    // Yield continuation
-    yield getRequest;
-  }
+  store.getRequests = [...store.getRequests, getRequest];
+
+  // Yield continuation
+  yield getRequest;
 }
 
 /**
@@ -63,30 +61,28 @@ export function* get<T>(
  */
 export function* put<T>(
   sim: Simulation,
-  _event: Event<T>,
+  event: Event<T>,
   store: Store<T>,
   item: T,
 ): ProcessStep<T> {
-  // Sort requests in descending order so we can efficiently pop the earliest request
-  const requestsTodo = store.requests.sort((a, b) =>
+  // Sort get requests in descending order so we can efficiently pop the earliest one
+  const getRequest = store.getRequests.sort((a, b) =>
     b.scheduledAt - a.scheduledAt
-  );
-  const request = requestsTodo.pop();
+  ).pop();
 
-  if (!request) {
-    // There was no pending request, just store the item
-    store.items = [item, ...store.items];
-    // Yield control
-    yield;
-  } else {
-    // Put the item in the request
-    const putRequest = {
-      ...request,
-      firedAt: sim.currentTime,
-      scheduledAt: sim.currentTime,
-      item,
-    };
-    // Yield continuation
-    yield putRequest;
+  // Either create a new put request or handle an existing get request
+  const done = (!getRequest) ? { ...event, item } : {
+    ...getRequest,
+    firedAt: sim.currentTime,
+    scheduledAt: sim.currentTime,
+    item,
+  };
+
+  if (!getRequest) {
+    // There was no pending get request, store the put request
+    store.putRequests = [done, ...store.putRequests];
   }
+
+  // Yield continuation
+  yield done;
 }

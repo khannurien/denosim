@@ -137,12 +137,6 @@ export function handleEvent<T>(sim: Simulation, event: Event<T>): Event<T> {
     };
   }
 
-  // Exhaust last step in generator
-  // TODO: Investigate if this is hacky or necessary
-  if (!done && !value) {
-    const _empty = generator.next();
-  }
-
   // Return completed event with updated metadata
   return {
     ...event,

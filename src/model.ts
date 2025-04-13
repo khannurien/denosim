@@ -48,10 +48,11 @@ export enum EventState {
 /**
  * Holds the state of the ongoing process for an event.
  * Can yield an event for execution continuation.
+ * Can return a final value.
  */
 export type ProcessStep<T = void> = Generator<
   Event<T> | undefined,
-  T | void,
+  T | undefined | void,
   void
 >;
 
@@ -126,20 +127,18 @@ export interface SimulationStats {
 
 /**
  * Utility data structure for inter-process synchronization.
+ * Put/Get operations (see resources.ts) work in a FIFO fashion.
  */
 export interface Store<T> {
-  /** Unique identifier for the store */
-  id: string;
-
   /**
-   * Array of items immediately available in the store.
-   * Put/Get operations (see resources.ts) work in a FIFO fashion.
-   */
-  items: T[];
-
-  /**
-   * Array of pending requests in the store.
+   * Array of pending get requests in the store.
    * Earliest requests will be handled first.
    */
-  requests: Event<T>[];
+  getRequests: Event<T>[];
+
+  /**
+   * Array of pending put requests in the store.
+   * Earliest requests will be handled first.
+   */
+  putRequests: Event<T>[];
 }
