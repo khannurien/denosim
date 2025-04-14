@@ -16,6 +16,7 @@ export function initializeSimulation(): Simulation {
   return {
     currentTime: 0,
     events: [],
+    state: {},
   };
 }
 
@@ -114,10 +115,13 @@ export function scheduleEvent<T>(
  * Returns the completed event with updated status and timestamps.
  */
 export function handleEvent<T>(sim: Simulation, event: Event<T>): Event<T> {
-  // Get the generator - either from previous partial execution or a new one
-  const generator = event.generator ?? event.callback(sim, event);
+  // TODO: Get the generator - either from previous partial execution or a new one
+  const generator = sim.state[event.id] as ProcessStep<T> ??
+    event.callback(sim, event);
   // Execute next step of the generator
   const { value, done } = generator.next();
+  // TODO: Save generator state for future executions
+  sim.state[event.id] = generator as ProcessStep<unknown>;
 
   // If generator yielded a value (new event to schedule) and isn't done
   if (!done && value) {
@@ -130,10 +134,8 @@ export function handleEvent<T>(sim: Simulation, event: Event<T>): Event<T> {
     // by updating the original event with continuation data
     return {
       ...event,
-      firedAt: sim.currentTime,
       scheduledAt: value.scheduledAt,
       item: value.item,
-      generator, // Save generator state for next execution
     };
   }
 

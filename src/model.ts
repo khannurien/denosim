@@ -19,6 +19,12 @@ export interface Simulation {
    * - Completed events (for historical tracking)
    */
   events: Event<unknown>[];
+
+  /**
+   * TODO: Optional generator state for multi-step events.
+   * Preserves execution context between partial processing runs.
+   */
+  state: Record<string, ProcessStep<unknown>>;
 }
 
 /**
@@ -94,12 +100,6 @@ export interface Event<T = void> {
    * Only populated when status = EventState.Finished
    */
   finishedAt?: number;
-
-  /**
-   * Optional generator state for multi-step events.
-   * Preserves execution context between partial processing runs.
-   */
-  generator?: ProcessStep<T>;
 
   /**
    * Optional item that can be passed through the event.
