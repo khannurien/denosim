@@ -42,6 +42,9 @@ Deno.test("ordered inter-process synchronization", () => {
   const e6 = createEvent(sim, 40, prod);
   sim.events = scheduleEvent(sim, e6);
 
+  const e5bis = createEvent(sim, 42, cons);
+  sim.events = scheduleEvent(sim, e5bis);
+
   const e7 = createEvent(sim, 45, cons);
   sim.events = scheduleEvent(sim, e7);
   const e8 = createEvent(sim, 45, prod);
@@ -61,10 +64,11 @@ Deno.test("ordered inter-process synchronization", () => {
   assertEquals(result[e2.id], "foobar");
   assertEquals(result[e4.id], "foobar");
   assertEquals(result[e5.id], "foobar");
+  assertEquals(result[e5bis.id], "foobar");
   assertEquals(result[e7.id], "foobar");
-  assertEquals(result[e9.id], "foobar");
+  assertEquals(result[e9.id], undefined);
   assertEquals(result[e10.id], undefined);
   assertEquals(result[e11.id], undefined);
-  assertEquals(store.getRequests.length, 2);
+  assertEquals(store.getRequests.length, 3);
   assertEquals(store.putRequests.length, 0);
 });

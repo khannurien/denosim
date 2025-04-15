@@ -21,11 +21,11 @@ export interface Simulation {
   events: Event<unknown>[];
 
   /**
-   * Optional generator state for multi-step events.
+   * Optional generator state for multi-step processes.
    * Generators are associated with their original event ID.
    * Preserves execution context between partial processing runs.
    */
-  state: Record<string, ProcessStep<unknown>>;
+  state: Record<string, ProcessState<unknown>>;
 }
 
 /**
@@ -53,15 +53,33 @@ export enum EventState {
 }
 
 /**
- * Holds the state of the ongoing process for an event.
+ * Holds the state of the ongoing process for an event in a generator.
  * Can yield an event for execution continuation.
  * Can return a final value.
  */
-export type ProcessStep<T = void> = Generator<
+export type ProcessState<T = void> = Generator<
   Event<T> | undefined,
   T | undefined | void,
   void
 >;
+
+/**
+ * Represents a step of event handling.
+ * It holds:
+ * - the updated event after it has been handled;
+ * - the current state of its associated process;
+ * - the next event to schedule in case of a multi-step process.
+ */
+export interface ProcessStep<T = void> {
+  /** The updated event */
+  updated: Event<T>;
+
+  /** The current process state */
+  state: ProcessState<T>;
+
+  /** Optional next event to be scheduled */
+  next?: Event<T>;
+}
 
 /**
  * Type definition for event process logic.
@@ -71,7 +89,7 @@ export type ProcessStep<T = void> = Generator<
 export type Process<T = void> = (
   sim: Simulation, // Reference to the running simulation
   event: Event<T>, // The event instance being processed
-) => ProcessStep<T>; // Generator that can yield events or nothing
+) => ProcessState<T>; // Generator that can yield events or nothing
 
 /**
  * Represents a discrete event in the simulation system.

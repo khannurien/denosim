@@ -3,7 +3,7 @@ import {
   Event,
   EventState,
   Process,
-  ProcessStep,
+  ProcessState,
   Simulation,
 } from "../src/model.ts";
 import {
@@ -142,7 +142,7 @@ Deno.test("event item passing", () => {
   const foo: Process<Record<string, string | undefined>> = function* (
     _sim: Simulation,
     event: Event<Record<string, string | undefined>>,
-  ): ProcessStep<Record<string, string | undefined>> {
+  ): ProcessState<Record<string, string | undefined>> {
     if (event.item) {
       event.item["foo"] = "foo";
     }
@@ -153,7 +153,7 @@ Deno.test("event item passing", () => {
   const bar: Process<Record<string, string | undefined>> = function* (
     _sim: Simulation,
     event: Event<Record<string, string | undefined>>,
-  ): ProcessStep<Record<string, string | undefined>> {
+  ): ProcessState<Record<string, string | undefined>> {
     if (event.item) {
       event.item["bar"] = "bar";
     }

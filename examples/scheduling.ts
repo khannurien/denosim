@@ -1,4 +1,4 @@
-import { Event, Process, ProcessStep, Simulation } from "../src/model.ts";
+import { Event, Process, ProcessState, Simulation } from "../src/model.ts";
 import {
   createEvent,
   initializeSimulation,
@@ -26,7 +26,7 @@ if (import.meta.main) {
   const foo: Process = function* (
     sim: Simulation,
     _event: Event,
-  ): ProcessStep {
+  ): ProcessState {
     console.log(`[${sim.currentTime}] foo`);
     yield;
   };
@@ -34,11 +34,11 @@ if (import.meta.main) {
   const bar: Process = function* (
     sim: Simulation,
     _event: Event,
-  ): ProcessStep {
+  ): ProcessState {
     const cb: Process = function* (
       sim: Simulation,
       _event: Event,
-    ): ProcessStep {
+    ): ProcessState {
       console.log(`[${sim.currentTime}] callback from bar before timeout`);
       yield* timeout(sim, 5);
       console.log(`[${sim.currentTime}] callback from bar after timeout`);
@@ -52,7 +52,7 @@ if (import.meta.main) {
   // const wait: Process = function* (
   //   sim: Simulation,
   //   _event: Event,
-  // ): ProcessStep {
+  // ): ProcessState {
   //   while (sim.currentTime < 10) {
   //     yield* timeout(sim, 2.5);
   //   }

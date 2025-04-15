@@ -1,4 +1,4 @@
-import { Event, Process, ProcessStep, Simulation } from "../src/model.ts";
+import { Event, Process, ProcessState, Simulation } from "../src/model.ts";
 import {
   createEvent,
   initializeSimulation,
@@ -12,7 +12,7 @@ if (import.meta.main) {
   const foo: Process<Record<string, string | undefined>> = function* (
     sim: Simulation,
     event: Event<Record<string, string | undefined>>,
-  ): ProcessStep<Record<string, string | undefined>> {
+  ): ProcessState<Record<string, string | undefined>> {
     if (event.item) {
       console.log(`[${sim.currentTime}] got: ${event.item["got"]}`);
     }
@@ -23,7 +23,7 @@ if (import.meta.main) {
   const bar: Process<Record<string, string | undefined>> = function* (
     sim: Simulation,
     event: Event<Record<string, string | undefined>>,
-  ): ProcessStep<Record<string, string | undefined>> {
+  ): ProcessState<Record<string, string | undefined>> {
     if (event.item) {
       event.item["got"] = "bar";
       console.log(`[${sim.currentTime}] wrote "bar"`);

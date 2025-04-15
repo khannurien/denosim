@@ -1,4 +1,4 @@
-import { Event, ProcessStep, Simulation, Store } from "./model.ts";
+import { Event, ProcessState, Simulation, Store } from "./model.ts";
 
 /**
  * Creates a new store with:
@@ -23,7 +23,7 @@ export function* get<T>(
   _sim: Simulation,
   event: Event<T>,
   store: Store<T>,
-): ProcessStep<T> {
+): ProcessState<T> {
   while (true) {
     // If a put request has been fired, pop it from the queue
     // Return the item immediately
@@ -53,7 +53,7 @@ export function* put<T>(
   event: Event<T>,
   store: Store<T>,
   item: T,
-): ProcessStep<T> {
+): ProcessState<T> {
   // Sort get requests in descending order so we can efficiently pop the earliest one
   const getRequest = store.getRequests.sort((a, b) =>
     b.scheduledAt - a.scheduledAt
