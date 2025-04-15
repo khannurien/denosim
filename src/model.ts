@@ -21,7 +21,8 @@ export interface Simulation {
   events: Event<unknown>[];
 
   /**
-   * TODO: Optional generator state for multi-step events.
+   * Optional generator state for multi-step events.
+   * Generators are associated with their original event ID.
    * Preserves execution context between partial processing runs.
    */
   state: Record<string, ProcessStep<unknown>>;

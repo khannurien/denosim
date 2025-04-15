@@ -25,12 +25,7 @@ export function* get<T>(
   store: Store<T>,
 ): ProcessStep<T> {
   while (true) {
-    // Return the item immediately if it has already been fetched into the request
-    if (event.item) {
-      return event.item;
-    }
-
-    // If a put request has already been fired, pop it from the queue
+    // If a put request has been fired, pop it from the queue
     // Return the item immediately
     if (store.putRequests.length > 0) {
       const putRequest = store.putRequests.sort((a, b) =>
@@ -43,7 +38,7 @@ export function* get<T>(
     // If there is no item available, emit a get request
     store.getRequests = [...store.getRequests, event];
 
-    // Yield continuation
+    // Yield control
     yield;
   }
 }
@@ -64,30 +59,16 @@ export function* put<T>(
     b.scheduledAt - a.scheduledAt
   ).pop();
 
-  // FIXME: Immutable version, not working
   // Either create a new put request or handle an existing get request
-  // const done = (!getRequest) ? { ...event, item } : {
-  //   ...getRequest,
-  //   scheduledAt: sim.currentTime,
-  //   item,
-  // };
-  // if (!getRequest) {
-  //   // There was no pending get request, store the put request
-  //   store.putRequests = [done, ...store.putRequests];
-  // }
+  const putRequest = (!getRequest) ? { ...event, item } : {
+    ...getRequest,
+    scheduledAt: sim.currentTime,
+    item,
+  };
 
-  // FIXME: Mutable version, working
-  const done = (!getRequest) ? { ...event, item } : getRequest;
-  if (!getRequest) {
-    // There was no pending get request, store the put request
-    store.putRequests = [done, ...store.putRequests];
-  } else {
-    // Store the item in the get request
-    getRequest.item = item;
-    // Re-schedule it for process continuation
-    getRequest.scheduledAt = sim.currentTime;
-  }
+  // There was no pending get request, store the put request
+  store.putRequests = [putRequest, ...store.putRequests];
 
   // Yield continuation
-  yield done;
+  yield putRequest;
 }
