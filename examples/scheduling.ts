@@ -49,6 +49,18 @@ if (import.meta.main) {
     console.log(`[${sim.currentTime}] bar after timeout`);
   };
 
+  // const wait: Process = function* (
+  //   sim: Simulation,
+  //   _event: Event,
+  // ): ProcessStep {
+  //   while (sim.currentTime < 10) {
+  //     yield* timeout(sim, 2.5);
+  //   }
+  // }
+
+  // const e1 = createEvent(sim, 0, wait);
+  // sim.events = scheduleEvent(sim, e1);
+
   const e1 = createEvent(sim, 10, foo);
   sim.events = scheduleEvent(sim, e1);
 

@@ -20,38 +20,27 @@ export function createStore<T>(): Store<T> {
  * Returns the item that has been put into the request.
  */
 export function* get<T>(
-  sim: Simulation,
+  _sim: Simulation,
   event: Event<T>,
   store: Store<T>,
 ): ProcessStep<T> {
-  // Return the item immediately if it has already been fetched into the request
-  if (event.item) {
-    return event.item;
+  while (true) {
+    // If a put request has been fired, pop it from the queue
+    // Return the item immediately
+    if (store.putRequests.length > 0) {
+      const putRequest = store.putRequests.sort((a, b) =>
+        b.scheduledAt - a.scheduledAt
+      ).pop();
+
+      return putRequest?.item;
+    }
+
+    // If there is no item available, emit a get request
+    store.getRequests = [...store.getRequests, event];
+
+    // Yield control
+    yield;
   }
-
-  // If a put request has already been fired, pop it from the queue
-  // Return the item immediately
-  if (store.putRequests.length > 0) {
-    const putRequest = store.putRequests.sort((a, b) =>
-      b.scheduledAt - a.scheduledAt
-    ).pop();
-
-    return putRequest?.item;
-  }
-
-  // Update the event with the item if it exists
-  // Emit a get request for when an item will be made available in the store
-  const getRequest: Event<T> = {
-    ...event,
-    firedAt: sim.currentTime,
-    scheduledAt: sim.currentTime,
-  };
-
-  // If there is no item available, emit a get request
-  store.getRequests = [...store.getRequests, getRequest];
-
-  // Yield continuation
-  yield;
 }
 
 /**
@@ -71,18 +60,15 @@ export function* put<T>(
   ).pop();
 
   // Either create a new put request or handle an existing get request
-  const done = (!getRequest) ? { ...event, item } : {
+  const putRequest = (!getRequest) ? { ...event, item } : {
     ...getRequest,
-    firedAt: sim.currentTime,
     scheduledAt: sim.currentTime,
     item,
   };
 
-  if (!getRequest) {
-    // There was no pending get request, store the put request
-    store.putRequests = [done, ...store.putRequests];
-  }
+  // There was no pending get request, store the put request
+  store.putRequests = [putRequest, ...store.putRequests];
 
   // Yield continuation
-  yield done;
+  yield putRequest;
 }
