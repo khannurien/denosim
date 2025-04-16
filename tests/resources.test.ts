@@ -22,7 +22,7 @@ Deno.test("ordered inter-process synchronization", () => {
   const cons: Process<string> = function* (sim, event) {
     const item = yield* get(sim, event, store);
 
-    if (item) {
+    if (item && typeof item === "string") {
       result[event.id] = item;
     }
   };

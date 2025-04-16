@@ -157,6 +157,7 @@ Deno.test("event item passing", () => {
     if (event.item) {
       event.item["bar"] = "bar";
     }
+
     yield;
   };
 
@@ -194,7 +195,8 @@ Deno.test("event timeout scheduling", () => {
     }
 
     event.item["before"] = sim.currentTime;
-    yield* timeout(sim, 15);
+    const bla = yield* timeout(sim, 15);
+    console.log("BLA = ", bla);
     event.item["after"] = sim.currentTime;
   };
 

@@ -43,24 +43,11 @@ export function runSimulation(sim: Simulation): SimulationStats {
       break; // No more events to process
     }
 
-    // Advance simulation time to this event's scheduled time
-    sim.currentTime = event.scheduledAt;
-
-    // Process the event
-    const { updated, state, next } = handleEvent(sim, event);
-
-    // Update the event's current state
-    sim.state[updated.id] = state;
-
-    // Update the simulation's events queue
-    sim.events = sim.events.map((previous) =>
-      (previous.id === event.id) ? updated : previous
-    );
-
-    // Schedule the next event if yielded
-    if (next) {
-      sim.events = scheduleEvent(sim, next);
-    }
+    sim = { ...step(sim, event) };
+    // const { currentTime, events, state } = step(sim, event);
+    // sim.currentTime = currentTime;
+    // sim.events = events;
+    // sim.state = state;
   }
 
   const end = performance.now();
@@ -68,6 +55,33 @@ export function runSimulation(sim: Simulation): SimulationStats {
   return {
     duration: end - start, // Return real-world time taken for simulation
   };
+}
+
+let YO = 0;
+
+export function step(sim: Simulation, event: Event<unknown>): Simulation {
+  // Advance simulation time to this event's scheduled time
+  const nextSim = { ...sim, currentTime: event.scheduledAt };
+
+  // Process the event
+  const { updated, state, next } = handleEvent(nextSim, event);
+
+  // Update the event's current state
+  nextSim.state = { ...nextSim.state, [updated.id]: state };
+
+  // Update the simulation's events queue
+  nextSim.events = nextSim.events.map((previous) =>
+    (previous.id === event.id) ? updated : previous
+  );
+
+  // Schedule the next event if yielded
+  if (next) {
+    nextSim.events = scheduleEvent(nextSim, next);
+  }
+
+  // console.log(nextSim.currentTime, "foobar");
+  // return {... nextSim, "coucou": "foobar " + YO++};
+  return nextSim;
 }
 
 /**
@@ -131,7 +145,7 @@ export function handleEvent<T>(
   const generator = sim.state[event.id] as ProcessState<T> ??
     event.callback(sim, event);
   // Execute next step of the generator
-  const { value, done } = generator.next();
+  const { value, done } = generator.next([sim, event]);
 
   // If generator yielded a value (new event to schedule) and isn't done
   if (!done && value) {
@@ -139,14 +153,20 @@ export function handleEvent<T>(
     // We will wait for that new event to be handled before continuing the original event
     // Return the event updated with continuation metadata along with its current state
     // Return the new event to be scheduled
-    return {
-      updated: {
-        ...event,
-        scheduledAt: value.scheduledAt,
-      },
-      state: generator,
-      next: (value.id !== event.id) ? value : undefined,
-    };
+    return value.id !== event.id
+      ? {
+        updated: {
+          ...event,
+          // Synchronization between original process end and yielded process start
+          scheduledAt: value.scheduledAt,
+        },
+        state: generator,
+        next: value,
+      }
+      : {
+        updated: { ...value },
+        state: generator,
+      };
   }
 
   // The event has been fully handled
@@ -182,5 +202,6 @@ export function* timeout<T>(
   );
 
   // Yield continuation (allowing other code to run until timeout completes)
-  yield timeoutEvent;
+  const newSim = yield timeoutEvent;
+  return newSim;
 }

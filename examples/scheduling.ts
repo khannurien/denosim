@@ -45,8 +45,22 @@ if (import.meta.main) {
     };
 
     console.log(`[${sim.currentTime}] bar before timeout`);
-    yield* timeout(sim, 15, cb);
+    const [newSim, newEvent] = yield* timeout(sim, 15, cb);
+    console.log(`[${newSim.currentTime}] bar after timeout`);
     console.log(`[${sim.currentTime}] bar after timeout`);
+  };
+
+  const baz: Process = function* (
+    sim: Simulation,
+    _event: Event,
+  ): ProcessState {
+    console.log(`[${sim.currentTime}] baz before`);
+
+    const future = createEvent(sim, sim.currentTime + 10, foo);
+    const [newSim, newEvent] = yield future;
+
+    console.log(`[${newSim.currentTime}] baz after`);
+    console.log(`[${sim.currentTime}] baz after`);
   };
 
   // const wait: Process = function* (
@@ -75,6 +89,9 @@ if (import.meta.main) {
 
   const e5 = createEvent(sim, 50, foo);
   sim.events = scheduleEvent(sim, e5);
+
+  const e6 = createEvent(sim, 60, baz);
+  sim.events = scheduleEvent(sim, e6);
 
   const stats = runSimulation(sim);
 
