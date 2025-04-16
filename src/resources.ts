@@ -20,7 +20,7 @@ export function createStore<T>(): Store<T> {
  * Returns the item that has been put into the request.
  */
 export function* get<T>(
-  _sim: Simulation,
+  sim: Simulation,
   event: Event<T>,
   store: Store<T>,
 ): ProcessState<T> {
@@ -32,14 +32,15 @@ export function* get<T>(
         b.scheduledAt - a.scheduledAt
       ).pop();
 
-      return putRequest?.item;
+      // return putRequest?.item;
+      return [sim, putRequest!];
     }
 
     // If there is no item available, emit a get request
     store.getRequests = [...store.getRequests, event];
 
     // Yield control
-    yield;
+    return yield;
   }
 }
 
@@ -70,5 +71,5 @@ export function* put<T>(
   store.putRequests = [putRequest, ...store.putRequests];
 
   // Yield continuation
-  yield putRequest;
+  return yield putRequest;
 }

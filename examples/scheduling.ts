@@ -1,4 +1,4 @@
-import { Event, Process, ProcessState, Simulation } from "../src/model.ts";
+import { Event, Process, Simulation } from "../src/model.ts";
 import {
   createEvent,
   initializeSimulation,
@@ -26,54 +26,37 @@ if (import.meta.main) {
   const foo: Process = function* (
     sim: Simulation,
     _event: Event,
-  ): ProcessState {
+  ) {
     console.log(`[${sim.currentTime}] foo`);
-    yield;
+    return yield;
   };
 
-  const bar: Process = function* (
-    sim: Simulation,
-    _event: Event,
-  ): ProcessState {
-    const cb: Process = function* (
-      sim: Simulation,
-      _event: Event,
-    ): ProcessState {
+  const bar: Process = function* (sim, _event) {
+    const step1: Process = function* (sim, _event) {
       console.log(`[${sim.currentTime}] callback from bar before timeout`);
-      yield* timeout(sim, 5);
-      console.log(`[${sim.currentTime}] callback from bar after timeout`);
+      return yield* timeout(sim, 5, step2);
     };
-
+    const step2: Process = function* (sim, _event) {
+      console.log(`[${sim.currentTime}] callback from bar after timeout`);
+      return yield;
+    };
     console.log(`[${sim.currentTime}] bar before timeout`);
-    const [newSim, newEvent] = yield* timeout(sim, 15, cb);
+    const [newSim, newEvent] = yield* timeout(sim, 15, step1);
     console.log(`[${newSim.currentTime}] bar after timeout`);
-    console.log(`[${sim.currentTime}] bar after timeout`);
+
+    return [newSim, newEvent];
   };
 
-  const baz: Process = function* (
-    sim: Simulation,
-    _event: Event,
-  ): ProcessState {
+  const baz: Process = function* (sim, _event) {
     console.log(`[${sim.currentTime}] baz before`);
 
     const future = createEvent(sim, sim.currentTime + 10, foo);
     const [newSim, newEvent] = yield future;
 
     console.log(`[${newSim.currentTime}] baz after`);
-    console.log(`[${sim.currentTime}] baz after`);
+
+    return [newSim, newEvent];
   };
-
-  // const wait: Process = function* (
-  //   sim: Simulation,
-  //   _event: Event,
-  // ): ProcessState {
-  //   while (sim.currentTime < 10) {
-  //     yield* timeout(sim, 2.5);
-  //   }
-  // }
-
-  // const e1 = createEvent(sim, 0, wait);
-  // sim.events = scheduleEvent(sim, e1);
 
   const e1 = createEvent(sim, 10, foo);
   sim.events = scheduleEvent(sim, e1);
@@ -93,9 +76,9 @@ if (import.meta.main) {
   const e6 = createEvent(sim, 60, baz);
   sim.events = scheduleEvent(sim, e6);
 
-  const stats = runSimulation(sim);
+  const [stop, stats] = runSimulation(sim);
 
-  console.log(`Simulation ended at ${sim.currentTime}`);
+  console.log(`Simulation ended at ${stop.currentTime}`);
   console.log(`Simulation took: ${stats.duration} ms`);
-  console.log("Events:", JSON.stringify(sim.events, null, 2));
+  console.log("Events:", JSON.stringify(stop.events, null, 2));
 }

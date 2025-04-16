@@ -1,4 +1,4 @@
-import { Event, Process, Simulation, Store } from "../src/model.ts";
+import { Process, Store } from "../src/model.ts";
 import { createStore, get, put } from "../src/resources.ts";
 import {
   createEvent,
@@ -15,27 +15,27 @@ if (import.meta.main) {
   let consCount = 0;
   let prodCount = 0;
 
-  const prod: Process<string> = function* (
-    sim: Simulation,
-    event: Event<string>,
-  ) {
+  const prod: Process<string> = function* (sim, event) {
     const item = "foobar";
     console.log(`[${sim.currentTime}] Prod -- put ${item} in store`);
-    yield* put(sim, event, store, item);
+    const [newSim, newEvent] = yield* put(sim, event, store, item);
     console.log(`[${sim.currentTime}] Prod -- done [#${++prodCount}]...`);
+
+    return [newSim, newEvent];
   };
 
-  const cons: Process<string> = function* (
-    sim: Simulation,
-    event: Event<string>,
-  ) {
+  const cons: Process<string> = function* (sim, event) {
     console.log(
       `[${sim.currentTime}] Cons -- trying to get [#${++consCount}]...`,
     );
-    const item = yield* get(sim, event, store);
+    const [newSim, newEvent] = yield* get(sim, event, store);
     console.log(
-      `[${sim.currentTime}] Cons -- item: ${JSON.stringify(item, null, 2)}`,
+      `[${sim.currentTime}] Cons -- item: ${
+        JSON.stringify(newEvent.item, null, 2)
+      }`,
     );
+
+    return [newSim, newEvent];
   };
 
   const e1 = createEvent(sim, 20, cons);
@@ -56,9 +56,9 @@ if (import.meta.main) {
   const e6 = createEvent(sim, 60, cons);
   sim.events = scheduleEvent(sim, e6);
 
-  const stats = runSimulation(sim);
+  const [stop, stats] = runSimulation(sim);
 
-  console.log(`Simulation ended at ${sim.currentTime}`);
+  console.log(`Simulation ended at ${stop.currentTime}`);
   console.log(`Simulation took: ${stats.duration} ms`);
-  console.log("Events:", JSON.stringify(sim.events, null, 2));
+  console.log("Events:", JSON.stringify(stop.events, null, 2));
 }

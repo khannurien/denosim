@@ -26,7 +26,7 @@ export function initializeSimulation(): Simulation {
  * The simulation processes events in chronological order (earliest first).
  * Returns statistics about the simulation run.
  */
-export function runSimulation(sim: Simulation): SimulationStats {
+export function runSimulation(sim: Simulation): [Simulation, SimulationStats] {
   const start = performance.now();
 
   while (true) {
@@ -43,22 +43,23 @@ export function runSimulation(sim: Simulation): SimulationStats {
       break; // No more events to process
     }
 
-    sim = { ...step(sim, event) };
-    // const { currentTime, events, state } = step(sim, event);
-    // sim.currentTime = currentTime;
-    // sim.events = events;
-    // sim.state = state;
+    // FIXME: Review logic -- avoid mutating function parameter
+    sim = step(sim, event);
   }
 
   const end = performance.now();
 
-  return {
-    duration: end - start, // Return real-world time taken for simulation
-  };
+  return [
+    sim,
+    {
+      duration: end - start, // Return real-world time taken for simulation
+    },
+  ];
 }
 
-let YO = 0;
-
+/**
+ * TODO:
+ */
 export function step(sim: Simulation, event: Event<unknown>): Simulation {
   // Advance simulation time to this event's scheduled time
   const nextSim = { ...sim, currentTime: event.scheduledAt };
@@ -79,8 +80,6 @@ export function step(sim: Simulation, event: Event<unknown>): Simulation {
     nextSim.events = scheduleEvent(nextSim, next);
   }
 
-  // console.log(nextSim.currentTime, "foobar");
-  // return {... nextSim, "coucou": "foobar " + YO++};
   return nextSim;
 }
 
@@ -104,7 +103,7 @@ export function createEvent<T>(
     firedAt: sim.currentTime,
     scheduledAt,
     callback: callback ?? function* () {
-      yield;
+      return yield;
     },
     item,
   };
@@ -187,7 +186,7 @@ export function handleEvent<T>(
  * This is a utility for creating delayed events in the simulation.
  * Yields control until the timeout duration has passed.
  */
-export function* timeout<T>(
+export function* timeout<T = void>(
   sim: Simulation,
   duration: number,
   callback?: Process<T>,
@@ -202,6 +201,8 @@ export function* timeout<T>(
   );
 
   // Yield continuation (allowing other code to run until timeout completes)
-  const newSim = yield timeoutEvent;
-  return newSim;
+  const [newSim, newEvent] = yield timeoutEvent;
+
+  // Return the updated context for closure continuation
+  return [newSim, newEvent];
 }

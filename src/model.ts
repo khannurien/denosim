@@ -59,16 +59,15 @@ export enum EventState {
  */
 export type ProcessState<T = void> = Generator<
   Event<T> | undefined,
-  [Simulation, Event<T>] | T | undefined | void,
+  [Simulation, Event<T>],
   [Simulation, Event<T>]
 >;
 
 /**
- * Represents a step of event handling.
- * It holds:
- * - the updated event after it has been handled;
- * - the current state of its associated process;
- * - the next event to schedule in case of a multi-step process.
+ * Represents a step of event handling. It holds:
+ * - A copy of the original event, updated after it has been handled;
+ * - The current state of its associated process;
+ * - A successor event to schedule in case of a multi-step process.
  */
 export interface ProcessStep<T = void> {
   /** The updated event */
