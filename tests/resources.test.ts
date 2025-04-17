@@ -8,7 +8,7 @@ import {
 } from "../src/simulation.ts";
 import { createStore, get, put } from "../src/resources.ts";
 
-Deno.test("ordered inter-process synchronization", () => {
+Deno.test("basic store operations", () => {
   const sim = initializeSimulation();
 
   const store: Store<string> = createStore<string>();
@@ -36,38 +36,116 @@ Deno.test("ordered inter-process synchronization", () => {
   const e4 = createEvent(sim, 20, cons);
   sim.events = scheduleEvent(sim, e4);
 
-  const e5 = createEvent(sim, 30, cons);
-  sim.events = scheduleEvent(sim, e5);
-  const e6 = createEvent(sim, 40, prod);
-  sim.events = scheduleEvent(sim, e6);
-
-  const e5bis = createEvent(sim, 42, cons);
-  sim.events = scheduleEvent(sim, e5bis);
-
-  const e7 = createEvent(sim, 45, cons);
-  sim.events = scheduleEvent(sim, e7);
-  const e8 = createEvent(sim, 45, prod);
-  sim.events = scheduleEvent(sim, e8);
-
-  const e9 = createEvent(sim, 50, cons);
-  sim.events = scheduleEvent(sim, e9);
-  const e10 = createEvent(sim, 55, cons);
-  sim.events = scheduleEvent(sim, e10);
-  const e11 = createEvent(sim, 60, cons);
-  sim.events = scheduleEvent(sim, e11);
-  const e12 = createEvent(sim, 70, prod);
-  sim.events = scheduleEvent(sim, e12);
-
   const _stats = runSimulation(sim);
 
   assertEquals(result[e2.id], "foobar");
   assertEquals(result[e4.id], "foobar");
-  assertEquals(result[e5.id], "foobar");
-  assertEquals(result[e5bis.id], "foobar");
-  assertEquals(result[e7.id], "foobar");
-  assertEquals(result[e9.id], undefined);
-  assertEquals(result[e10.id], undefined);
-  assertEquals(result[e11.id], undefined);
-  assertEquals(store.getRequests.length, 3);
+  assertEquals(store.getRequests.length, 0);
   assertEquals(store.putRequests.length, 0);
+});
+
+Deno.test("out-of-order store operations", () => {
+  const sim = initializeSimulation();
+
+  const store: Store<string> = createStore<string>();
+  const result: Record<string, string | undefined> = {};
+
+  const prod: Process<string> = function* (sim, event) {
+    const item = "foobar";
+    return yield* put(sim, event, store, item);
+  };
+
+  const cons: Process<string> = function* (sim, event) {
+    const [newSim, newEvent] = yield* get(sim, event, store);
+    result[event.id] = newEvent.item;
+
+    return [newSim, newEvent];
+  };
+
+  const e1 = createEvent(sim, 30, cons);
+  sim.events = scheduleEvent(sim, e1);
+  const e2 = createEvent(sim, 40, prod);
+  sim.events = scheduleEvent(sim, e2);
+
+  const e3 = createEvent(sim, 50, cons);
+  sim.events = scheduleEvent(sim, e3);
+  const e4 = createEvent(sim, 50, prod);
+  sim.events = scheduleEvent(sim, e4);
+
+  const _stats = runSimulation(sim);
+
+  assertEquals(result[e1.id], "foobar");
+  assertEquals(result[e3.id], "foobar");
+  assertEquals(store.getRequests.length, 0);
+  assertEquals(store.putRequests.length, 0);
+});
+
+Deno.test("cons > prod: unbalanced store operations", () => {
+  const sim = initializeSimulation();
+
+  const store: Store<string> = createStore<string>();
+  const result: Record<string, string | undefined> = {};
+
+  const prod: Process<string> = function* (sim, event) {
+    const item = "foobar";
+    return yield* put(sim, event, store, item);
+  };
+
+  const cons: Process<string> = function* (sim, event) {
+    const [newSim, newEvent] = yield* get(sim, event, store);
+    result[event.id] = newEvent.item;
+
+    return [newSim, newEvent];
+  };
+
+  const e1 = createEvent(sim, 50, cons);
+  sim.events = scheduleEvent(sim, e1);
+  const e2 = createEvent(sim, 55, cons);
+  sim.events = scheduleEvent(sim, e2);
+  const e3 = createEvent(sim, 60, cons);
+  sim.events = scheduleEvent(sim, e3);
+  const e4 = createEvent(sim, 70, prod);
+  sim.events = scheduleEvent(sim, e4);
+
+  const _stats = runSimulation(sim);
+
+  assertEquals(result[e1.id], "foobar");
+  assertEquals(result[e2.id], undefined);
+  assertEquals(result[e3.id], undefined);
+  assertEquals(store.getRequests.length, 2);
+  assertEquals(store.putRequests.length, 0);
+});
+
+Deno.test("prod > cons: unbalanced store operations", () => {
+  const sim = initializeSimulation();
+
+  const store: Store<string> = createStore<string>();
+  const result: Record<string, string | undefined> = {};
+
+  const prod: Process<string> = function* (sim, event) {
+    const item = "foobar";
+    return yield* put(sim, event, store, item);
+  };
+
+  const cons: Process<string> = function* (sim, event) {
+    const [newSim, newEvent] = yield* get(sim, event, store);
+    result[event.id] = newEvent.item;
+
+    return [newSim, newEvent];
+  };
+
+  const e1 = createEvent(sim, 50, prod);
+  sim.events = scheduleEvent(sim, e1);
+  const e2 = createEvent(sim, 55, prod);
+  sim.events = scheduleEvent(sim, e2);
+  const e3 = createEvent(sim, 60, prod);
+  sim.events = scheduleEvent(sim, e3);
+  const e4 = createEvent(sim, 70, cons);
+  sim.events = scheduleEvent(sim, e4);
+
+  const _stats = runSimulation(sim);
+
+  assertEquals(result[e4.id], "foobar");
+  assertEquals(store.getRequests.length, 0);
+  assertEquals(store.putRequests.length, 2);
 });
