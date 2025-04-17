@@ -12,7 +12,7 @@ Deno.test("ordered inter-process synchronization", () => {
   const sim = initializeSimulation();
 
   const store: Store<string> = createStore<string>();
-  const result: Record<string, string> = {};
+  const result: Record<string, string | undefined> = {};
 
   const prod: Process<string> = function* (sim, event) {
     const item = "foobar";
@@ -21,7 +21,7 @@ Deno.test("ordered inter-process synchronization", () => {
 
   const cons: Process<string> = function* (sim, event) {
     const [newSim, newEvent] = yield* get(sim, event, store);
-    result[event.id] = newEvent.item!;
+    result[event.id] = newEvent.item;
 
     return [newSim, newEvent];
   };
@@ -59,8 +59,6 @@ Deno.test("ordered inter-process synchronization", () => {
   sim.events = scheduleEvent(sim, e12);
 
   const _stats = runSimulation(sim);
-
-  console.log(result);
 
   assertEquals(result[e2.id], "foobar");
   assertEquals(result[e4.id], "foobar");

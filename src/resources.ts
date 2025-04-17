@@ -26,14 +26,13 @@ export function* get<T>(
 ): ProcessState<T> {
   while (true) {
     // If a put request has been fired, pop it from the queue
-    // Return the item immediately
-    if (store.putRequests.length > 0) {
-      const putRequest = store.putRequests.sort((a, b) =>
-        b.scheduledAt - a.scheduledAt
-      ).pop();
+    const putRequest = store.putRequests.sort((a, b) =>
+      b.scheduledAt - a.scheduledAt
+    ).pop();
 
-      // return putRequest?.item;
-      return [sim, putRequest!];
+    if (putRequest) {
+      // Return the completed request immediately
+      return [sim, putRequest];
     }
 
     // If there is no item available, emit a get request
@@ -67,8 +66,10 @@ export function* put<T>(
     item,
   };
 
-  // There was no pending get request, store the put request
-  store.putRequests = [putRequest, ...store.putRequests];
+  if (!getRequest) {
+    // There was no pending get request, store the put request
+    store.putRequests = [putRequest, ...store.putRequests];
+  }
 
   // Yield continuation
   return yield putRequest;
