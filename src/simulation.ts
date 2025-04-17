@@ -58,7 +58,12 @@ export function runSimulation(sim: Simulation): [Simulation, SimulationStats] {
 }
 
 /**
- * TODO:
+ * Processes the simulation for one step, i.e. handles the current event,
+ * and possibly schedules a next one.
+ * Advances the simulation time to the current event scheduled time.
+ * Updates the state of the process associated with the current event.
+ * Updates the event queue with the updated current event.
+ * Returns an updated copy of the original simulation container.
  */
 export function step(sim: Simulation, event: Event<unknown>): Simulation {
   // Advance simulation time to this event's scheduled time
@@ -70,7 +75,7 @@ export function step(sim: Simulation, event: Event<unknown>): Simulation {
   // Update the event's current state
   nextSim.state = { ...nextSim.state, [updated.id]: state };
 
-  // Update the simulation's events queue
+  // Update the simulation's event queue
   nextSim.events = nextSim.events.map((previous) =>
     (previous.id === event.id) ? updated : previous
   );
