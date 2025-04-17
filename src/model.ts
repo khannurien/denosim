@@ -149,6 +149,11 @@ export interface SimulationStats {
  */
 export interface Store<T> {
   /**
+   * TODO:
+   */
+  readonly capacity: number;
+
+  /**
    * Array of pending get requests in the store.
    * Earliest requests will be handled first.
    */
@@ -159,4 +164,9 @@ export interface Store<T> {
    * Earliest requests will be handled first.
    */
   putRequests: Event<T>[];
+
+  /**
+   * TODO:
+   */
+  delayedPutRequests: Event<T>[];
 }

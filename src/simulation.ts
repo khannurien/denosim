@@ -30,6 +30,9 @@ export function initializeSimulation(): Simulation {
 export function runSimulation(sim: Simulation): [Simulation, SimulationStats] {
   const start = performance.now();
 
+  // TODO: Termination conditions
+  // - End time (simulation stops when currentTime >= endTime)
+  // - End event (simulation stops when endEvent.status === EventState.Finished)
   while (true) {
     // Get all scheduled events that haven't been processed yet,
     // sorted in descending order so we can efficiently pop the earliest event

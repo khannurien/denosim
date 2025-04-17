@@ -9,7 +9,7 @@ import {
 
 /**
  * Expected output (non-blocking):
- * 
+ *
  * [20] Cons -- trying to get [#1]...
  * [25] Prod -- put foobar in store
  * [25] Cons -- item: "foobar"
@@ -22,7 +22,7 @@ import {
  * [60] Prod -- put foobar in store
  * [60] Cons -- item: "foobar"
  * [60] Prod -- done [#3]...
- * 
+ *
  * Expected output (blocking):
  * [20] Cons -- trying to get [#1]...
  * [25] Prod -- put foobar in store
@@ -40,7 +40,7 @@ import {
 if (import.meta.main) {
   const sim = initializeSimulation();
 
-  const store: Store<string> = createStore<string>();
+  const store: Store<string> = createStore<string>(1);
 
   let consCount = 0;
   let prodCount = 0;
@@ -48,7 +48,7 @@ if (import.meta.main) {
   const prod: Process<string> = function* (sim, event) {
     const item = "foobar";
     console.log(`[${sim.currentTime}] Prod -- put ${item} in store`);
-    const [newSim, newEvent] = yield* put(sim, event, store, item, true);
+    const [newSim, newEvent] = yield* put(sim, event, store, item);
     console.log(`[${newSim.currentTime}] Prod -- done [#${++prodCount}]...`);
 
     return [newSim, newEvent];

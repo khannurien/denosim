@@ -7,10 +7,18 @@ import { Event, ProcessState, Simulation, Store } from "./model.ts";
  * - Empty requests array (no scheduled get requests)
  * - TODO: Capacity
  */
-export function createStore<T>(): Store<T> {
+export function createStore<T>(capacity: number = 1): Store<T> {
+  if (capacity < 0) {
+    throw RangeError(
+      `Store cannot be created with a negative capacity (got ${capacity}).`,
+    );
+  }
+
   return {
+    capacity,
     getRequests: [],
     putRequests: [],
+    delayedPutRequests: [],
   };
 }
 
@@ -26,10 +34,14 @@ export function* get<T>(
   store: Store<T>,
 ): ProcessState<T> {
   while (true) {
+    // TODO: Fetch blocked put requests first, if any
+    const sourceQueue = store.delayedPutRequests.length > 0
+      ? store.delayedPutRequests
+      : store.putRequests;
+
     // Sort put requests in descending order so we can efficiently pop the earliest one
-    const putRequest = store.putRequests.sort((a, b) =>
-      b.scheduledAt - a.scheduledAt
-    ).pop();
+    const putRequest = sourceQueue.sort((a, b) => b.scheduledAt - a.scheduledAt)
+      .pop();
 
     // If a put request was already fired
     if (putRequest) {
@@ -61,8 +73,8 @@ export function* put<T>(
   item: T,
   blocking: boolean = false,
 ): ProcessState<T> {
-  // TODO: Refactor to merge put and blockingPut
-  if (blocking) {
+  // TODO: Refactor to merge put and blockingPut with capacity handling
+  if (blocking || store.putRequests.length - store.getRequests.length >= store.capacity) {
     return yield* blockingPut(sim, event, store, item);
   }
 
@@ -78,9 +90,9 @@ export function* put<T>(
     item,
   };
 
+  // There was no pending get request, store the put request
   if (!getRequest) {
-    // There was no pending get request, store the put request
-    store.putRequests = [putRequest, ...store.putRequests];
+    store.putRequests = [...store.putRequests, putRequest];
   }
 
   // Yield continuation
@@ -110,8 +122,14 @@ function* blockingPut<T>(
       return [sim, updated];
     }
 
+    const putRequest = { ...event, item };
     // There was no pending get request, store the put request
-    store.putRequests = [...store.putRequests, { ...event, item }];
+    if (store.putRequests.length - store.getRequests.length >= store.capacity) {
+      // TODO: Do not exceed store capacity
+      store.delayedPutRequests = [...store.delayedPutRequests, putRequest];
+    } else {
+      store.putRequests = [...store.putRequests, putRequest];
+    }
 
     // Yield control
     return yield;
