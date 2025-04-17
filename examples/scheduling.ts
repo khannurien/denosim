@@ -18,6 +18,9 @@ import {
  * [37] foo
  * [40] callback from bar after timeout
  * [50] foo
+ * [60] baz before
+ * [70] foo
+ * [70] baz after
  * Simulation ended at 50
  */
 if (import.meta.main) {

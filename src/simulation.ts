@@ -45,6 +45,7 @@ export function runSimulation(sim: Simulation): [Simulation, SimulationStats] {
     }
 
     // FIXME: Review logic -- avoid mutating function parameter
+    // TODO: Use a generator to yield the next simulation value?
     sim = step(sim, event);
   }
 

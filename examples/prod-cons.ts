@@ -7,6 +7,36 @@ import {
   scheduleEvent,
 } from "../src/simulation.ts";
 
+/**
+ * Expected output (non-blocking):
+ * 
+ * [20] Cons -- trying to get [#1]...
+ * [25] Prod -- put foobar in store
+ * [25] Cons -- item: "foobar"
+ * [25] Prod -- done [#1]...
+ * [45] Prod -- put foobar in store
+ * [45] Prod -- done [#2]...
+ * [50] Cons -- trying to get [#2]...
+ * [50] Cons -- item: "foobar"
+ * [60] Cons -- trying to get [#3]...
+ * [60] Prod -- put foobar in store
+ * [60] Cons -- item: "foobar"
+ * [60] Prod -- done [#3]...
+ * 
+ * Expected output (blocking):
+ * [20] Cons -- trying to get [#1]...
+ * [25] Prod -- put foobar in store
+ * [25] Cons -- item: "foobar"
+ * [25] Prod -- done [#1]...
+ * [45] Prod -- put foobar in store
+ * [50] Cons -- trying to get [#2]...
+ * [50] Prod -- done [#2]...
+ * [50] Cons -- item: "foobar"
+ * [60] Cons -- trying to get [#3]...
+ * [60] Prod -- put foobar in store
+ * [60] Cons -- item: "foobar"
+ * [60] Prod -- done [#3]...
+ */
 if (import.meta.main) {
   const sim = initializeSimulation();
 
@@ -18,8 +48,8 @@ if (import.meta.main) {
   const prod: Process<string> = function* (sim, event) {
     const item = "foobar";
     console.log(`[${sim.currentTime}] Prod -- put ${item} in store`);
-    const [newSim, newEvent] = yield* put(sim, event, store, item);
-    console.log(`[${sim.currentTime}] Prod -- done [#${++prodCount}]...`);
+    const [newSim, newEvent] = yield* put(sim, event, store, item, true);
+    console.log(`[${newSim.currentTime}] Prod -- done [#${++prodCount}]...`);
 
     return [newSim, newEvent];
   };
@@ -30,7 +60,7 @@ if (import.meta.main) {
     );
     const [newSim, newEvent] = yield* get(sim, event, store);
     console.log(
-      `[${sim.currentTime}] Cons -- item: ${
+      `[${newSim.currentTime}] Cons -- item: ${
         JSON.stringify(newEvent.item, null, 2)
       }`,
     );
