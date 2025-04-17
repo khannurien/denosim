@@ -10,7 +10,7 @@ import {
 
 /**
  * Initializes a new simulation instance with:
- * - currentTime set to 0 (starting point of simulation)
+ * - `currentTime` set to 0 (starting point of simulation)
  * - Empty events array (no scheduled events)
  */
 export function initializeSimulation(): Simulation {
@@ -24,7 +24,8 @@ export function initializeSimulation(): Simulation {
 /**
  * Runs the discrete-event simulation until no more events remain to process.
  * The simulation processes events in chronological order (earliest first).
- * Returns statistics about the simulation run.
+ * FIXME: The simulation instance is updated at each simulation step.
+ * Returns the last simulation instance along with statistics about the simulation run.
  */
 export function runSimulation(sim: Simulation): [Simulation, SimulationStats] {
   const start = performance.now();
@@ -69,18 +70,18 @@ export function step(sim: Simulation, event: Event<unknown>): Simulation {
   // Advance simulation time to this event's scheduled time
   const nextSim = { ...sim, currentTime: event.scheduledAt };
 
-  // Process the event
+  // Handle the event by executing its process, which may yield a new event
   const { updated, state, next } = handleEvent(nextSim, event);
 
-  // Update the event's current state
+  // Update the event's process state in the simulation container
   nextSim.state = { ...nextSim.state, [updated.id]: state };
 
-  // Update the simulation's event queue
+  // Update the event instance in the event queue if necessary
   nextSim.events = nextSim.events.map((previous) =>
     (previous.id === event.id) ? updated : previous
   );
 
-  // Schedule the next event if yielded
+  // Schedule the next event yielded by the current process
   if (next) {
     nextSim.events = scheduleEvent(nextSim, next);
   }
@@ -91,7 +92,7 @@ export function step(sim: Simulation, event: Event<unknown>): Simulation {
 /**
  * Creates a new event with:
  * - Unique ID
- * - Initial state set to "Fired"
+ * - Initial state set to `Fired`
  * - Timestamps for when it was created and scheduled
  * - Optional callback process (defaults to empty generator)
  * - Optional item to carry (defaults to undefined)

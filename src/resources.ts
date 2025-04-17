@@ -45,6 +45,7 @@ export function* get<T>(
 
 /**
  * Non-blocking operation that puts an item in a store.
+ * FIXME: The operation can be configured to be blocking.
  * If there are pending get requests, handles the earliest one with said item.
  * Otherwise, stores the item in a put request for future use.
  */

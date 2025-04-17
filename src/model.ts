@@ -7,7 +7,7 @@ export interface Simulation {
   /**
    * The current virtual time in the simulation.
    * Represents the timestamp up to which the simulation has processed.
-   * Measured in arbitrary time units (could be steps, seconds, etc.)
+   * Measured in arbitrary time units (could be steps, seconds, etc.).
    */
   currentTime: number;
 
