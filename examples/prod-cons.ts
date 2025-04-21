@@ -48,24 +48,24 @@ if (import.meta.main) {
   const prod: Process<string> = function* (sim, event) {
     const item = "foobar";
     console.log(`[${sim.currentTime}] Prod -- put ${item} in store`);
-    const [newSim, newEvent] = yield* put(sim, event, store, item);
-    console.log(`[${newSim.currentTime}] Prod -- done [#${++prodCount}]...`);
+    const step = yield* put(sim, event, store, item);
+    console.log(`[${step.sim.currentTime}] Prod -- done [#${++prodCount}]...`);
 
-    return [newSim, newEvent];
+    return step;
   };
 
   const cons: Process<string> = function* (sim, event) {
     console.log(
       `[${sim.currentTime}] Cons -- trying to get [#${++consCount}]...`,
     );
-    const [newSim, newEvent] = yield* get(sim, event, store);
+    const step = yield* get(sim, event, store);
     console.log(
-      `[${newSim.currentTime}] Cons -- item: ${
-        JSON.stringify(newEvent.item, null, 2)
+      `[${step.sim.currentTime}] Cons -- item: ${
+        JSON.stringify(step.event.item, null, 2)
       }`,
     );
 
-    return [newSim, newEvent];
+    return step;
   };
 
   const e1 = createEvent(sim, 20, cons);

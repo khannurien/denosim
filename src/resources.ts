@@ -48,7 +48,7 @@ export function* get<T>(
       // Return the completed request to be rescheduled immediately
       const updated = { ...putRequest, scheduledAt: sim.currentTime };
       yield updated;
-      return [sim, updated];
+      return { sim, event: updated };
     }
 
     // There was no pending put request, store the get request
@@ -61,7 +61,7 @@ export function* get<T>(
 
 /**
  * Store operation that makes an item available from a store.
- * Non-blocking by default; the operation can be configured to be block until a
+ * Non-blocking by default; the operation can be configured to be blocked until a
  * corresponding get request is registered in the store.
  * If there are pending get requests, handles the earliest one with passed item.
  * Otherwise, stores the item in a put request for future use.
@@ -74,7 +74,10 @@ export function* put<T>(
   blocking: boolean = false,
 ): ProcessState<T> {
   // TODO: Refactor to merge put and blockingPut with capacity handling
-  if (blocking || store.putRequests.length - store.getRequests.length >= store.capacity) {
+  if (
+    blocking ||
+    store.putRequests.length - store.getRequests.length >= store.capacity
+  ) {
     return yield* blockingPut(sim, event, store, item);
   }
 
@@ -119,7 +122,7 @@ function* blockingPut<T>(
       // Return the updated request to be rescheduled immediately
       const updated = { ...getRequest, scheduledAt: sim.currentTime, item };
       yield updated;
-      return [sim, updated];
+      return { sim, event: updated };
     }
 
     const putRequest = { ...event, item };

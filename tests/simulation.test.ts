@@ -189,13 +189,13 @@ Deno.test("event timeout scheduling", () => {
     }
 
     event.item["before"] = sim.currentTime;
-    const [newSim, newEvent] = yield* timeout(sim, 15);
+    const step = yield* timeout(sim, 15);
 
-    if (!newEvent.item) {
+    if (!step.event.item) {
       throw Error("Event item not set.");
     }
 
-    newEvent.item["after"] = newSim.currentTime;
+    step.event.item["after"] = step.sim.currentTime;
 
     return yield;
   };

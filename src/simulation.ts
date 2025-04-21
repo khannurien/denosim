@@ -154,7 +154,7 @@ export function handleEvent<T>(
   const generator = sim.state[event.id] as ProcessState<T> ??
     event.callback(sim, event);
   // Execute next step of the generator
-  const { value, done } = generator.next([sim, event]);
+  const { value, done } = generator.next({ sim, event });
 
   // If generator yielded a value (new event to schedule) and isn't done
   if (!done && value) {
@@ -211,8 +211,8 @@ export function* timeout<T = void>(
   );
 
   // Yield continuation (allowing other code to run until timeout completes)
-  const [newSim, newEvent] = yield timeoutEvent;
+  const step = yield timeoutEvent;
 
   // Return the updated context for closure continuation
-  return [newSim, newEvent];
+  return step;
 }

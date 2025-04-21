@@ -59,8 +59,8 @@ export enum EventState {
  */
 export type ProcessState<T = void> = Generator<
   Event<T> | undefined,
-  [Simulation, Event<T>],
-  [Simulation, Event<T>]
+  ProcessReturn<T>,
+  ProcessReturn<T>
 >;
 
 /**
@@ -78,6 +78,18 @@ export interface ProcessStep<T = void> {
 
   /** Optional next event to be scheduled */
   next?: Event<T>;
+}
+
+/**
+ * Holds the simulation state updated after a process step.
+ * Returned by the process generator, and fed into its next step.
+ */
+export interface ProcessReturn<T = void> {
+  /** The updated simulation */
+  sim: Simulation;
+
+  /** The updated original event */
+  event: Event<T>;
 }
 
 /**
@@ -149,7 +161,9 @@ export interface SimulationStats {
  */
 export interface Store<T> {
   /**
-   * TODO:
+   * Maximum number of items a store can hold at any time.
+   * If a put request is fired and capacity is already reached,
+   * the request will be delayed.
    */
   readonly capacity: number;
 
@@ -166,7 +180,10 @@ export interface Store<T> {
   putRequests: Event<T>[];
 
   /**
-   * TODO:
+   * Array of delayed put requests in the store.
+   * Requests can be delayed because store capacity has been reached,
+   * or because a blocking put request has been fired and is waiting for a get request.
+   * Earliest requests will be handled first.
    */
   delayedPutRequests: Event<T>[];
 }

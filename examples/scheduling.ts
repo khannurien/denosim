@@ -44,21 +44,21 @@ if (import.meta.main) {
       return yield;
     };
     console.log(`[${sim.currentTime}] bar before timeout`);
-    const [newSim, newEvent] = yield* timeout(sim, 15, step1);
-    console.log(`[${newSim.currentTime}] bar after timeout`);
+    const step = yield* timeout(sim, 15, step1);
+    console.log(`[${step.sim.currentTime}] bar after timeout`);
 
-    return [newSim, newEvent];
+    return step;
   };
 
   const baz: Process = function* (sim, _event) {
     console.log(`[${sim.currentTime}] baz before`);
 
     const future = createEvent(sim, sim.currentTime + 10, foo);
-    const [newSim, newEvent] = yield future;
+    const step = yield future;
 
-    console.log(`[${newSim.currentTime}] baz after`);
+    console.log(`[${step.sim.currentTime}] baz after`);
 
-    return [newSim, newEvent];
+    return step;
   };
 
   const e1 = createEvent(sim, 10, foo);

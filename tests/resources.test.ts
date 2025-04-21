@@ -20,10 +20,10 @@ Deno.test("basic store operations", () => {
   };
 
   const cons: Process<string> = function* (sim, event) {
-    const [newSim, newEvent] = yield* get(sim, event, store);
-    result[event.id] = newEvent.item;
+    const step = yield* get(sim, event, store);
+    result[event.id] = step.event.item;
 
-    return [newSim, newEvent];
+    return step;
   };
 
   const e1 = createEvent(sim, 0, prod);
@@ -57,10 +57,10 @@ Deno.test("out-of-order store operations", () => {
   };
 
   const cons: Process<string> = function* (sim, event) {
-    const [newSim, newEvent] = yield* get(sim, event, store);
-    result[event.id] = newEvent.item;
+    const step = yield* get(sim, event, store);
+    result[event.id] = step.event.item;
 
-    return [newSim, newEvent];
+    return step;
   };
 
   const e1 = createEvent(sim, 30, cons);
@@ -91,26 +91,26 @@ Deno.test("blocking/non-blocking put operations", () => {
 
   const prodBlock: Process<string> = function* (sim, event) {
     const item = "foobar";
-    const [newSim, newEvent] = yield* put(sim, event, store, item, true);
-    timings[event.id] = newSim.currentTime;
+    const step = yield* put(sim, event, store, item, true);
+    timings[event.id] = step.sim.currentTime;
 
-    return [newSim, newEvent];
+    return step;
   };
 
   const prod: Process<string> = function* (sim, event) {
     const item = "foobar";
-    const [newSim, newEvent] = yield* put(sim, event, store, item);
-    timings[event.id] = newSim.currentTime;
+    const step = yield* put(sim, event, store, item);
+    timings[event.id] = step.sim.currentTime;
 
-    return [newSim, newEvent];
+    return step;
   };
 
   const cons: Process<string> = function* (sim, event) {
-    const [newSim, newEvent] = yield* get(sim, event, store);
-    result[event.id] = newEvent.item;
-    timings[event.id] = newSim.currentTime;
+    const step = yield* get(sim, event, store);
+    result[event.id] = step.event.item;
+    timings[event.id] = step.sim.currentTime;
 
-    return [newSim, newEvent];
+    return step;
   };
 
   const e1 = createEvent(sim, 30, prodBlock);
@@ -145,18 +145,18 @@ Deno.test("store capacity = 0", () => {
 
   const prod: Process<string> = function* (sim, event) {
     const item = "foobar";
-    const [newSim, newEvent] = yield* put(sim, event, store, item);
-    timings[event.id] = newSim.currentTime;
+    const step = yield* put(sim, event, store, item);
+    timings[event.id] = step.sim.currentTime;
 
-    return [newSim, newEvent];
+    return step;
   };
 
   const cons: Process<string> = function* (sim, event) {
-    const [newSim, newEvent] = yield* get(sim, event, store);
-    result[event.id] = newEvent.item;
-    timings[event.id] = newSim.currentTime;
+    const step = yield* get(sim, event, store);
+    result[event.id] = step.event.item;
+    timings[event.id] = step.sim.currentTime;
 
-    return [newSim, newEvent];
+    return step;
   };
 
   const e1 = createEvent(sim, 0, prod);
@@ -169,10 +169,6 @@ Deno.test("store capacity = 0", () => {
   sim.events = scheduleEvent(sim, e4);
 
   const [_stop, _stats] = runSimulation(sim);
-
-  console.log(timings);
-  console.log(store.putRequests);
-  console.log(store.delayedPutRequests);
 
   assertEquals(result[e4.id], "foobar");
   assertEquals(timings[e1.id], 30);
@@ -190,18 +186,18 @@ Deno.test("store capacity > 0", () => {
 
   const prod: Process<string> = function* (sim, event) {
     const item = "foobar";
-    const [newSim, newEvent] = yield* put(sim, event, store, item);
-    timings[event.id] = newSim.currentTime;
+    const step = yield* put(sim, event, store, item);
+    timings[event.id] = step.sim.currentTime;
 
-    return [newSim, newEvent];
+    return step;
   };
 
   const cons: Process<string> = function* (sim, event) {
-    const [newSim, newEvent] = yield* get(sim, event, store);
-    result[event.id] = newEvent.item;
-    timings[event.id] = newSim.currentTime;
+    const step = yield* get(sim, event, store);
+    result[event.id] = step.event.item;
+    timings[event.id] = step.sim.currentTime;
 
-    return [newSim, newEvent];
+    return step;
   };
 
   const e1 = createEvent(sim, 0, prod);
@@ -235,10 +231,10 @@ Deno.test("cons > prod: unbalanced store operations", () => {
   };
 
   const cons: Process<string> = function* (sim, event) {
-    const [newSim, newEvent] = yield* get(sim, event, store);
-    result[event.id] = newEvent.item;
+    const step = yield* get(sim, event, store);
+    result[event.id] = step.event.item;
 
-    return [newSim, newEvent];
+    return step;
   };
 
   const e1 = createEvent(sim, 50, cons);
@@ -272,10 +268,10 @@ Deno.test("prod > cons: unbalanced store operations", () => {
   };
 
   const cons: Process<string> = function* (sim, event) {
-    const [newSim, newEvent] = yield* get(sim, event, store);
-    result[event.id] = newEvent.item;
+    const step = yield* get(sim, event, store);
+    result[event.id] = step.event.item;
 
-    return [newSim, newEvent];
+    return step;
   };
 
   const e1 = createEvent(sim, 50, prod);
