@@ -22,6 +22,25 @@ export function initializeSimulation(): Simulation {
 }
 
 /**
+ * TODO: Generators cannot be serialized. This looks like a dead end!
+ */
+export function serializeSimulation(sim: Simulation): string {
+  console.log(sim.state);
+  const res = JSON.stringify(sim);
+  console.log(res);
+
+  return res;
+}
+
+export function deserializeSimulation(data: string): Simulation {
+  const res: Simulation = JSON.parse(data);
+
+  console.log(res);
+
+  return res;
+}
+
+/**
  * Runs the discrete-event simulation until no more events remain to process.
  * The simulation processes events in chronological order (earliest first).
  * FIXME: The simulation instance is updated at each simulation step.
@@ -48,7 +67,6 @@ export function runSimulation(sim: Simulation): [Simulation, SimulationStats] {
     }
 
     // FIXME: Review logic -- avoid mutating function parameter
-    // TODO: Use a generator to yield the next simulation value?
     sim = step(sim, event);
   }
 

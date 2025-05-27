@@ -1,9 +1,11 @@
+import { deserializeSimulation } from "../mod.ts";
 import { Event, Process, Simulation } from "../src/model.ts";
 import {
   createEvent,
   initializeSimulation,
   runSimulation,
   scheduleEvent,
+  serializeSimulation,
   timeout,
 } from "../src/simulation.ts";
 
@@ -80,6 +82,10 @@ if (import.meta.main) {
   sim.events = scheduleEvent(sim, e6);
 
   const [stop, stats] = runSimulation(sim);
+
+  const stop2 = serializeSimulation(stop);
+  const stop3 = deserializeSimulation(stop2);
+  console.log(stop3);
 
   console.log(`Simulation ended at ${stop.currentTime}`);
   console.log(`Simulation took: ${stats.duration} ms`);

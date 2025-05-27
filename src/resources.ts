@@ -4,8 +4,8 @@ import { Event, ProcessState, Simulation, Store } from "./model.ts";
  * Creates a new store with:
  * - Unique ID
  * - Array of initial items (defaults to an empty array)
- * - Empty requests array (no scheduled get requests)
- * - TODO: Capacity
+ * - Empty requests arrays (no scheduled get requests)
+ * - Maximum capacity (defaults to 1 item at any time)
  */
 export function createStore<T>(capacity: number = 1): Store<T> {
   if (capacity < 0) {
@@ -34,7 +34,7 @@ export function* get<T>(
   store: Store<T>,
 ): ProcessState<T> {
   while (true) {
-    // TODO: Fetch blocked put requests first, if any
+    // Fetch blocked put requests first, if any
     const sourceQueue = store.delayedPutRequests.length > 0
       ? store.delayedPutRequests
       : store.putRequests;
@@ -128,7 +128,7 @@ function* blockingPut<T>(
     const putRequest = { ...event, item };
     // There was no pending get request, store the put request
     if (store.putRequests.length - store.getRequests.length >= store.capacity) {
-      // TODO: Do not exceed store capacity
+      // Do not exceed store capacity
       store.delayedPutRequests = [...store.delayedPutRequests, putRequest];
     } else {
       store.putRequests = [...store.putRequests, putRequest];
