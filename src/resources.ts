@@ -34,7 +34,7 @@ export function* get<T>(
   store: Store<T>,
 ): ProcessState<T> {
   while (true) {
-    // Fetch blocked put requests first, if any
+    // Fetch delayed put requests first, if any
     const sourceQueue = store.delayedPutRequests.length > 0
       ? store.delayedPutRequests
       : store.putRequests;

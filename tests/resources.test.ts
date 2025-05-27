@@ -1,4 +1,4 @@
-import { assertEquals } from "@std/assert";
+import { assertEquals, assertThrows } from "@std/assert";
 import { Process, Store } from "../src/model.ts";
 import {
   createEvent,
@@ -134,6 +134,10 @@ Deno.test("blocking/non-blocking put operations", () => {
 
   assertEquals(store.getRequests.length, 0);
   assertEquals(store.putRequests.length, 0);
+});
+
+Deno.test("store capacity < 0", () => {
+  assertThrows(() => createStore<string>(-1));
 });
 
 Deno.test("store capacity = 0", () => {
