@@ -7,7 +7,7 @@ export interface Simulation {
   /**
    * The current virtual time in the simulation.
    * Represents the timestamp up to which the simulation has processed.
-   * Measured in arbitrary time units (could be steps, seconds, etc.)
+   * Measured in arbitrary time units (could be steps, seconds, etc.).
    */
   currentTime: number;
 
@@ -59,16 +59,15 @@ export enum EventState {
  */
 export type ProcessState<T = void> = Generator<
   Event<T> | undefined,
-  T | undefined | void,
-  void
+  ProcessReturn<T>,
+  ProcessReturn<T>
 >;
 
 /**
- * Represents a step of event handling.
- * It holds:
- * - the updated event after it has been handled;
- * - the current state of its associated process;
- * - the next event to schedule in case of a multi-step process.
+ * Represents a step of event handling. It holds:
+ * - A copy of the original event, updated after it has been handled;
+ * - The current state of its associated process;
+ * - A successor event to schedule in case of a multi-step process.
  */
 export interface ProcessStep<T = void> {
   /** The updated event */
@@ -79,6 +78,18 @@ export interface ProcessStep<T = void> {
 
   /** Optional next event to be scheduled */
   next?: Event<T>;
+}
+
+/**
+ * Holds the simulation state updated after a process step.
+ * Returned by the process generator, and fed into its next step.
+ */
+export interface ProcessReturn<T = void> {
+  /** The updated simulation */
+  sim: Simulation;
+
+  /** The updated original event */
+  event: Event<T>;
 }
 
 /**
@@ -150,6 +161,13 @@ export interface SimulationStats {
  */
 export interface Store<T> {
   /**
+   * Maximum number of items a store can hold at any time.
+   * If a put request is fired and capacity is already reached,
+   * the request will be delayed.
+   */
+  readonly capacity: number;
+
+  /**
    * Array of pending get requests in the store.
    * Earliest requests will be handled first.
    */
@@ -160,4 +178,12 @@ export interface Store<T> {
    * Earliest requests will be handled first.
    */
   putRequests: Event<T>[];
+
+  /**
+   * Array of delayed put requests in the store.
+   * Requests can be delayed because store capacity has been reached,
+   * or because a blocking put request has been fired and is waiting for a get request.
+   * Earliest requests will be handled first.
+   */
+  delayedPutRequests: Event<T>[];
 }

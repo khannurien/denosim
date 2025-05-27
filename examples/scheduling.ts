@@ -1,9 +1,11 @@
-import { Event, Process, ProcessState, Simulation } from "../src/model.ts";
+import { deserializeSimulation } from "../mod.ts";
+import { Event, Process, Simulation } from "../src/model.ts";
 import {
   createEvent,
   initializeSimulation,
   runSimulation,
   scheduleEvent,
+  serializeSimulation,
   timeout,
 } from "../src/simulation.ts";
 
@@ -18,6 +20,9 @@ import {
  * [37] foo
  * [40] callback from bar after timeout
  * [50] foo
+ * [60] baz before
+ * [70] foo
+ * [70] baz after
  * Simulation ended at 50
  */
 if (import.meta.main) {
@@ -26,40 +31,37 @@ if (import.meta.main) {
   const foo: Process = function* (
     sim: Simulation,
     _event: Event,
-  ): ProcessState {
+  ) {
     console.log(`[${sim.currentTime}] foo`);
-    yield;
+    return yield;
   };
 
-  const bar: Process = function* (
-    sim: Simulation,
-    _event: Event,
-  ): ProcessState {
-    const cb: Process = function* (
-      sim: Simulation,
-      _event: Event,
-    ): ProcessState {
+  const bar: Process = function* (sim, _event) {
+    const step1: Process = function* (sim, _event) {
       console.log(`[${sim.currentTime}] callback from bar before timeout`);
-      yield* timeout(sim, 5);
-      console.log(`[${sim.currentTime}] callback from bar after timeout`);
+      return yield* timeout(sim, 5, step2);
     };
-
+    const step2: Process = function* (sim, _event) {
+      console.log(`[${sim.currentTime}] callback from bar after timeout`);
+      return yield;
+    };
     console.log(`[${sim.currentTime}] bar before timeout`);
-    yield* timeout(sim, 15, cb);
-    console.log(`[${sim.currentTime}] bar after timeout`);
+    const step = yield* timeout(sim, 15, step1);
+    console.log(`[${step.sim.currentTime}] bar after timeout`);
+
+    return step;
   };
 
-  // const wait: Process = function* (
-  //   sim: Simulation,
-  //   _event: Event,
-  // ): ProcessState {
-  //   while (sim.currentTime < 10) {
-  //     yield* timeout(sim, 2.5);
-  //   }
-  // }
+  const baz: Process = function* (sim, _event) {
+    console.log(`[${sim.currentTime}] baz before`);
 
-  // const e1 = createEvent(sim, 0, wait);
-  // sim.events = scheduleEvent(sim, e1);
+    const future = createEvent(sim, sim.currentTime + 10, foo);
+    const step = yield future;
+
+    console.log(`[${step.sim.currentTime}] baz after`);
+
+    return step;
+  };
 
   const e1 = createEvent(sim, 10, foo);
   sim.events = scheduleEvent(sim, e1);
@@ -76,9 +78,16 @@ if (import.meta.main) {
   const e5 = createEvent(sim, 50, foo);
   sim.events = scheduleEvent(sim, e5);
 
-  const stats = runSimulation(sim);
+  const e6 = createEvent(sim, 60, baz);
+  sim.events = scheduleEvent(sim, e6);
 
-  console.log(`Simulation ended at ${sim.currentTime}`);
+  const [stop, stats] = runSimulation(sim);
+
+  const stop2 = serializeSimulation(stop);
+  const stop3 = deserializeSimulation(stop2);
+  console.log(stop3);
+
+  console.log(`Simulation ended at ${stop.currentTime}`);
   console.log(`Simulation took: ${stats.duration} ms`);
-  console.log("Events:", JSON.stringify(sim.events, null, 2));
+  console.log("Events:", JSON.stringify(stop.events, null, 2));
 }

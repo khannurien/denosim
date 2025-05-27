@@ -1,11 +1,5 @@
 import { assert, assertEquals, assertThrows } from "@std/assert";
-import {
-  Event,
-  EventState,
-  Process,
-  ProcessState,
-  Simulation,
-} from "../src/model.ts";
+import { Event, EventState, Process, Simulation } from "../src/model.ts";
 import {
   createEvent,
   initializeSimulation,
@@ -23,11 +17,11 @@ Deno.test("basic event scheduling", () => {
   sim.events = scheduleEvent(sim, e1);
   assertEquals(sim.events.length, 1);
 
-  const _stats = runSimulation(sim);
-  assertEquals(sim.events.length, 1);
-  assertEquals(sim.events[0].finishedAt, 10);
+  const [stop, _stats] = runSimulation(sim);
 
-  assert(sim.events.every((event) => event.status == EventState.Finished));
+  assertEquals(stop.events.length, 1);
+  assertEquals(stop.events[0].finishedAt, 10);
+  assert(stop.events.every((event) => event.status == EventState.Finished));
 });
 
 Deno.test("zero-duration events", () => {
@@ -36,8 +30,9 @@ Deno.test("zero-duration events", () => {
   const e1 = createEvent(sim, sim.currentTime);
   sim.events = scheduleEvent(sim, e1);
 
-  const _stats = runSimulation(sim);
-  assertEquals(sim.events[0].finishedAt, 0);
+  const [stop, _stats] = runSimulation(sim);
+
+  assertEquals(stop.events[0].finishedAt, 0);
 });
 
 Deno.test("basic out of order scheduling", () => {
@@ -53,19 +48,19 @@ Deno.test("basic out of order scheduling", () => {
   sim.events = scheduleEvent(sim, e1);
   assertEquals(sim.events.length, 3);
 
-  const _stats = runSimulation(sim);
-  assertEquals(sim.events.length, 3);
+  const [stop, _stats] = runSimulation(sim);
 
-  assert(sim.events.every((event) => event.status == EventState.Finished));
+  assertEquals(stop.events.length, 3);
+  assert(stop.events.every((event) => event.status == EventState.Finished));
 });
 
 Deno.test("basic event ordering", () => {
   const sim = initializeSimulation();
 
   const processedOrder: number[] = [];
-  const cb: Process = function* (_sim: Simulation, event: Event) {
+  const cb: Process = function* (_sim, event) {
     processedOrder.push(event.scheduledAt);
-    yield;
+    return yield;
   };
 
   const e1 = createEvent(sim, 10, cb);
@@ -82,19 +77,20 @@ Deno.test("basic event ordering", () => {
   sim.events = scheduleEvent(sim, e5);
   sim.events = scheduleEvent(sim, e6);
 
-  const _stats = runSimulation(sim);
-  assertEquals(sim.events.length, 6);
+  const [stop, _stats] = runSimulation(sim);
+
+  assertEquals(stop.events.length, 6);
   assertEquals(processedOrder, [0, 2, 5, 10, 15, 50]);
-  assert(sim.events.every((event) => event.status == EventState.Finished));
+  assert(stop.events.every((event) => event.status == EventState.Finished));
 });
 
 Deno.test("scheduling events in the past", () => {
   const sim = initializeSimulation();
 
-  const cb: Process = function* (sim: Simulation, _event: Event) {
+  const cb: Process = function* (sim, _event) {
     const past = createEvent(sim, sim.currentTime - 1);
     sim.events = scheduleEvent(sim, past);
-    yield;
+    return yield;
   };
 
   const e1 = createEvent(sim, -1);
@@ -106,7 +102,7 @@ Deno.test("scheduling events in the past", () => {
   sim.events = scheduleEvent(sim, e2);
 
   assertThrows(() => {
-    const _stats = runSimulation(sim);
+    const [_stop, _stats] = runSimulation(sim);
   });
 });
 
@@ -115,9 +111,9 @@ Deno.test("event callbacks scheduling", () => {
 
   const results: Record<number, Event> = {};
 
-  const cb: Process = function* (sim: Simulation, event: Event) {
+  const cb: Process = function* (sim, event) {
     results[sim.currentTime] = event;
-    yield;
+    return yield;
   };
 
   const e1 = createEvent(sim, 10, cb);
@@ -128,12 +124,13 @@ Deno.test("event callbacks scheduling", () => {
   sim.events = scheduleEvent(sim, e3);
   assertEquals(sim.events.length, 3);
 
-  const _stats = runSimulation(sim);
+  const [stop, _stats] = runSimulation(sim);
+
   assertEquals(results[10].id, e1.id);
   assertEquals(results[20].id, e2.id);
   assertEquals(results[30].id, e3.id);
 
-  assert(sim.events.every((event) => event.status == EventState.Finished));
+  assert(stop.events.every((event) => event.status == EventState.Finished));
 });
 
 Deno.test("event item passing", () => {
@@ -141,23 +138,24 @@ Deno.test("event item passing", () => {
 
   const foo: Process<Record<string, string | undefined>> = function* (
     _sim: Simulation,
-    event: Event<Record<string, string | undefined>>,
-  ): ProcessState<Record<string, string | undefined>> {
+    event,
+  ) {
     if (event.item) {
       event.item["foo"] = "foo";
     }
 
-    yield;
+    return yield;
   };
 
   const bar: Process<Record<string, string | undefined>> = function* (
     _sim: Simulation,
-    event: Event<Record<string, string | undefined>>,
-  ): ProcessState<Record<string, string | undefined>> {
+    event,
+  ) {
     if (event.item) {
       event.item["bar"] = "bar";
     }
-    yield;
+
+    return yield;
   };
 
   const barStore: Record<string, string | undefined> = {
@@ -171,7 +169,7 @@ Deno.test("event item passing", () => {
   const e2 = createEvent(sim, 25, bar, barStore);
   sim.events = scheduleEvent(sim, e2);
 
-  const _stats = runSimulation(sim);
+  const [_stop, _stats] = runSimulation(sim);
 
   assertEquals(barStore["foo"], "foo");
   assertEquals(barStore["bar"], "bar");
@@ -185,17 +183,21 @@ Deno.test("event timeout scheduling", () => {
     "after": -1,
   };
 
-  const cb: Process<Record<string, number>> = function* (
-    sim: Simulation,
-    event: Event<Record<string, number>>,
-  ) {
+  const cb: Process<Record<string, number>> = function* (sim, event) {
     if (!event.item) {
       throw Error("Event item not set.");
     }
 
     event.item["before"] = sim.currentTime;
-    yield* timeout(sim, 15);
-    event.item["after"] = sim.currentTime;
+    const step = yield* timeout(sim, 15);
+
+    if (!step.event.item) {
+      throw Error("Event item not set.");
+    }
+
+    step.event.item["after"] = step.sim.currentTime;
+
+    return yield;
   };
 
   const e1 = createEvent(sim, 10, cb, timings);
@@ -203,16 +205,17 @@ Deno.test("event timeout scheduling", () => {
   sim.events = scheduleEvent(sim, e1);
   assertEquals(sim.events.length, 1);
 
-  const _stats = runSimulation(sim);
-  assertEquals(sim.events.length, 2);
+  const [stop, _stats] = runSimulation(sim);
+
+  assertEquals(stop.events.length, 2);
 
   // Test timeout event scheduling
-  const timeoutEvents = sim.events.filter((e) => e.id !== e1.id);
+  const timeoutEvents = stop.events.filter((e) => e.id !== e1.id);
   assertEquals(timeoutEvents.length, 1);
   assertEquals(timeoutEvents[0].scheduledAt, 25);
   // Test resumed execution of caller after timeout
   assertEquals(timings["before"], 10);
   assertEquals(timings["after"], 25);
 
-  assert(sim.events.every((event) => event.status == EventState.Finished));
+  assert(stop.events.every((event) => event.status == EventState.Finished));
 });

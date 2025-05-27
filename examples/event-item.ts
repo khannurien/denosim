@@ -1,4 +1,4 @@
-import { Event, Process, ProcessState, Simulation } from "../src/model.ts";
+import { Process } from "../src/model.ts";
 import {
   createEvent,
   initializeSimulation,
@@ -10,25 +10,26 @@ if (import.meta.main) {
   const sim = initializeSimulation();
 
   const foo: Process<Record<string, string | undefined>> = function* (
-    sim: Simulation,
-    event: Event<Record<string, string | undefined>>,
-  ): ProcessState<Record<string, string | undefined>> {
+    sim,
+    event,
+  ) {
     if (event.item) {
       console.log(`[${sim.currentTime}] got: ${event.item["got"]}`);
     }
 
-    yield;
+    return yield;
   };
 
   const bar: Process<Record<string, string | undefined>> = function* (
-    sim: Simulation,
-    event: Event<Record<string, string | undefined>>,
-  ): ProcessState<Record<string, string | undefined>> {
+    sim,
+    event,
+  ) {
     if (event.item) {
       event.item["got"] = "bar";
       console.log(`[${sim.currentTime}] wrote "bar"`);
     }
-    yield;
+
+    return yield;
   };
 
   const barStore: Record<string, string | undefined> = {
@@ -41,9 +42,9 @@ if (import.meta.main) {
   const e2 = createEvent(sim, 25, foo, barStore);
   sim.events = scheduleEvent(sim, e2);
 
-  const stats = runSimulation(sim);
+  const [stop, stats] = runSimulation(sim);
 
-  console.log(`Simulation ended at ${sim.currentTime}`);
+  console.log(`Simulation ended at ${stop.currentTime}`);
   console.log(`Simulation took: ${stats.duration} ms`);
-  console.log("Events:", JSON.stringify(sim.events, null, 2));
+  console.log("Events:", JSON.stringify(stop.events, null, 2));
 }
