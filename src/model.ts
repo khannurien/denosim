@@ -15,17 +15,20 @@ export interface Simulation {
    * Queue of all events in the system.
    * Includes:
    * - Newly scheduled but not yet processed events
-   * - Partially processed events with generator state
+   * - Partially processed events, which have related process execution state
    * - Completed events (for historical tracking)
    */
   events: Event<unknown>[];
 
   /**
-   * Optional generator state for multi-step processes.
-   * Generators are associated with their original event ID.
-   * Preserves execution context between partial processing runs.
+   * TODO:
    */
-  state: Record<string, ProcessState<unknown>>;
+  registry: Record<string, ProcessDefinition<unknown, unknown>>;
+
+  /**
+   * TODO:
+   */
+  state: Record<string, ProcessState<unknown, unknown>>;
 }
 
 /**
@@ -51,56 +54,6 @@ export enum EventState {
    */
   Finished = "Finished",
 }
-
-/**
- * Holds the state of the ongoing process for an event in a generator.
- * Can yield an event for execution continuation.
- * Can return a final value.
- */
-export type ProcessState<T = void> = Generator<
-  Event<T> | undefined,
-  ProcessReturn<T>,
-  ProcessReturn<T>
->;
-
-/**
- * Represents a step of event handling. It holds:
- * - A copy of the original event, updated after it has been handled;
- * - The current state of its associated process;
- * - A successor event to schedule in case of a multi-step process.
- */
-export interface ProcessStep<T = void> {
-  /** The updated event */
-  updated: Event<T>;
-
-  /** The current process state */
-  state: ProcessState<T>;
-
-  /** Optional next event to be scheduled */
-  next?: Event<T>;
-}
-
-/**
- * Holds the simulation state updated after a process step.
- * Returned by the process generator, and fed into its next step.
- */
-export interface ProcessReturn<T = void> {
-  /** The updated simulation */
-  sim: Simulation;
-
-  /** The updated original event */
-  event: Event<T>;
-}
-
-/**
- * Type definition for event process logic.
- * Generator function that defines an event's behavior.
- * Can yield to pause execution and schedule intermediate events.
- */
-export type Process<T = void> = (
-  sim: Simulation, // Reference to the running simulation
-  event: Event<T>, // The event instance being processed
-) => ProcessState<T>; // Generator that can yield events or nothing
 
 /**
  * Represents a discrete event in the simulation system.
@@ -137,10 +90,56 @@ export interface Event<T = void> {
   item?: T;
 
   /**
-   * The process logic to execute when this event is processed.
-   * Generator function that can yield to pause/resume execution.
+   * TODO:
    */
-  callback: Process<T>;
+  callback: ProcessType;
+}
+
+/**
+ * TODO:
+ */
+export type ProcessType = string;
+
+/**
+ * TODO:
+ */
+export type StepType = string;
+
+/**
+ * TODO:
+ */
+export interface ProcessDefinition<S = void, T = void> {
+  type: ProcessType;
+  initial: StepType;
+  states: Record<StepType, ProcessHandler<S, T>>;
+}
+
+/**
+ * TODO:
+ */
+export type ProcessHandler<S = void, T = void> = (
+  sim: Simulation,
+  event: Event<T>,
+  state: ProcessState<S, T>,
+) => ProcessStep<S, T>;
+
+/**
+ * TODO: Process level
+ */
+export interface ProcessState<S = void, T = void> {
+  type: ProcessType;
+  step: StepType;
+  data: S;
+  result?: T;
+}
+
+/**
+ * TODO: Scheduler level
+ */
+export interface ProcessStep<S = void, T = void> {
+  updated: Event<T>;
+  state: ProcessState<S, T>;
+  next?: Event<T>;
 }
 
 /**

@@ -1,43 +1,85 @@
 import {
   Event,
   EventState,
-  Process,
-  ProcessState,
+  ProcessDefinition,
   ProcessStep,
+  ProcessType,
   Simulation,
   SimulationStats,
 } from "./model.ts";
 
 /**
+ * TODO:
+ */
+export const emptyCallback: ProcessDefinition<void, void> = {
+  type: "none",
+  initial: "none",
+  states: {
+    none(_sim, event, state): ProcessStep<void, void> {
+      return {
+        updated: {...event},
+        state: {...state},
+      }
+    }
+  }
+}
+
+/**
+ * TODO:
+ */
+export function registerProcess(sim: Simulation, process: ProcessDefinition<unknown, unknown>): Record<string, ProcessDefinition<unknown, unknown>> {
+  return {
+    ...sim.registry,
+    [process.type]: process,
+  }
+}
+
+/**
  * Initializes a new simulation instance with:
  * - `currentTime` set to 0 (starting point of simulation)
  * - Empty events array (no scheduled events)
+ * - TODO: Populate process registry
+ * - TODO: Empty state array
  */
 export function initializeSimulation(): Simulation {
   return {
     currentTime: 0,
     events: [],
+    registry: {
+      [emptyCallback.type]: emptyCallback as ProcessDefinition<unknown, unknown>,
+    },
     state: {},
   };
 }
 
 /**
- * TODO: Generators cannot be serialized. This looks like a dead end!
+ * Inspired by true events:
+ * https://oprearocks.medium.com/serializing-object-methods-using-es6-template-strings-and-eval-c77c894651f0
  */
-export function serializeSimulation(sim: Simulation): string {
-  console.log(sim.state);
-  const res = JSON.stringify(sim);
-  console.log(res);
-
-  return res;
+function replacer(_key: string, value: unknown): unknown {
+  return typeof(value) === "function"
+    ? value.toString()
+    : value;
 }
 
+function reviver(_key: string, value: unknown): unknown {
+  return typeof(value) === "string" && value.indexOf("function ") === 0
+    ? eval(`(${value})`)
+    : value;
+}
+
+/**
+ * TODO:
+ */
+export function serializeSimulation(sim: Simulation): string {
+  return JSON.stringify(sim, replacer, 2);
+}
+
+/**
+ * TODO:
+ */
 export function deserializeSimulation(data: string): Simulation {
-  const res: Simulation = JSON.parse(data);
-
-  console.log(res);
-
-  return res;
+  return JSON.parse(data, reviver);
 }
 
 /**
@@ -88,7 +130,7 @@ export function runSimulation(sim: Simulation): [Simulation, SimulationStats] {
  * Updates the event queue with the updated current event.
  * Returns an updated copy of the original simulation container.
  */
-export function step(sim: Simulation, event: Event<unknown>): Simulation {
+function step(sim: Simulation, event: Event<unknown>): Simulation {
   // Advance simulation time to this event's scheduled time
   const nextSim = { ...sim, currentTime: event.scheduledAt };
 
@@ -112,17 +154,82 @@ export function step(sim: Simulation, event: Event<unknown>): Simulation {
 }
 
 /**
+ * Processes an event by executing its callback function.
+ * Handles both immediate completion and yielding of new events.
+ * TODO: Returns the completed event with updated status and timestamps.
+ */
+function handleEvent(
+  sim: Simulation,
+  event: Event<unknown>,
+): ProcessStep<unknown, unknown> {
+  // TODO: Get current process state or initialize it
+  const definition = sim.registry[event.callback];
+  // FIXME: event.item?
+  const state = sim.state[event.id] ?? {
+    type: definition.type,
+    step: definition.initial,
+    data: event.item,
+  };
+  console.log("from scheduler:", event.item);
+  const step = state?.step ?? definition.initial;
+
+  // FIXME: Initialize process state?
+  // if (!state) ...
+
+  // TODO: Get the handler
+  const handler = definition.states[step];
+
+  // TODO: Execute next step of the process
+  const process = handler(sim, event, state);
+
+  // TODO: Schedule process continuation
+  if (process.next) {
+    // The original process yielded a new event
+    // We will wait for that new event to be handled before continuing the original event
+    // Return the event updated with continuation metadata along with its current state
+    // Return the new event to be scheduled
+    return process.next.id !== event.id
+      ? {
+        updated: {
+          ...event,
+          // Synchronization between original process end and yielded process start
+          // TODO: Still necessary/desirable?
+          scheduledAt: process.next.scheduledAt,
+        },
+        state: process.state,
+        next: process.next,
+      }
+      : {
+        updated: {...process.next},
+        state: process.state,
+      }
+  }
+
+  // The event has been fully handled
+  // Return completed event with updated metadata
+  // There is no next event to process
+  return {
+    updated: {
+      ...event,
+      finishedAt: sim.currentTime,
+      status: EventState.Finished,
+    },
+    state: process.state,
+  };
+}
+
+/**
  * Creates a new event with:
  * - Unique ID
  * - Initial state set to `Fired`
  * - Timestamps for when it was created and scheduled
- * - Optional callback process (defaults to empty generator)
+ * - Optional callback process (defaults to empty callback)
  * - Optional item to carry (defaults to undefined)
  */
 export function createEvent<T>(
   sim: Simulation,
   scheduledAt: number,
-  callback?: Process<T>,
+  callback?: ProcessType,
   item?: T,
 ): Event<T> {
   return {
@@ -130,9 +237,7 @@ export function createEvent<T>(
     status: EventState.Fired,
     firedAt: sim.currentTime,
     scheduledAt,
-    callback: callback ?? function* () {
-      return yield;
-    },
+    callback: callback ?? "none",
     item,
   };
 }
@@ -157,80 +262,4 @@ export function scheduleEvent<T>(
     ...sim.events,
     { ...event, status: EventState.Scheduled } as Event<unknown>,
   ];
-}
-
-/**
- * Processes an event by executing its generator function.
- * Handles both immediate completion and yielding of new events.
- * Returns the completed event with updated status and timestamps.
- */
-export function handleEvent<T>(
-  sim: Simulation,
-  event: Event<T>,
-): ProcessStep<T> {
-  // Get the generator - either from previous partial execution or a new one
-  const generator = sim.state[event.id] as ProcessState<T> ??
-    event.callback(sim, event);
-  // Execute next step of the generator
-  const { value, done } = generator.next({ sim, event });
-
-  // If generator yielded a value (new event to schedule) and isn't done
-  if (!done && value) {
-    // The original process yielded a new event
-    // We will wait for that new event to be handled before continuing the original event
-    // Return the event updated with continuation metadata along with its current state
-    // Return the new event to be scheduled
-    return value.id !== event.id
-      ? {
-        updated: {
-          ...event,
-          // Synchronization between original process end and yielded process start
-          scheduledAt: value.scheduledAt,
-        },
-        state: generator,
-        next: value,
-      }
-      : {
-        updated: { ...value },
-        state: generator,
-      };
-  }
-
-  // The event has been fully handled
-  // Return completed event with updated metadata
-  // There is no next event to process
-  return {
-    updated: {
-      ...event,
-      finishedAt: sim.currentTime,
-      status: EventState.Finished,
-    },
-    state: generator,
-  };
-}
-
-/**
- * Generator function that creates and schedules a timeout event.
- * This is a utility for creating delayed events in the simulation.
- * Yields control until the timeout duration has passed.
- */
-export function* timeout<T = void>(
-  sim: Simulation,
-  duration: number,
-  callback?: Process<T>,
-  item?: T,
-): ProcessState<T> {
-  // Fire an event that will be scheduled after specified duration
-  const timeoutEvent = createEvent<T>(
-    sim,
-    sim.currentTime + duration,
-    callback,
-    item,
-  );
-
-  // Yield continuation (allowing other code to run until timeout completes)
-  const step = yield timeoutEvent;
-
-  // Return the updated context for closure continuation
-  return step;
 }
