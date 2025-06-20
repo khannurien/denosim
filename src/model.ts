@@ -18,17 +18,17 @@ export interface Simulation {
    * - Partially processed events, which have related process execution state
    * - Completed events (for historical tracking)
    */
-  events: Event<unknown>[];
+  events: Event[];
 
   /**
    * TODO:
    */
-  registry: Record<string, ProcessDefinition<unknown, unknown>>;
+  registry: Record<string, ProcessDefinition>;
 
   /**
    * TODO:
    */
-  state: Record<string, ProcessState<unknown, unknown>>;
+  state: Record<string, ProcessState>;
 }
 
 /**
@@ -59,9 +59,12 @@ export enum EventState {
  * Represents a discrete event in the simulation system.
  * Events are immutable - state changes create new instances.
  */
-export interface Event<T = void> {
+export interface Event<T extends StateData = StateData> {
   /** Unique identifier for the event */
-  id: string;
+  id: EventID;
+
+  /** TODO: */
+  // root: EventID;
 
   /** Current lifecycle state of the event */
   status: EventState;
@@ -85,9 +88,10 @@ export interface Event<T = void> {
   finishedAt?: number;
 
   /**
-   * Optional item that can be passed through the event.
+   * Optional data that can be passed through the event.
+   * TODO: Can be used to initialize state in the callback.
    */
-  item?: T;
+  data?: T;
 
   /**
    * TODO:
@@ -95,51 +99,52 @@ export interface Event<T = void> {
   callback: ProcessType;
 }
 
-/**
- * TODO:
- */
+/** TODO: */
+export type EventID = string;
+
+/** TODO: */
 export type ProcessType = string;
 
-/**
- * TODO:
- */
+/** TODO: */
 export type StepType = string;
+
+/** TODO: */
+export type StateData = Record<string, unknown>;
 
 /**
  * TODO:
  */
-export interface ProcessDefinition<S = void, T = void> {
+export interface ProcessDefinition<T extends StateData = StateData> {
   type: ProcessType;
   initial: StepType;
-  states: Record<StepType, ProcessHandler<S, T>>;
+  states: Record<StepType, ProcessHandler<T>>;
 }
 
 /**
  * TODO:
  */
-export type ProcessHandler<S = void, T = void> = (
+export type ProcessHandler<T extends StateData = StateData> = (
   sim: Simulation,
   event: Event<T>,
-  state: ProcessState<S, T>,
-) => ProcessStep<S, T>;
+  state: ProcessState<T>,
+) => ProcessStep<T>;
 
 /**
  * TODO: Process level
  */
-export interface ProcessState<S = void, T = void> {
+export interface ProcessState<T extends StateData = StateData> {
   type: ProcessType;
   step: StepType;
-  data: S;
-  result?: T;
+  data: T;
 }
 
 /**
  * TODO: Scheduler level
  */
-export interface ProcessStep<S = void, T = void> {
+export interface ProcessStep<T extends StateData = StateData> {
   updated: Event<T>;
-  state: ProcessState<S, T>;
-  next?: Event<T>;
+  state: ProcessState<T>;
+  next?: Event; // FIXME: Introduce another generic?
 }
 
 /**
@@ -152,37 +157,4 @@ export interface ProcessStep<S = void, T = void> {
 export interface SimulationStats {
   /** Real-world time (in milliseconds) the simulation took to complete */
   duration: number;
-}
-
-/**
- * Utility data structure for inter-process synchronization.
- * Put/Get operations (see resources.ts) work in a FIFO fashion.
- */
-export interface Store<T> {
-  /**
-   * Maximum number of items a store can hold at any time.
-   * If a put request is fired and capacity is already reached,
-   * the request will be delayed.
-   */
-  readonly capacity: number;
-
-  /**
-   * Array of pending get requests in the store.
-   * Earliest requests will be handled first.
-   */
-  getRequests: Event<T>[];
-
-  /**
-   * Array of pending put requests in the store.
-   * Earliest requests will be handled first.
-   */
-  putRequests: Event<T>[];
-
-  /**
-   * Array of delayed put requests in the store.
-   * Requests can be delayed because store capacity has been reached,
-   * or because a blocking put request has been fired and is waiting for a get request.
-   * Earliest requests will be handled first.
-   */
-  delayedPutRequests: Event<T>[];
 }

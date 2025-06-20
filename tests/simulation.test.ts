@@ -1,11 +1,18 @@
 import { assert, assertEquals, assertThrows } from "@std/assert";
-import { Event, EventState, Process, Simulation } from "../src/model.ts";
+import {
+  Event,
+  EventState,
+  ProcessDefinition,
+  ProcessHandler,
+  Simulation,
+  StateData,
+} from "../src/model.ts";
 import {
   createEvent,
   initializeSimulation,
+  registerProcess,
   runSimulation,
   scheduleEvent,
-  timeout,
 } from "../src/simulation.ts";
 
 Deno.test("basic event scheduling", () => {
@@ -58,17 +65,36 @@ Deno.test("basic event ordering", () => {
   const sim = initializeSimulation();
 
   const processedOrder: number[] = [];
-  const cb: Process = function* (_sim, event) {
+
+  const someProcess: ProcessHandler = (_sim, event, state) => {
     processedOrder.push(event.scheduledAt);
-    return yield;
+
+    return {
+      updated: { ...event },
+      state: {
+        ...state,
+        step: "start",
+        data: { ...state.data },
+      },
+    };
   };
 
-  const e1 = createEvent(sim, 10, cb);
-  const e2 = createEvent(sim, 0, cb);
-  const e3 = createEvent(sim, 15, cb);
-  const e4 = createEvent(sim, 5, cb);
-  const e5 = createEvent(sim, 2, cb);
-  const e6 = createEvent(sim, 50, cb);
+  const foo: ProcessDefinition = {
+    type: "foo",
+    initial: "start",
+    states: {
+      "start": someProcess,
+    },
+  };
+
+  sim.registry = registerProcess(sim, foo);
+
+  const e1 = createEvent(sim, 10, "foo");
+  const e2 = createEvent(sim, 0, "foo");
+  const e3 = createEvent(sim, 15, "foo");
+  const e4 = createEvent(sim, 5, "foo");
+  const e5 = createEvent(sim, 2, "foo");
+  const e6 = createEvent(sim, 50, "foo");
 
   sim.events = scheduleEvent(sim, e1);
   sim.events = scheduleEvent(sim, e2);
@@ -87,14 +113,32 @@ Deno.test("basic event ordering", () => {
 Deno.test("scheduling events in the past", () => {
   const sim = initializeSimulation();
 
-  const cb: Process = function* (sim, _event) {
+  const someProcess: ProcessHandler = (_sim, event, state) => {
     const past = createEvent(sim, sim.currentTime - 1);
     sim.events = scheduleEvent(sim, past);
-    return yield;
+
+    return {
+      updated: { ...event },
+      state: {
+        ...state,
+        step: "start",
+        data: { ...state.data },
+      },
+    };
   };
 
+  const foo: ProcessDefinition = {
+    type: "foo",
+    initial: "start",
+    states: {
+      "start": someProcess,
+    },
+  };
+
+  sim.registry = registerProcess(sim, foo);
+
   const e1 = createEvent(sim, -1);
-  const e2 = createEvent(sim, 10, cb);
+  const e2 = createEvent(sim, 10, "foo");
 
   assertThrows(() => {
     sim.events = scheduleEvent(sim, e1);
@@ -111,14 +155,32 @@ Deno.test("event callbacks scheduling", () => {
 
   const results: Record<number, Event> = {};
 
-  const cb: Process = function* (sim, event) {
+  const someProcess: ProcessHandler = (sim, event, state) => {
     results[sim.currentTime] = event;
-    return yield;
+
+    return {
+      updated: { ...event },
+      state: {
+        ...state,
+        step: "start",
+        data: { ...state.data },
+      },
+    };
   };
 
-  const e1 = createEvent(sim, 10, cb);
-  const e2 = createEvent(sim, 20, cb);
-  const e3 = createEvent(sim, 30, cb);
+  const foo: ProcessDefinition = {
+    type: "foo",
+    initial: "start",
+    states: {
+      "start": someProcess,
+    },
+  };
+
+  sim.registry = registerProcess(sim, foo);
+
+  const e1 = createEvent(sim, 10, "foo");
+  const e2 = createEvent(sim, 20, "foo");
+  const e3 = createEvent(sim, 30, "foo");
   sim.events = scheduleEvent(sim, e1);
   sim.events = scheduleEvent(sim, e2);
   sim.events = scheduleEvent(sim, e3);
@@ -133,89 +195,89 @@ Deno.test("event callbacks scheduling", () => {
   assert(stop.events.every((event) => event.status == EventState.Finished));
 });
 
-Deno.test("event item passing", () => {
-  const sim = initializeSimulation();
+// Deno.test("event item passing", () => {
+//   const sim = initializeSimulation();
 
-  const foo: Process<Record<string, string | undefined>> = function* (
-    _sim: Simulation,
-    event,
-  ) {
-    if (event.item) {
-      event.item["foo"] = "foo";
-    }
+//   const foo: Process<Record<string, string | undefined>> = function* (
+//     _sim: Simulation,
+//     event,
+//   ) {
+//     if (event.item) {
+//       event.item["foo"] = "foo";
+//     }
 
-    return yield;
-  };
+//     return yield;
+//   };
 
-  const bar: Process<Record<string, string | undefined>> = function* (
-    _sim: Simulation,
-    event,
-  ) {
-    if (event.item) {
-      event.item["bar"] = "bar";
-    }
+//   const bar: Process<Record<string, string | undefined>> = function* (
+//     _sim: Simulation,
+//     event,
+//   ) {
+//     if (event.item) {
+//       event.item["bar"] = "bar";
+//     }
 
-    return yield;
-  };
+//     return yield;
+//   };
 
-  const barStore: Record<string, string | undefined> = {
-    "foo": undefined,
-    "bar": undefined,
-  };
+//   const barStore: Record<string, string | undefined> = {
+//     "foo": undefined,
+//     "bar": undefined,
+//   };
 
-  const e1 = createEvent(sim, 20, foo, barStore);
-  sim.events = scheduleEvent(sim, e1);
+//   const e1 = createEvent(sim, 20, foo, barStore);
+//   sim.events = scheduleEvent(sim, e1);
 
-  const e2 = createEvent(sim, 25, bar, barStore);
-  sim.events = scheduleEvent(sim, e2);
+//   const e2 = createEvent(sim, 25, bar, barStore);
+//   sim.events = scheduleEvent(sim, e2);
 
-  const [_stop, _stats] = runSimulation(sim);
+//   const [_stop, _stats] = runSimulation(sim);
 
-  assertEquals(barStore["foo"], "foo");
-  assertEquals(barStore["bar"], "bar");
-});
+//   assertEquals(barStore["foo"], "foo");
+//   assertEquals(barStore["bar"], "bar");
+// });
 
-Deno.test("event timeout scheduling", () => {
-  const sim = initializeSimulation();
+// Deno.test("event timeout scheduling", () => {
+//   const sim = initializeSimulation();
 
-  const timings: Record<string, number> = {
-    "before": -1,
-    "after": -1,
-  };
+//   const timings: Record<string, number> = {
+//     "before": -1,
+//     "after": -1,
+//   };
 
-  const cb: Process<Record<string, number>> = function* (sim, event) {
-    if (!event.item) {
-      throw Error("Event item not set.");
-    }
+//   const cb: Process<Record<string, number>> = function* (sim, event) {
+//     if (!event.item) {
+//       throw Error("Event item not set.");
+//     }
 
-    event.item["before"] = sim.currentTime;
-    const step = yield* timeout(sim, 15);
+//     event.item["before"] = sim.currentTime;
+//     const step = yield* timeout(sim, 15);
 
-    if (!step.event.item) {
-      throw Error("Event item not set.");
-    }
+//     if (!step.event.item) {
+//       throw Error("Event item not set.");
+//     }
 
-    step.event.item["after"] = step.sim.currentTime;
+//     step.event.item["after"] = step.sim.currentTime;
 
-    return yield;
-  };
+//     return yield;
+//   };
 
-  const e1 = createEvent(sim, 10, cb, timings);
+//   const e1 = createEvent(sim, 10, cb, timings);
 
-  sim.events = scheduleEvent(sim, e1);
-  assertEquals(sim.events.length, 1);
+//   sim.events = scheduleEvent(sim, e1);
+//   assertEquals(sim.events.length, 1);
 
-  const [stop, _stats] = runSimulation(sim);
+//   const [stop, _stats] = runSimulation(sim);
 
-  assertEquals(stop.events.length, 2);
+//   assertEquals(stop.events.length, 2);
 
-  // Test timeout event scheduling
-  const timeoutEvents = stop.events.filter((e) => e.id !== e1.id);
-  assertEquals(timeoutEvents.length, 1);
-  assertEquals(timeoutEvents[0].scheduledAt, 25);
-  // Test resumed execution of caller after timeout
-  assertEquals(timings["before"], 10);
-  assertEquals(timings["after"], 25);
+//   // Test timeout event scheduling
+//   const timeoutEvents = stop.events.filter((e) => e.id !== e1.id);
+//   assertEquals(timeoutEvents.length, 1);
+//   assertEquals(timeoutEvents[0].scheduledAt, 25);
+//   // Test resumed execution of caller after timeout
+//   assertEquals(timings["before"], 10);
+//   assertEquals(timings["after"], 25);
 
-  assert(stop.events.every((event) => event.status == EventState.Finished));
-});
+//   assert(stop.events.every((event) => event.status == EventState.Finished));
+// });

@@ -1,12 +1,12 @@
 import { deserializeSimulation } from "../mod.ts";
-import { Event, Process, Simulation } from "../src/model.ts";
+import { Event, ProcessDefinition, ProcessHandler, ProcessStep, Simulation } from "../src/model.ts";
 import {
   createEvent,
   initializeSimulation,
+  registerProcess,
   runSimulation,
   scheduleEvent,
   serializeSimulation,
-  timeout,
 } from "../src/simulation.ts";
 
 /**
@@ -28,57 +28,155 @@ import {
 if (import.meta.main) {
   const sim = initializeSimulation();
 
-  const foo: Process = function* (
-    sim: Simulation,
-    _event: Event,
-  ) {
-    console.log(`[${sim.currentTime}] foo`);
-    return yield;
+  const fooCb: ProcessDefinition = {
+    type: "foo",
+    initial: "none",
+    states: {
+      none(sim, event, state): ProcessStep {
+        console.log(`[${sim.currentTime}] foo`);
+
+        return {
+          updated: { ...event },
+          state: { ...state },
+        };
+      },
+    },
   };
 
-  const bar: Process = function* (sim, _event) {
-    const step1: Process = function* (sim, _event) {
-      console.log(`[${sim.currentTime}] callback from bar before timeout`);
-      return yield* timeout(sim, 5, step2);
-    };
-    const step2: Process = function* (sim, _event) {
-      console.log(`[${sim.currentTime}] callback from bar after timeout`);
-      return yield;
-    };
-    console.log(`[${sim.currentTime}] bar before timeout`);
-    const step = yield* timeout(sim, 15, step1);
-    console.log(`[${step.sim.currentTime}] bar after timeout`);
+  sim.registry = registerProcess(sim, fooCb);
 
-    return step;
+  const barCb: ProcessDefinition = {
+    type: "bar",
+    initial: "start",
+    states: {
+      start(sim, event, state): ProcessStep {
+        console.log(`[${sim.currentTime}] bar before timeout`);
+
+        return {
+          updated: { ...event },
+          state: { ...state, step: "stop" },
+          next: createEvent(
+            sim,
+            sim.currentTime,
+            "timeout",
+            {
+              at: sim.currentTime,
+              duration: 15,
+              callback: "step1",
+            },
+          )
+        };
+      },
+      stop(sim, event, state): ProcessStep {
+        console.log(`[${sim.currentTime}] bar after timeout`);
+
+        return {
+          updated: { ...event },
+          state: { ...state },
+        };
+      },
+    },
   };
 
-  const baz: Process = function* (sim, _event) {
-    console.log(`[${sim.currentTime}] baz before`);
+  sim.registry = registerProcess(sim, barCb);
 
-    const future = createEvent(sim, sim.currentTime + 10, foo);
-    const step = yield future;
+  const step1Cb: ProcessDefinition = {
+    type: "step1",
+    initial: "none",
+    states: {
+      none(sim, event, state): ProcessStep {
+        console.log(`[${sim.currentTime}] callback from bar before timeout`);
 
-    console.log(`[${step.sim.currentTime}] baz after`);
-
-    return step;
+        return {
+          updated: { ...event },
+          state: { ...state },
+          next: createEvent(
+            sim,
+            sim.currentTime,
+            "timeout",
+            {
+              at: sim.currentTime,
+              duration: 5,
+              callback: "step2",
+            },
+          ),
+        };
+      },
+    },
   };
 
-  const e1 = createEvent(sim, 10, foo);
+  sim.registry = registerProcess(sim, step1Cb);
+
+  const step2Cb: ProcessDefinition = {
+    type: "step2",
+    initial: "none",
+    states: {
+      none(sim, event, state): ProcessStep {
+        console.log(`[${sim.currentTime}] callback from bar after timeout`);
+
+        return {
+          updated: { ...event },
+          state: { ...state },
+        };
+      },
+    },
+  };
+
+  sim.registry = registerProcess(sim, step2Cb);
+
+  const bazCb : ProcessDefinition = {
+    type: "baz",
+    initial: "start",
+    states: {
+      start(sim, event, state): ProcessStep {
+        console.log(`[${sim.currentTime}] baz before`);
+
+        return {
+          updated: { ...event },
+          state: {
+            ...state, step: "stop"
+          },
+          next: createEvent(
+            sim,
+            sim.currentTime,
+            "timeout",
+            {
+              at: sim.currentTime,
+              duration: 10,
+              callback: "foo",
+            },
+          ),
+        };
+      },
+      stop(sim, event, state): ProcessStep {
+        console.log(`[${sim.currentTime}] baz after`);
+
+        return {
+          updated: { ...event },
+          state: { ...state },
+        };
+      },
+    },
+  };
+
+  sim.registry = registerProcess(sim, bazCb);
+
+  const e1 = createEvent(sim, 10, "foo");
   sim.events = scheduleEvent(sim, e1);
 
-  const e2 = createEvent(sim, 20, bar);
+  const e2 = createEvent(sim, 20, "bar");
   sim.events = scheduleEvent(sim, e2);
 
-  const e3 = createEvent(sim, 30, foo);
+  const e3 = createEvent(sim, 30, "foo");
   sim.events = scheduleEvent(sim, e3);
 
-  const e4 = createEvent(sim, 37, foo);
+  const e4 = createEvent(sim, 37, "foo");
   sim.events = scheduleEvent(sim, e4);
 
-  const e5 = createEvent(sim, 50, foo);
+  const e5 = createEvent(sim, 50, "foo");
   sim.events = scheduleEvent(sim, e5);
 
-  const e6 = createEvent(sim, 60, baz);
+  const e6 = createEvent(sim, 60, "baz");
   sim.events = scheduleEvent(sim, e6);
 
   const [stop, stats] = runSimulation(sim);

@@ -2,36 +2,80 @@ import {
   Event,
   EventState,
   ProcessDefinition,
+  ProcessState,
   ProcessStep,
   ProcessType,
   Simulation,
   SimulationStats,
+  StateData,
 } from "./model.ts";
 
 /**
  * TODO:
  */
-export const emptyCallback: ProcessDefinition<void, void> = {
+export const emptyCallback: ProcessDefinition = {
   type: "none",
   initial: "none",
   states: {
-    none(_sim, event, state): ProcessStep<void, void> {
+    none(_sim, event, state): ProcessStep {
       return {
-        updated: {...event},
-        state: {...state},
-      }
-    }
-  }
+        updated: { ...event },
+        state: { ...state },
+      };
+    },
+  },
+};
+
+// FIXME: `at` not required once we no longer update event metadata
+export interface TimeoutData<T extends StateData> extends StateData {
+  at: number;
+  duration: number;
+  callback: string;
+  data?: T;
 }
+
+function timeoutProcess<T extends StateData>(
+  sim: Simulation,
+  event: Event<TimeoutData<T>>,
+  state: ProcessState<TimeoutData<T>>,
+): ProcessStep<TimeoutData<T>> {
+  return {
+    updated: { ...event },
+    state: {
+      ...state,
+      data: { ...state.data },
+    },
+    // FIXME: use event.scheduledAt instead of process.data["at"]
+    next: sim.currentTime === state.data["at"] + state.data["duration"]
+      ? undefined
+      : createEvent<StateData>(
+        sim,
+        sim.currentTime + state.data["duration"],
+        state.data["callback"],
+        state.data["data"],
+      ),
+  };
+}
+
+const timeoutCallback: ProcessDefinition<TimeoutData<StateData>> = {
+  type: "timeout",
+  initial: "suspended",
+  states: {
+    "suspended": timeoutProcess,
+  },
+};
 
 /**
  * TODO:
  */
-export function registerProcess(sim: Simulation, process: ProcessDefinition<unknown, unknown>): Record<string, ProcessDefinition<unknown, unknown>> {
+export function registerProcess<T extends StateData>(
+  sim: Simulation,
+  process: ProcessDefinition<T>,
+): Record<string, ProcessDefinition<StateData>> {
   return {
     ...sim.registry,
-    [process.type]: process,
-  }
+    [process.type]: process as ProcessDefinition<StateData>,
+  };
 }
 
 /**
@@ -42,14 +86,17 @@ export function registerProcess(sim: Simulation, process: ProcessDefinition<unkn
  * - TODO: Empty state array
  */
 export function initializeSimulation(): Simulation {
-  return {
+  const sim = {
     currentTime: 0,
     events: [],
-    registry: {
-      [emptyCallback.type]: emptyCallback as ProcessDefinition<unknown, unknown>,
-    },
+    registry: {},
     state: {},
   };
+
+  sim.registry = registerProcess(sim, emptyCallback);
+  sim.registry = registerProcess(sim, timeoutCallback);
+
+  return sim;
 }
 
 /**
@@ -57,13 +104,11 @@ export function initializeSimulation(): Simulation {
  * https://oprearocks.medium.com/serializing-object-methods-using-es6-template-strings-and-eval-c77c894651f0
  */
 function replacer(_key: string, value: unknown): unknown {
-  return typeof(value) === "function"
-    ? value.toString()
-    : value;
+  return typeof value === "function" ? value.toString() : value;
 }
 
 function reviver(_key: string, value: unknown): unknown {
-  return typeof(value) === "string" && value.indexOf("function ") === 0
+  return typeof value === "string" && value.indexOf("function ") === 0
     ? eval(`(${value})`)
     : value;
 }
@@ -130,7 +175,7 @@ export function runSimulation(sim: Simulation): [Simulation, SimulationStats] {
  * Updates the event queue with the updated current event.
  * Returns an updated copy of the original simulation container.
  */
-function step(sim: Simulation, event: Event<unknown>): Simulation {
+function step(sim: Simulation, event: Event<StateData>): Simulation {
   // Advance simulation time to this event's scheduled time
   const nextSim = { ...sim, currentTime: event.scheduledAt };
 
@@ -141,6 +186,7 @@ function step(sim: Simulation, event: Event<unknown>): Simulation {
   nextSim.state = { ...nextSim.state, [updated.id]: state };
 
   // Update the event instance in the event queue if necessary
+  // FIXME:
   nextSim.events = nextSim.events.map((previous) =>
     (previous.id === event.id) ? updated : previous
   );
@@ -160,21 +206,18 @@ function step(sim: Simulation, event: Event<unknown>): Simulation {
  */
 function handleEvent(
   sim: Simulation,
-  event: Event<unknown>,
-): ProcessStep<unknown, unknown> {
-  // TODO: Get current process state or initialize it
+  event: Event<StateData>,
+): ProcessStep<StateData> {
+  // TODO: Retrieve process definition from the registry
   const definition = sim.registry[event.callback];
-  // FIXME: event.item?
-  const state = sim.state[event.id] ?? {
+
+  // TODO: Get current process state or initialize it
+  const state = event.id in sim.state ? { ...sim.state[event.id] } : {
     type: definition.type,
     step: definition.initial,
-    data: event.item,
+    data: { ...event.data },
   };
-  console.log("from scheduler:", event.item);
-  const step = state?.step ?? definition.initial;
-
-  // FIXME: Initialize process state?
-  // if (!state) ...
+  const step = state.step ?? definition.initial;
 
   // TODO: Get the handler
   const handler = definition.states[step];
@@ -186,23 +229,24 @@ function handleEvent(
   if (process.next) {
     // The original process yielded a new event
     // We will wait for that new event to be handled before continuing the original event
-    // Return the event updated with continuation metadata along with its current state
+    // FIXME: Return the event updated with continuation metadata along with its current state
     // Return the new event to be scheduled
     return process.next.id !== event.id
       ? {
         updated: {
           ...event,
           // Synchronization between original process end and yielded process start
-          // TODO: Still necessary/desirable?
+          // TODO: Revisit (we want to keep OG event metadata)
+          // TODO: Add OG event id property?
           scheduledAt: process.next.scheduledAt,
         },
         state: process.state,
         next: process.next,
       }
       : {
-        updated: {...process.next},
+        updated: process.next,
         state: process.state,
-      }
+      };
   }
 
   // The event has been fully handled
@@ -226,11 +270,11 @@ function handleEvent(
  * - Optional callback process (defaults to empty callback)
  * - Optional item to carry (defaults to undefined)
  */
-export function createEvent<T>(
+export function createEvent<T extends StateData>(
   sim: Simulation,
   scheduledAt: number,
   callback?: ProcessType,
-  item?: T,
+  data?: T,
 ): Event<T> {
   return {
     id: crypto.randomUUID(),
@@ -238,7 +282,7 @@ export function createEvent<T>(
     firedAt: sim.currentTime,
     scheduledAt,
     callback: callback ?? "none",
-    item,
+    data,
   };
 }
 
@@ -247,10 +291,10 @@ export function createEvent<T>(
  * Validates that the event isn't scheduled in the past.
  * Returns updated events array with the new scheduled event.
  */
-export function scheduleEvent<T>(
+export function scheduleEvent<T extends StateData>(
   sim: Simulation,
   event: Event<T>,
-): Event<unknown>[] {
+): Event<StateData>[] {
   if (event.scheduledAt < sim.currentTime) {
     throw RangeError(
       `Event scheduled at a point in time in the past: ${event.id} ` +
@@ -260,6 +304,6 @@ export function scheduleEvent<T>(
 
   return [
     ...sim.events,
-    { ...event, status: EventState.Scheduled } as Event<unknown>,
+    { ...event, status: EventState.Scheduled },
   ];
 }

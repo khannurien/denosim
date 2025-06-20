@@ -1,10 +1,10 @@
-import { Process } from "../src/model.ts";
+import { ProcessDefinition, ProcessHandler } from "../src/model.ts";
 import {
   createEvent,
   initializeSimulation,
+  registerProcess,
   runSimulation,
   scheduleEvent,
-  timeout,
 } from "../src/simulation.ts";
 
 if (import.meta.main) {
@@ -12,17 +12,53 @@ if (import.meta.main) {
 
   let FOO = 0;
 
-  const foo: Process = function* (sim, event) {
+  const startProcess: ProcessHandler = (sim, event, state) => {
     if (sim.currentTime < 10000000) {
-      console.log(`[${sim.currentTime}] ${event.id} -- foo @ wake up: ${FOO}`);
-      FOO += 1;
-      return yield* timeout(sim, 1, foo);
+      const newState = {
+        ...state,
+        step: "continue",
+        data: { ...state.data },
+      };
+      const nextEvent = { ...event };
+
+      return {
+        updated: { ...event },
+        state: {
+          ...state,
+          step: "start",
+          data: { ...state.data },
+        },
+        next: createEvent(sim, sim.currentTime + 1, "timeout", {
+          at: sim.currentTime + 1,
+          duration: 1,
+          callback: "foo",
+        })
+      };
     } else {
-      return yield;
+      return {
+        updated: { ...event },
+        state: {
+          ...state,
+          step: "start",
+          data: { ...state.data },
+        },
+      };
     }
   };
 
-  const e1 = createEvent(sim, 0, foo);
+  const foo: ProcessDefinition = {
+    type: "foo",
+    initial: "start",
+    states: {
+      "start": startProcess,
+      "continue": continueProcess,
+      "stop": emptyProcess,
+    },
+  };
+
+  sim.registry = registerProcess(sim, foo);
+
+  const e1 = createEvent(sim, 0, "foo");
   sim.events = scheduleEvent(sim, e1);
 
   const [stop, stats] = runSimulation(sim);
