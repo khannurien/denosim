@@ -212,15 +212,15 @@ function handleEvent(
   const definition = sim.registry[event.callback];
 
   // TODO: Get current process state or initialize it
+  // FIXME: Parent process
   const state = event.id in sim.state ? { ...sim.state[event.id] } : {
     type: definition.type,
     step: definition.initial,
     data: { ...event.data },
   };
-  const step = state.step ?? definition.initial;
 
   // TODO: Get the handler
-  const handler = definition.states[step];
+  const handler = definition.states[state.step];
 
   // TODO: Execute next step of the process
   const process = handler(sim, event, state);
@@ -232,6 +232,7 @@ function handleEvent(
     // FIXME: Return the event updated with continuation metadata along with its current state
     // Return the new event to be scheduled
     return process.next.id !== event.id
+      // FIXME: ? New branch in the process?
       ? {
         updated: {
           ...event,
@@ -243,6 +244,7 @@ function handleEvent(
         state: process.state,
         next: process.next,
       }
+      // FIXME: ? Continuation of the same branch in the process?
       : {
         updated: process.next,
         state: process.state,
