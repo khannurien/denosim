@@ -1,10 +1,10 @@
 import {
+  createEvent,
+  deserializeSimulation,
+  initializeSimulation,
   ProcessDefinition,
   ProcessHandler,
-  deserializeSimulation,
   registerProcess,
-  createEvent,
-  initializeSimulation,
   runSimulation,
   scheduleEvent,
   serializeSimulation,
@@ -37,20 +37,20 @@ if (import.meta.main) {
 
   const startProcess: ProcessHandler<MachineData> = (sim, event, state) => {
     console.log(sim.currentTime, "machine start");
-    
+
     const newData = { ...state.data };
     newData["foo"] = "foofoo";
 
     return {
       updated: { ...event },
       state: {
-        ... state,
+        ...state,
         step: "paused",
         data: { ...newData },
       },
       next: createEvent(sim, sim.currentTime + 10),
-    }
-  }
+    };
+  };
 
   const pausedProcess: ProcessHandler<MachineData> = (sim, event, state) => {
     console.log(sim.currentTime, "machine paused");
@@ -59,13 +59,13 @@ if (import.meta.main) {
     return {
       updated: { ...event },
       state: {
-        ... state,
+        ...state,
         step: "stop",
         data: { ...state.data },
       },
       next: createEvent(sim, sim.currentTime + 10),
-    }
-  }
+    };
+  };
 
   const stopProcess: ProcessHandler<MachineData> = (sim, event, state) => {
     console.log(sim.currentTime, "machine stopped");
@@ -74,12 +74,12 @@ if (import.meta.main) {
     return {
       updated: { ...event },
       state: {
-        ... state,
+        ...state,
         step: "start",
         data: { ...state.data },
       },
-    }
-  }
+    };
+  };
 
   const machine: ProcessDefinition<MachineData> = {
     type: "machine",
@@ -88,8 +88,8 @@ if (import.meta.main) {
       "start": startProcess,
       "paused": pausedProcess,
       "stop": stopProcess,
-    }
-  }
+    },
+  };
 
   sim.registry = registerProcess(sim, machine);
 

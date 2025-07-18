@@ -4,10 +4,10 @@ import {
   ProcessDefinition,
   ProcessState,
   ProcessStep,
-  ProcessType,
   Simulation,
   SimulationStats,
   StateData,
+  CreateEventOptions,
 } from "./model.ts";
 
 /**
@@ -27,43 +27,45 @@ export const emptyCallback: ProcessDefinition = {
 };
 
 // FIXME: `at` not required once we no longer update event metadata
-export interface TimeoutData<T extends StateData> extends StateData {
+export interface TimeoutData<T extends StateData = StateData> extends StateData {
   at: number;
   duration: number;
   callback: string;
   data?: T;
 }
 
-function timeoutProcess<T extends StateData>(
-  sim: Simulation,
-  event: Event<TimeoutData<T>>,
-  state: ProcessState<TimeoutData<T>>,
-): ProcessStep<TimeoutData<T>> {
-  return {
-    updated: { ...event },
-    state: {
-      ...state,
-      data: { ...state.data },
-    },
-    // FIXME: use event.scheduledAt instead of process.data["at"]
-    next: sim.currentTime === state.data["at"] + state.data["duration"]
-      ? undefined
-      : createEvent<StateData>(
-        sim,
-        sim.currentTime + state.data["duration"],
-        state.data["callback"],
-        state.data["data"],
-      ),
-  };
-}
+// function timeoutProcess<T extends StateData>(
+//   sim: Simulation,
+//   event: Event<TimeoutData<T>>,
+//   state: ProcessState<TimeoutData<T>>,
+// ): ProcessStep<TimeoutData<T>> {
+//   return {
+//     updated: { ...event },
+//     state: {
+//       ...state,
+//       data: { ...state.data },
+//     },
+//     // FIXME: use event.scheduledAt instead of process.data["at"]
+//     next: sim.currentTime === state.data["at"] + state.data["duration"]
+//       ? undefined
+//       : createEvent<StateData>(
+//         {
+//           sim,
+//           scheduledAt: sim.currentTime + state.data["duration"],
+//           callback: state.data["callback"],
+//           data: state.data["data"],
+//         },
+//       ),
+//   };
+// }
 
-const timeoutCallback: ProcessDefinition<TimeoutData<StateData>> = {
-  type: "timeout",
-  initial: "suspended",
-  states: {
-    "suspended": timeoutProcess,
-  },
-};
+// const timeoutCallback: ProcessDefinition<TimeoutData<StateData>> = {
+//   type: "timeout",
+//   initial: "suspended",
+//   states: {
+//     "suspended": timeoutProcess,
+//   },
+// };
 
 /**
  * TODO:
@@ -94,7 +96,7 @@ export function initializeSimulation(): Simulation {
   };
 
   sim.registry = registerProcess(sim, emptyCallback);
-  sim.registry = registerProcess(sim, timeoutCallback);
+  // sim.registry = registerProcess(sim, timeoutCallback);
 
   return sim;
 }
@@ -267,24 +269,21 @@ function handleEvent(
 /**
  * Creates a new event with:
  * - Unique ID
+ * - TODO: Optional parent event ID (defaults to undefined)
  * - Initial state set to `Fired`
  * - Timestamps for when it was created and scheduled
  * - Optional callback process (defaults to empty callback)
  * - Optional item to carry (defaults to undefined)
  */
 export function createEvent<T extends StateData>(
-  sim: Simulation,
-  scheduledAt: number,
-  callback?: ProcessType,
-  data?: T,
+  options: CreateEventOptions<T>,
 ): Event<T> {
   return {
+    ...options,
     id: crypto.randomUUID(),
     status: EventState.Fired,
-    firedAt: sim.currentTime,
-    scheduledAt,
-    callback: callback ?? "none",
-    data,
+    firedAt: options.sim.currentTime,
+    callback: options.callback ?? "none",
   };
 }
 

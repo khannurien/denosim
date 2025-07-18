@@ -64,7 +64,7 @@ export interface Event<T extends StateData = StateData> {
   id: EventID;
 
   /** TODO: */
-  // root: EventID;
+  parent?: EventID;
 
   /** Current lifecycle state of the event */
   status: EventState;
@@ -157,4 +157,15 @@ export interface ProcessStep<T extends StateData = StateData> {
 export interface SimulationStats {
   /** Real-world time (in milliseconds) the simulation took to complete */
   duration: number;
+}
+
+/**
+ * TODO:
+ */
+export interface CreateEventOptions<T extends StateData = StateData> {
+  sim: Simulation;
+  parent?: EventID;
+  scheduledAt: number;
+  callback?: ProcessType;
+  data?: T;
 }

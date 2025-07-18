@@ -32,7 +32,7 @@ if (import.meta.main) {
           at: sim.currentTime + 1,
           duration: 1,
           callback: "foo",
-        })
+        }),
       };
     } else {
       return {

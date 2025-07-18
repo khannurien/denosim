@@ -1,5 +1,11 @@
-import { deserializeSimulation } from "../mod.ts";
-import { Event, ProcessDefinition, ProcessHandler, ProcessStep, Simulation } from "../src/model.ts";
+import { deserializeSimulation, ProcessState } from "../mod.ts";
+import {
+  Event,
+  ProcessDefinition,
+  ProcessHandler,
+  ProcessStep,
+  Simulation,
+} from "../src/model.ts";
 import {
   createEvent,
   initializeSimulation,
@@ -7,6 +13,7 @@ import {
   runSimulation,
   scheduleEvent,
   serializeSimulation,
+  TimeoutData,
 } from "../src/simulation.ts";
 
 /**
@@ -54,17 +61,46 @@ if (import.meta.main) {
 
         return {
           updated: { ...event },
-          state: { ...state, step: "stop" },
+          state: { ...state, step: "wait" },
           next: createEvent(
-            sim,
-            sim.currentTime,
-            "timeout",
             {
-              at: sim.currentTime,
-              duration: 15,
-              callback: "step1",
+              sim,
+              scheduledAt: sim.currentTime,
+              callback: "timeout",
+              data: {
+                // at: sim.currentTime,
+                duration: 15,
+                callback: "step1",
+              },
             },
-          )
+          ),
+        };
+      },
+      wait(sim, event, state: ProcessState<TimeoutData>): ProcessStep<TimeoutData> {
+        const nextStep = (sim.currentTime < state.data["at"] + state.data["duration"])
+          ? "wait"
+          : "stop";
+
+        const remaining = state.data["at"] + state.data["duration"] - sim.currentTime;
+
+        // FIXME: Typing problem
+        return {
+          updated: { ...event },
+          state: { ...state, step: nextStep },
+          next: nextStep == "wait"
+            ? createEvent(
+              {
+                sim,
+                scheduledAt: sim.currentTime,
+                callback: "timeout",
+                data: {
+                  // at: sim.currentTime,
+                  duration: 15,
+                  callback: "step1",
+                },
+              },
+            )
+            : undefined
         };
       },
       stop(sim, event, state): ProcessStep {
@@ -91,13 +127,15 @@ if (import.meta.main) {
           updated: { ...event },
           state: { ...state },
           next: createEvent(
-            sim,
-            sim.currentTime,
-            "timeout",
             {
-              at: sim.currentTime,
-              duration: 5,
-              callback: "step2",
+              sim,
+              scheduledAt: sim.currentTime,
+              // callback: "timeout",
+              data: {
+                at: sim.currentTime,
+                duration: 5,
+                callback: "step2",
+              },
             },
           ),
         };
@@ -124,7 +162,7 @@ if (import.meta.main) {
 
   sim.registry = registerProcess(sim, step2Cb);
 
-  const bazCb : ProcessDefinition = {
+  const bazCb: ProcessDefinition = {
     type: "baz",
     initial: "start",
     states: {
@@ -134,16 +172,19 @@ if (import.meta.main) {
         return {
           updated: { ...event },
           state: {
-            ...state, step: "stop"
+            ...state,
+            step: "stop",
           },
           next: createEvent(
-            sim,
-            sim.currentTime,
-            "timeout",
             {
-              at: sim.currentTime,
-              duration: 10,
-              callback: "foo",
+              sim,
+              scheduledAt: sim.currentTime,
+              callback: "timeout",
+              data: {
+                at: sim.currentTime,
+                duration: 10,
+                callback: "foo",
+              },
             },
           ),
         };
@@ -161,22 +202,22 @@ if (import.meta.main) {
 
   sim.registry = registerProcess(sim, bazCb);
 
-  const e1 = createEvent(sim, 10, "foo");
+  const e1 = createEvent({ sim, scheduledAt: 10, callback: "foo" });
   sim.events = scheduleEvent(sim, e1);
 
-  const e2 = createEvent(sim, 20, "bar");
+  const e2 = createEvent({ sim, scheduledAt: 20, callback: "bar" });
   sim.events = scheduleEvent(sim, e2);
 
-  const e3 = createEvent(sim, 30, "foo");
+  const e3 = createEvent({ sim, scheduledAt: 30, callback: "foo" });
   sim.events = scheduleEvent(sim, e3);
 
-  const e4 = createEvent(sim, 37, "foo");
+  const e4 = createEvent({ sim, scheduledAt: 37, callback: "foo" });
   sim.events = scheduleEvent(sim, e4);
 
-  const e5 = createEvent(sim, 50, "foo");
+  const e5 = createEvent({ sim, scheduledAt: 50, callback: "foo" });
   sim.events = scheduleEvent(sim, e5);
 
-  const e6 = createEvent(sim, 60, "baz");
+  const e6 = createEvent({ sim, scheduledAt: 60, callback: "baz" });
   sim.events = scheduleEvent(sim, e6);
 
   const [stop, stats] = runSimulation(sim);
