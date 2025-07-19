@@ -32,6 +32,7 @@ import {
  * [70] baz after
  * Simulation ended at 50
  */
+
 if (import.meta.main) {
   const sim = initializeSimulation();
 
@@ -52,11 +53,11 @@ if (import.meta.main) {
 
   sim.registry = registerProcess(sim, fooCb);
 
-  const barCb: ProcessDefinition = {
+  const barCb: ProcessDefinition<TimeoutData> = {
     type: "bar",
     initial: "start",
     states: {
-      start(sim, event, state): ProcessStep {
+      start(sim, event, state): ProcessStep<TimeoutData> {
         console.log(`[${sim.currentTime}] bar before timeout`);
 
         return {
@@ -65,10 +66,9 @@ if (import.meta.main) {
           next: createEvent(
             {
               sim,
+              parent: event.id,
               scheduledAt: sim.currentTime,
-              callback: "timeout",
               data: {
-                // at: sim.currentTime,
                 duration: 15,
                 callback: "step1",
               },
@@ -76,14 +76,16 @@ if (import.meta.main) {
           ),
         };
       },
-      wait(sim, event, state: ProcessState<TimeoutData>): ProcessStep<TimeoutData> {
-        const nextStep = (sim.currentTime < state.data["at"] + state.data["duration"])
+      wait(sim, event, state): ProcessStep<TimeoutData> {
+        const parent = sim.events.find(e => e.id === event.parent)
+        const startedAt = parent?.scheduledAt ?? sim.currentTime;
+
+        const nextStep = (sim.currentTime < startedAt + state.data["duration"])
           ? "wait"
           : "stop";
 
-        const remaining = state.data["at"] + state.data["duration"] - sim.currentTime;
+        const remaining = startedAt + state.data["duration"] - sim.currentTime;
 
-        // FIXME: Typing problem
         return {
           updated: { ...event },
           state: { ...state, step: nextStep },
@@ -91,10 +93,9 @@ if (import.meta.main) {
             ? createEvent(
               {
                 sim,
-                scheduledAt: sim.currentTime,
-                callback: "timeout",
+                parent: event.id,
+                scheduledAt: sim.currentTime + remaining,
                 data: {
-                  // at: sim.currentTime,
                   duration: 15,
                   callback: "step1",
                 },
@@ -103,7 +104,7 @@ if (import.meta.main) {
             : undefined
         };
       },
-      stop(sim, event, state): ProcessStep {
+      stop(sim, event, state): ProcessStep<TimeoutData> {
         console.log(`[${sim.currentTime}] bar after timeout`);
 
         return {
@@ -129,8 +130,8 @@ if (import.meta.main) {
           next: createEvent(
             {
               sim,
+              parent: event.id,
               scheduledAt: sim.currentTime,
-              // callback: "timeout",
               data: {
                 at: sim.currentTime,
                 duration: 5,
@@ -178,8 +179,8 @@ if (import.meta.main) {
           next: createEvent(
             {
               sim,
+              parent: event.id,
               scheduledAt: sim.currentTime,
-              callback: "timeout",
               data: {
                 at: sim.currentTime,
                 duration: 10,

@@ -1,13 +1,12 @@
 import {
+  CreateEventOptions,
   Event,
   EventState,
   ProcessDefinition,
-  ProcessState,
   ProcessStep,
   Simulation,
   SimulationStats,
   StateData,
-  CreateEventOptions,
 } from "./model.ts";
 
 /**
@@ -26,46 +25,12 @@ export const emptyCallback: ProcessDefinition = {
   },
 };
 
-// FIXME: `at` not required once we no longer update event metadata
-export interface TimeoutData<T extends StateData = StateData> extends StateData {
-  at: number;
+export interface TimeoutData<T extends StateData = StateData>
+  extends StateData {
   duration: number;
   callback: string;
   data?: T;
 }
-
-// function timeoutProcess<T extends StateData>(
-//   sim: Simulation,
-//   event: Event<TimeoutData<T>>,
-//   state: ProcessState<TimeoutData<T>>,
-// ): ProcessStep<TimeoutData<T>> {
-//   return {
-//     updated: { ...event },
-//     state: {
-//       ...state,
-//       data: { ...state.data },
-//     },
-//     // FIXME: use event.scheduledAt instead of process.data["at"]
-//     next: sim.currentTime === state.data["at"] + state.data["duration"]
-//       ? undefined
-//       : createEvent<StateData>(
-//         {
-//           sim,
-//           scheduledAt: sim.currentTime + state.data["duration"],
-//           callback: state.data["callback"],
-//           data: state.data["data"],
-//         },
-//       ),
-//   };
-// }
-
-// const timeoutCallback: ProcessDefinition<TimeoutData<StateData>> = {
-//   type: "timeout",
-//   initial: "suspended",
-//   states: {
-//     "suspended": timeoutProcess,
-//   },
-// };
 
 /**
  * TODO:
@@ -96,7 +61,6 @@ export function initializeSimulation(): Simulation {
   };
 
   sim.registry = registerProcess(sim, emptyCallback);
-  // sim.registry = registerProcess(sim, timeoutCallback);
 
   return sim;
 }
@@ -185,15 +149,14 @@ function step(sim: Simulation, event: Event<StateData>): Simulation {
   const { updated, state, next } = handleEvent(nextSim, event);
 
   // Update the event's process state in the simulation container
-  nextSim.state = { ...nextSim.state, [updated.id]: state };
+  nextSim.state = { ...nextSim.state, [event.id]: state };
 
   // Update the event instance in the event queue if necessary
-  // FIXME:
   nextSim.events = nextSim.events.map((previous) =>
     (previous.id === event.id) ? updated : previous
   );
 
-  // Schedule the next event yielded by the current process
+  // Schedule the next event yielded by the current process if necessary
   if (next) {
     nextSim.events = scheduleEvent(nextSim, next);
   }
@@ -213,13 +176,20 @@ function handleEvent(
   // TODO: Retrieve process definition from the registry
   const definition = sim.registry[event.callback];
 
-  // TODO: Get current process state or initialize it
-  // FIXME: Parent process
-  const state = event.id in sim.state ? { ...sim.state[event.id] } : {
-    type: definition.type,
-    step: definition.initial,
-    data: { ...event.data },
-  };
+  // TODO: Get current process state (tied to the parent event) or initialize it
+  const parentEvent = sim.events.find(e => e.parent === event.parent);
+  const state = event.parent && event.parent in sim.state && event.callback === parentEvent?.callback
+    ? { ...sim.state[event.parent] }
+    : {
+      type: definition.type,
+      step: definition.initial,
+      data: { ...event.data },
+    };
+
+  console.log(`current event: ${event.id} @ ${event.callback}`)
+  console.log(`current parent event: ${parentEvent?.id} @ ${parentEvent?.callback}`)
+  console.log(`current state step: ${state.step}`)
+  console.log(`current definition: ${JSON.stringify(definition)}`)
 
   // TODO: Get the handler
   const handler = definition.states[state.step];
@@ -230,27 +200,13 @@ function handleEvent(
   // TODO: Schedule process continuation
   if (process.next) {
     // The original process yielded a new event
-    // We will wait for that new event to be handled before continuing the original event
-    // FIXME: Return the event updated with continuation metadata along with its current state
-    // Return the new event to be scheduled
-    return process.next.id !== event.id
-      // FIXME: ? New branch in the process?
-      ? {
-        updated: {
-          ...event,
-          // Synchronization between original process end and yielded process start
-          // TODO: Revisit (we want to keep OG event metadata)
-          // TODO: Add OG event id property?
-          scheduledAt: process.next.scheduledAt,
-        },
-        state: process.state,
-        next: process.next,
-      }
-      // FIXME: ? Continuation of the same branch in the process?
-      : {
-        updated: process.next,
-        state: process.state,
-      };
+    // TODO: It means that the event is tied to a process that will be running for at least another step
+    // TODO: We store the original event ID into the next event to retrieve process state in the future
+    return {
+      updated: { ...event },
+      state: { ...process.state },
+      next: { ...process.next, parent: event.id },
+    };
   }
 
   // The event has been fully handled
@@ -262,7 +218,7 @@ function handleEvent(
       finishedAt: sim.currentTime,
       status: EventState.Finished,
     },
-    state: process.state,
+    state: { ...process.state },
   };
 }
 
