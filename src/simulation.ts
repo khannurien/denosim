@@ -2,6 +2,7 @@ import {
   CreateEventOptions,
   Event,
   EventState,
+  ProcessCall,
   ProcessDefinition,
   ProcessStep,
   Simulation,
@@ -24,13 +25,6 @@ export const emptyCallback: ProcessDefinition = {
     },
   },
 };
-
-export interface TimeoutData<T extends StateData = StateData>
-  extends StateData {
-  duration: number;
-  callback: string;
-  data?: T;
-}
 
 /**
  * TODO:
@@ -146,6 +140,7 @@ function step(sim: Simulation, event: Event<StateData>): Simulation {
   const nextSim = { ...sim, currentTime: event.scheduledAt };
 
   // Handle the event by executing its process, which may yield a new event
+  // FIXME: Multiple events? (i.e. process next step + callback invocation?)
   const { updated, state, next } = handleEvent(nextSim, event);
 
   // Update the event's process state in the simulation container
@@ -174,22 +169,25 @@ function handleEvent(
   event: Event<StateData>,
 ): ProcessStep<StateData> {
   // TODO: Retrieve process definition from the registry
-  const definition = sim.registry[event.callback];
+  const definition = sim.registry[event.process.type];
 
   // TODO: Get current process state (tied to the parent event) or initialize it
-  const parentEvent = sim.events.find(e => e.parent === event.parent);
-  const state = event.parent && event.parent in sim.state && event.callback === parentEvent?.callback
+  const parent = sim.events.find((e) => e.parent === event.parent);
+  const state = event.parent && event.parent in sim.state &&
+      event.process.type === parent?.process.type
     ? { ...sim.state[event.parent] }
     : {
       type: definition.type,
       step: definition.initial,
-      data: { ...event.data },
+      data: { ...event.process.data },
     };
 
-  console.log(`current event: ${event.id} @ ${event.callback}`)
-  console.log(`current parent event: ${parentEvent?.id} @ ${parentEvent?.callback}`)
-  console.log(`current state step: ${state.step}`)
-  console.log(`current definition: ${JSON.stringify(definition)}`)
+  console.log(`current event: ${event.id} @ ${event.process.type}`);
+  console.log(
+    `current parent event: ${parent?.id} @ ${parent?.process.type}`,
+  );
+  console.log(`current state step: ${state.step}`);
+  console.log(`current definition: ${JSON.stringify(definition)}`);
 
   // TODO: Get the handler
   const handler = definition.states[state.step];
@@ -239,7 +237,9 @@ export function createEvent<T extends StateData>(
     id: crypto.randomUUID(),
     status: EventState.Fired,
     firedAt: options.sim.currentTime,
-    callback: options.callback ?? "none",
+    process: options.process ? { ...options.process } : {
+      type: "none",
+    },
   };
 }
 

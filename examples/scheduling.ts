@@ -1,19 +1,18 @@
-import { deserializeSimulation, ProcessState } from "../mod.ts";
 import {
-  Event,
+  ProcessCall,
+  ProcessCallData,
   ProcessDefinition,
-  ProcessHandler,
   ProcessStep,
-  Simulation,
+  StateData,
 } from "../src/model.ts";
 import {
   createEvent,
+  deserializeSimulation,
   initializeSimulation,
   registerProcess,
   runSimulation,
   scheduleEvent,
   serializeSimulation,
-  TimeoutData,
 } from "../src/simulation.ts";
 
 /**
@@ -33,6 +32,18 @@ import {
  * Simulation ended at 50
  */
 
+interface FooData extends ProcessCallData {
+  data: {
+    from: string;
+  };
+}
+
+interface TimeoutData<T extends StateData = StateData>
+  extends StateData {
+  duration: number;
+  process?: ProcessCall<T>;
+}
+
 if (import.meta.main) {
   const sim = initializeSimulation();
 
@@ -40,8 +51,8 @@ if (import.meta.main) {
     type: "foo",
     initial: "none",
     states: {
-      none(sim, event, state): ProcessStep {
-        console.log(`[${sim.currentTime}] foo`);
+      none(sim, event, state): ProcessStep<FooData> {
+        console.log(`[${sim.currentTime}] foo from ${state.data["from"]}`);
 
         return {
           updated: { ...event },
@@ -68,16 +79,21 @@ if (import.meta.main) {
               sim,
               parent: event.id,
               scheduledAt: sim.currentTime,
-              data: {
-                duration: 15,
-                callback: "step1",
+              process: {
+                type: event.process.type,
+                data: {
+                  duration: 15,
+                  process: {
+                    type: "step1",
+                  },
+                },
               },
             },
           ),
         };
       },
       wait(sim, event, state): ProcessStep<TimeoutData> {
-        const parent = sim.events.find(e => e.id === event.parent)
+        const parent = sim.events.find((e) => e.id === event.parent);
         const startedAt = parent?.scheduledAt ?? sim.currentTime;
 
         const nextStep = (sim.currentTime < startedAt + state.data["duration"])
@@ -85,6 +101,7 @@ if (import.meta.main) {
           : "stop";
 
         const remaining = startedAt + state.data["duration"] - sim.currentTime;
+        console.log(`remaining = ${remaining}`);
 
         return {
           updated: { ...event },
@@ -95,13 +112,18 @@ if (import.meta.main) {
                 sim,
                 parent: event.id,
                 scheduledAt: sim.currentTime + remaining,
-                data: {
-                  duration: 15,
-                  callback: "step1",
+                process: {
+                  type: event.process.type,
+                  data: {
+                    duration: 15,
+                    process: {
+                      type: "step1",
+                    },
+                  },
                 },
               },
             )
-            : undefined
+            : undefined,
         };
       },
       stop(sim, event, state): ProcessStep<TimeoutData> {
@@ -132,10 +154,14 @@ if (import.meta.main) {
               sim,
               parent: event.id,
               scheduledAt: sim.currentTime,
-              data: {
-                at: sim.currentTime,
-                duration: 5,
-                callback: "step2",
+              process: {
+                type: event.process.type,
+                data: {
+                  duration: 5,
+                  process: {
+                    type: "step2",
+                  },
+                },
               },
             },
           ),
@@ -181,10 +207,15 @@ if (import.meta.main) {
               sim,
               parent: event.id,
               scheduledAt: sim.currentTime,
-              data: {
-                at: sim.currentTime,
-                duration: 10,
-                callback: "foo",
+              process: {
+                type: event.process.type,
+                data: {
+                  at: sim.currentTime,
+                  duration: 10,
+                  process: {
+                    type: "foo",
+                  },
+                },
               },
             },
           ),
@@ -203,22 +234,26 @@ if (import.meta.main) {
 
   sim.registry = registerProcess(sim, bazCb);
 
-  const e1 = createEvent({ sim, scheduledAt: 10, callback: "foo" });
+  const e1 = createEvent({
+    sim,
+    scheduledAt: 10,
+    process: { type: "foo", data: { "from": "main" } },
+  });
   sim.events = scheduleEvent(sim, e1);
 
-  const e2 = createEvent({ sim, scheduledAt: 20, callback: "bar" });
+  const e2 = createEvent({ sim, scheduledAt: 20, process: { type: "bar" } });
   sim.events = scheduleEvent(sim, e2);
 
-  const e3 = createEvent({ sim, scheduledAt: 30, callback: "foo" });
+  const e3 = createEvent({ sim, scheduledAt: 30, process: { type: "foo" } });
   sim.events = scheduleEvent(sim, e3);
 
-  const e4 = createEvent({ sim, scheduledAt: 37, callback: "foo" });
+  const e4 = createEvent({ sim, scheduledAt: 37, process: { type: "foo" } });
   sim.events = scheduleEvent(sim, e4);
 
-  const e5 = createEvent({ sim, scheduledAt: 50, callback: "foo" });
+  const e5 = createEvent({ sim, scheduledAt: 50, process: { type: "foo" } });
   sim.events = scheduleEvent(sim, e5);
 
-  const e6 = createEvent({ sim, scheduledAt: 60, callback: "baz" });
+  const e6 = createEvent({ sim, scheduledAt: 60, process: { type: "baz" } });
   sim.events = scheduleEvent(sim, e6);
 
   const [stop, stats] = runSimulation(sim);
