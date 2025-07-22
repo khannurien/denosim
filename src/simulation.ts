@@ -2,7 +2,6 @@ import {
   CreateEventOptions,
   Event,
   EventState,
-  ProcessCall,
   ProcessDefinition,
   ProcessStep,
   Simulation,
@@ -13,7 +12,7 @@ import {
 /**
  * TODO:
  */
-export const emptyCallback: ProcessDefinition = {
+export const emptyProcess: ProcessDefinition = {
   type: "none",
   initial: "none",
   states: {
@@ -54,7 +53,7 @@ export function initializeSimulation(): Simulation {
     state: {},
   };
 
-  sim.registry = registerProcess(sim, emptyCallback);
+  sim.registry = registerProcess(sim, emptyProcess);
 
   return sim;
 }
@@ -135,7 +134,7 @@ export function runSimulation(sim: Simulation): [Simulation, SimulationStats] {
  * Updates the event queue with the updated current event.
  * Returns an updated copy of the original simulation container.
  */
-function step(sim: Simulation, event: Event<StateData>): Simulation {
+function step(sim: Simulation, event: Event): Simulation {
   // Advance simulation time to this event's scheduled time
   const nextSim = { ...sim, currentTime: event.scheduledAt };
 
@@ -144,7 +143,7 @@ function step(sim: Simulation, event: Event<StateData>): Simulation {
   const { updated, state, next } = handleEvent(nextSim, event);
 
   // Update the event's process state in the simulation container
-  nextSim.state = { ...nextSim.state, [event.id]: state };
+  nextSim.state = { ...nextSim.state, [event.id]: { ...state } };
 
   // Update the event instance in the event queue if necessary
   nextSim.events = nextSim.events.map((previous) =>
@@ -160,21 +159,20 @@ function step(sim: Simulation, event: Event<StateData>): Simulation {
 }
 
 /**
- * Processes an event by executing its callback function.
- * Handles both immediate completion and yielding of new events.
+ * Processes an event by executing its associated process if any.
+ * TODO: Handles both immediate completion and yielding of new events.
  * TODO: Returns the completed event with updated status and timestamps.
  */
 function handleEvent(
   sim: Simulation,
-  event: Event<StateData>,
-): ProcessStep<StateData> {
+  event: Event,
+): ProcessStep {
   // TODO: Retrieve process definition from the registry
   const definition = sim.registry[event.process.type];
 
   // TODO: Get current process state (tied to the parent event) or initialize it
-  const parent = sim.events.find((e) => e.parent === event.parent);
-  const state = event.parent && event.parent in sim.state &&
-      event.process.type === parent?.process.type
+  // const parent = sim.events.find((e) => e.parent === event.parent);
+  const state = event.parent && event.parent in sim.state
     ? { ...sim.state[event.parent] }
     : {
       type: definition.type,
@@ -182,34 +180,15 @@ function handleEvent(
       data: { ...event.process.data },
     };
 
-  console.log(`current event: ${event.id} @ ${event.process.type}`);
-  console.log(
-    `current parent event: ${parent?.id} @ ${parent?.process.type}`,
-  );
-  console.log(`current state step: ${state.step}`);
-  console.log(`current definition: ${JSON.stringify(definition)}`);
-
-  // TODO: Get the handler
   const handler = definition.states[state.step];
 
   // TODO: Execute next step of the process
   const process = handler(sim, event, state);
 
-  // TODO: Schedule process continuation
-  if (process.next) {
-    // The original process yielded a new event
-    // TODO: It means that the event is tied to a process that will be running for at least another step
-    // TODO: We store the original event ID into the next event to retrieve process state in the future
-    return {
-      updated: { ...event },
-      state: { ...process.state },
-      next: { ...process.next, parent: event.id },
-    };
-  }
-
-  // The event has been fully handled
-  // Return completed event with updated metadata
-  // There is no next event to process
+  // TODO: If the original process yielded a new event, schedule process continuation
+  // FIXME: We don't do the following anymore:
+  // TODO: It means that the event is tied to a process that will be running for at least another step
+  // TODO: We store the original event ID into the next event to retrieve process state in the future
   return {
     updated: {
       ...event,
@@ -217,6 +196,8 @@ function handleEvent(
       status: EventState.Finished,
     },
     state: { ...process.state },
+    // next: process.next ? { ...process.next, parent: event.id } : undefined,
+    next: process.next ? { ...process.next } : undefined,
   };
 }
 
@@ -226,17 +207,18 @@ function handleEvent(
  * - TODO: Optional parent event ID (defaults to undefined)
  * - Initial state set to `Fired`
  * - Timestamps for when it was created and scheduled
- * - Optional callback process (defaults to empty callback)
+ * - Optional process to run on event handling (defaults to empty process)
  * - Optional item to carry (defaults to undefined)
  */
 export function createEvent<T extends StateData>(
+  sim: Simulation,
   options: CreateEventOptions<T>,
 ): Event<T> {
   return {
     ...options,
     id: crypto.randomUUID(),
     status: EventState.Fired,
-    firedAt: options.sim.currentTime,
+    firedAt: sim.currentTime,
     process: options.process ? { ...options.process } : {
       type: "none",
     },
@@ -251,7 +233,7 @@ export function createEvent<T extends StateData>(
 export function scheduleEvent<T extends StateData>(
   sim: Simulation,
   event: Event<T>,
-): Event<StateData>[] {
+): Event[] {
   if (event.scheduledAt < sim.currentTime) {
     throw RangeError(
       `Event scheduled at a point in time in the past: ${event.id} ` +

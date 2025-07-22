@@ -18,7 +18,7 @@ import {
 Deno.test("basic event scheduling", () => {
   const sim = initializeSimulation();
 
-  const e1 = createEvent({ sim, scheduledAt: 10 });
+  const e1 = createEvent(sim, { scheduledAt: 10 });
   assertEquals(sim.events.length, 0);
 
   sim.events = scheduleEvent(sim, e1);
@@ -34,7 +34,7 @@ Deno.test("basic event scheduling", () => {
 Deno.test("zero-duration events", () => {
   const sim = initializeSimulation();
 
-  const e1 = createEvent({ sim, scheduledAt: sim.currentTime });
+  const e1 = createEvent(sim, { scheduledAt: sim.currentTime });
   sim.events = scheduleEvent(sim, e1);
 
   const [stop, _stats] = runSimulation(sim);
@@ -45,9 +45,9 @@ Deno.test("zero-duration events", () => {
 Deno.test("basic out of order scheduling", () => {
   const sim = initializeSimulation();
 
-  const e1 = createEvent({ sim, scheduledAt: 10 });
-  const e2 = createEvent({ sim, scheduledAt: 5 });
-  const e3 = createEvent({ sim, scheduledAt: 15 });
+  const e1 = createEvent(sim, { scheduledAt: 10 });
+  const e2 = createEvent(sim, { scheduledAt: 5 });
+  const e3 = createEvent(sim, { scheduledAt: 15 });
   assertEquals(sim.events.length, 0);
 
   sim.events = scheduleEvent(sim, e3);
@@ -89,12 +89,12 @@ Deno.test("basic event ordering", () => {
 
   sim.registry = registerProcess(sim, foo);
 
-  const e1 = createEvent({ sim, scheduledAt: 10, callback: "foo" });
-  const e2 = createEvent({ sim, scheduledAt: 0, callback: "foo" });
-  const e3 = createEvent({ sim, scheduledAt: 15, callback: "foo" });
-  const e4 = createEvent({ sim, scheduledAt: 5, callback: "foo" });
-  const e5 = createEvent({ sim, scheduledAt: 2, callback: "foo" });
-  const e6 = createEvent({ sim, scheduledAt: 50, callback: "foo" });
+  const e1 = createEvent(sim, { scheduledAt: 10, process: { type: "foo" } });
+  const e2 = createEvent(sim, { scheduledAt: 0, process: { type: "foo" } });
+  const e3 = createEvent(sim, { scheduledAt: 15, process: { type: "foo" } });
+  const e4 = createEvent(sim, { scheduledAt: 5, process: { type: "foo" } });
+  const e5 = createEvent(sim, { scheduledAt: 2, process: { type: "foo" } });
+  const e6 = createEvent(sim, { scheduledAt: 50, process: { type: "foo" } });
 
   sim.events = scheduleEvent(sim, e1);
   sim.events = scheduleEvent(sim, e2);
@@ -114,7 +114,7 @@ Deno.test("scheduling events in the past", () => {
   const sim = initializeSimulation();
 
   const someProcess: ProcessHandler = (_sim, event, state) => {
-    const past = createEvent({ sim, scheduledAt: sim.currentTime - 1 });
+    const past = createEvent(sim, { scheduledAt: sim.currentTime - 1 });
     sim.events = scheduleEvent(sim, past);
 
     return {
@@ -137,8 +137,8 @@ Deno.test("scheduling events in the past", () => {
 
   sim.registry = registerProcess(sim, foo);
 
-  const e1 = createEvent({ sim, scheduledAt: -1 });
-  const e2 = createEvent({ sim, scheduledAt: 10, callback: "foo" });
+  const e1 = createEvent(sim, { scheduledAt: -1 });
+  const e2 = createEvent(sim, { scheduledAt: 10, process: { type: "foo" } });
 
   assertThrows(() => {
     sim.events = scheduleEvent(sim, e1);
@@ -150,7 +150,7 @@ Deno.test("scheduling events in the past", () => {
   });
 });
 
-Deno.test("event callbacks scheduling", () => {
+Deno.test("event process scheduling", () => {
   const sim = initializeSimulation();
 
   const results: Record<number, Event> = {};
@@ -178,9 +178,9 @@ Deno.test("event callbacks scheduling", () => {
 
   sim.registry = registerProcess(sim, foo);
 
-  const e1 = createEvent({ sim, scheduledAt: 10, callback: "foo" });
-  const e2 = createEvent({ sim, scheduledAt: 20, callback: "foo" });
-  const e3 = createEvent({ sim, scheduledAt: 30, callback: "foo" });
+  const e1 = createEvent(sim, { scheduledAt: 10, process: { type: "foo" } });
+  const e2 = createEvent(sim, { scheduledAt: 20, process: { type: "foo" } });
+  const e3 = createEvent(sim, { scheduledAt: 30, process: { type: "foo" } });
   sim.events = scheduleEvent(sim, e1);
   sim.events = scheduleEvent(sim, e2);
   sim.events = scheduleEvent(sim, e3);

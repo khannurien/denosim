@@ -109,17 +109,6 @@ export type StateData = Record<string, unknown>;
 /**
  * TODO:
  */
-export interface ProcessCallData<
-  T extends StateData = StateData,
-  S extends StateData = StateData,
-> {
-  data?: T;
-  callback?: ProcessCall<S>;
-}
-
-/**
- * TODO:
- */
 export interface ProcessDefinition<T extends StateData = StateData> {
   type: ProcessType;
   initial: StepType;
@@ -160,11 +149,14 @@ export interface ProcessState<T extends StateData = StateData> {
  */
 export interface ProcessStep<
   T extends StateData = StateData,
-  S extends StateData = StateData,
 > {
   updated: Event<T>;
   state: ProcessState<T>;
-  next?: Event<S>; // TODO:
+  /**
+   * TODO: Can be leveraged to spawn a new process
+   * TODO: State will be initialized on process start
+  */
+  next?: Event<T>;
 }
 
 /**
@@ -183,7 +175,6 @@ export interface SimulationStats {
  * TODO:
  */
 export interface CreateEventOptions<T extends StateData = StateData> {
-  sim: Simulation;
   parent?: EventID;
   scheduledAt: number;
   process?: ProcessCall<T>;
