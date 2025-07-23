@@ -23,7 +23,7 @@ export interface Simulation {
   /**
    * TODO:
    */
-  registry: Record<string, ProcessDefinition>;
+  registry: Record<string, ProcessDefinition<StatesDefinition<StateData>>>;
 
   /**
    * TODO:
@@ -105,16 +105,24 @@ export type StepType = string;
 
 /** TODO: */
 export type StateData = Record<string, unknown>;
+// export interface StateData {
+//   [key: string]: unknown;
+// }
 
-/**
- * TODO:
- */
-export interface ProcessDefinition<T extends StateData = StateData> {
+/** TODO: */
+export type StatesDefinition<T extends StateData = StateData> = Record<
+  StepType,
+  ProcessHandler<T>
+>;
+
+/** TODO: */
+export interface ProcessDefinition<T extends StatesDefinition<StateData>> {
   type: ProcessType;
-  initial: StepType;
-  states: Record<StepType, ProcessHandler<T>>;
+  initial: keyof T;
+  states: T;
 }
 
+/** TODO: */
 export interface ProcessCall<T extends StateData = StateData> {
   /** TODO: */
   type: ProcessType;
@@ -155,7 +163,7 @@ export interface ProcessStep<
   /**
    * TODO: Can be leveraged to spawn a new process
    * TODO: State will be initialized on process start
-  */
+   */
   next?: Event<T>;
 }
 

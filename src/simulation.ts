@@ -3,16 +3,21 @@ import {
   Event,
   EventState,
   ProcessDefinition,
+  ProcessHandler,
   ProcessStep,
+  ProcessType,
   Simulation,
   SimulationStats,
   StateData,
+  StatesDefinition,
 } from "./model.ts";
 
 /**
  * TODO:
  */
-export const emptyProcess: ProcessDefinition = {
+export const emptyProcess: ProcessDefinition<{
+  none: ProcessHandler<StateData>;
+}> = {
   type: "none",
   initial: "none",
   states: {
@@ -28,13 +33,17 @@ export const emptyProcess: ProcessDefinition = {
 /**
  * TODO:
  */
-export function registerProcess<T extends StateData>(
+export function registerProcess<T extends StatesDefinition<StateData>>(
   sim: Simulation,
   process: ProcessDefinition<T>,
-): Record<string, ProcessDefinition<StateData>> {
+): {
+  [type: ProcessType]:
+    | ProcessDefinition<T>
+    | ProcessDefinition<StatesDefinition<StateData>>;
+} {
   return {
     ...sim.registry,
-    [process.type]: process as ProcessDefinition<StateData>,
+    [process.type]: process,
   };
 }
 
@@ -171,7 +180,6 @@ function handleEvent(
   const definition = sim.registry[event.process.type];
 
   // TODO: Get current process state (tied to the parent event) or initialize it
-  // const parent = sim.events.find((e) => e.parent === event.parent);
   const state = event.parent && event.parent in sim.state
     ? { ...sim.state[event.parent] }
     : {
@@ -186,9 +194,11 @@ function handleEvent(
   const process = handler(sim, event, state);
 
   // TODO: If the original process yielded a new event, schedule process continuation
-  // FIXME: We don't do the following anymore:
-  // TODO: It means that the event is tied to a process that will be running for at least another step
-  // TODO: We store the original event ID into the next event to retrieve process state in the future
+  // FIXME: We could automate setting the `parent` property here:
+  // When the event is tied to a process that will be running for at least another step
+  // Store the parent event ID into the next event to retrieve process state in the future
+  // Otherwise, the event spawns a new process that needs its state initialized
+  // Do not store parent event ID, make it a root event
   return {
     updated: {
       ...event,

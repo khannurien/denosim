@@ -1,7 +1,11 @@
 import {
+  Event,
   ProcessDefinition,
+  ProcessHandler,
+  ProcessState,
   ProcessStep,
   StateData,
+  StatesDefinition,
 } from "../src/model.ts";
 import {
   createEvent,
@@ -41,7 +45,9 @@ interface TimeoutData extends StateData {
 if (import.meta.main) {
   const sim = initializeSimulation();
 
-  const fooCb: ProcessDefinition<FooData> = {
+  const fooCb: ProcessDefinition<{
+    none: ProcessHandler<FooData>;
+  }> = {
     type: "foo",
     initial: "none",
     states: {
@@ -58,7 +64,11 @@ if (import.meta.main) {
 
   sim.registry = registerProcess(sim, fooCb);
 
-  const barCb: ProcessDefinition<TimeoutData> = {
+  const barCb: ProcessDefinition<{
+    start: ProcessHandler<TimeoutData>;
+    wait: ProcessHandler<TimeoutData>;
+    stop: ProcessHandler<TimeoutData>;
+  }> = {
     type: "bar",
     initial: "start",
     states: {
@@ -108,18 +118,18 @@ if (import.meta.main) {
                 process: {
                   type: event.process.type,
                 },
-              }
+              },
             )
             : createEvent(
-            sim,
-            {
-              parent: event.id,
-              scheduledAt: sim.currentTime + remaining,
-              process: {
-                type: event.process.type,
+              sim,
+              {
+                parent: event.id,
+                scheduledAt: sim.currentTime + remaining,
+                process: {
+                  type: event.process.type,
+                },
               },
-            },
-          ),
+            ),
         };
       },
       stop(sim, event, state): ProcessStep<TimeoutData> {
@@ -144,7 +154,11 @@ if (import.meta.main) {
 
   sim.registry = registerProcess(sim, barCb);
 
-  const step1Cb: ProcessDefinition<TimeoutData> = {
+  const step1Cb: ProcessDefinition<{
+    start: ProcessHandler<TimeoutData>;
+    wait: ProcessHandler<TimeoutData>;
+    stop: ProcessHandler<TimeoutData>;
+  }> = {
     type: "step1",
     initial: "start",
     states: {
@@ -197,15 +211,15 @@ if (import.meta.main) {
               },
             )
             : createEvent(
-            sim,
-            {
-              parent: event.id,
-              scheduledAt: sim.currentTime + remaining,
-              process: {
-                type: event.process.type,
+              sim,
+              {
+                parent: event.id,
+                scheduledAt: sim.currentTime + remaining,
+                process: {
+                  type: event.process.type,
+                },
               },
-            },
-          ),
+            ),
         };
       },
       stop(sim, event, state): ProcessStep<TimeoutData> {
@@ -230,12 +244,16 @@ if (import.meta.main) {
 
   sim.registry = registerProcess(sim, step1Cb);
 
-  const step2Cb: ProcessDefinition = {
+  const step2Cb: ProcessDefinition<{
+    none: ProcessHandler<StateData>;
+  }> = {
     type: "step2",
     initial: "none",
     states: {
       none(sim, event, state): ProcessStep {
-        console.log(`[${sim.currentTime}] callback from the callback from bar after timeout`);
+        console.log(
+          `[${sim.currentTime}] callback from the callback from bar after timeout`,
+        );
 
         return {
           updated: { ...event },
@@ -247,11 +265,19 @@ if (import.meta.main) {
 
   sim.registry = registerProcess(sim, step2Cb);
 
-  const bazCb: ProcessDefinition<TimeoutData> = {
+  const bazCb: ProcessDefinition<{
+    start: ProcessHandler<TimeoutData>;
+    wait: ProcessHandler<TimeoutData>;
+    stop: ProcessHandler<FooData>;
+  }> = {
     type: "baz",
     initial: "start",
     states: {
-      start(sim, event, state): ProcessStep<TimeoutData> {
+      start(
+        sim,
+        event: Event<TimeoutData>,
+        state: ProcessState<TimeoutData>,
+      ): ProcessStep<TimeoutData> {
         console.log(`[${sim.currentTime}] baz before`);
 
         return {
@@ -275,7 +301,11 @@ if (import.meta.main) {
           ),
         };
       },
-      wait(sim, event, state): ProcessStep<TimeoutData> {
+      wait(
+        sim,
+        event: Event<TimeoutData>,
+        state: ProcessState<TimeoutData>,
+      ): ProcessStep<TimeoutData> {
         const parent = sim.events.find((e) => e.id === event.parent);
         const startedAt = parent?.scheduledAt ?? sim.currentTime;
 
@@ -300,19 +330,22 @@ if (import.meta.main) {
               },
             )
             : createEvent(
-            sim,
-            {
-              parent: event.id,
-              scheduledAt: sim.currentTime + remaining,
-              process: {
-                type: event.process.type,
+              sim,
+              {
+                parent: event.id,
+                scheduledAt: sim.currentTime + remaining,
+                process: {
+                  type: event.process.type,
+                },
               },
-            },
-          ),
+            ),
         };
       },
-      // FIXME: typing problem
-      stop(sim, event, state): ProcessStep<FooData> {
+      stop(
+        sim,
+        event: Event<FooData>,
+        state: ProcessState<FooData>,
+      ): ProcessStep<FooData> {
         console.log(`[${sim.currentTime}] baz after`);
 
         return {
@@ -325,7 +358,7 @@ if (import.meta.main) {
               process: {
                 type: "foo",
                 data: {
-                  from: "baz"
+                  from: "baz",
                 },
               },
             },
