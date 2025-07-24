@@ -1,11 +1,9 @@
 import {
   Event,
   ProcessDefinition,
-  ProcessHandler,
   ProcessState,
   ProcessStep,
   StateData,
-  StatesDefinition,
 } from "../src/model.ts";
 import {
   createEvent,
@@ -46,7 +44,7 @@ if (import.meta.main) {
   const sim = initializeSimulation();
 
   const fooCb: ProcessDefinition<{
-    none: ProcessHandler<FooData>;
+    none: FooData;
   }> = {
     type: "foo",
     initial: "none",
@@ -65,9 +63,9 @@ if (import.meta.main) {
   sim.registry = registerProcess(sim, fooCb);
 
   const barCb: ProcessDefinition<{
-    start: ProcessHandler<TimeoutData>;
-    wait: ProcessHandler<TimeoutData>;
-    stop: ProcessHandler<TimeoutData>;
+    start: TimeoutData;
+    wait: TimeoutData;
+    stop: TimeoutData;
   }> = {
     type: "bar",
     initial: "start",
@@ -155,9 +153,9 @@ if (import.meta.main) {
   sim.registry = registerProcess(sim, barCb);
 
   const step1Cb: ProcessDefinition<{
-    start: ProcessHandler<TimeoutData>;
-    wait: ProcessHandler<TimeoutData>;
-    stop: ProcessHandler<TimeoutData>;
+    start: TimeoutData;
+    wait: TimeoutData;
+    stop: TimeoutData;
   }> = {
     type: "step1",
     initial: "start",
@@ -245,7 +243,7 @@ if (import.meta.main) {
   sim.registry = registerProcess(sim, step1Cb);
 
   const step2Cb: ProcessDefinition<{
-    none: ProcessHandler<StateData>;
+    none: StateData;
   }> = {
     type: "step2",
     initial: "none",
@@ -266,9 +264,9 @@ if (import.meta.main) {
   sim.registry = registerProcess(sim, step2Cb);
 
   const bazCb: ProcessDefinition<{
-    start: ProcessHandler<TimeoutData>;
-    wait: ProcessHandler<TimeoutData>;
-    stop: ProcessHandler<FooData>;
+    start: TimeoutData;
+    wait: TimeoutData;
+    stop: FooData;
   }> = {
     type: "baz",
     initial: "start",

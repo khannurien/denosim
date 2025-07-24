@@ -3,20 +3,19 @@ import {
   Event,
   EventState,
   ProcessDefinition,
-  ProcessHandler,
   ProcessStep,
   ProcessType,
   Simulation,
   SimulationStats,
   StateData,
-  StatesDefinition,
+  StepStateMap,
 } from "./model.ts";
 
 /**
  * TODO:
  */
 export const emptyProcess: ProcessDefinition<{
-  none: ProcessHandler<StateData>;
+  none: StateData;
 }> = {
   type: "none",
   initial: "none",
@@ -33,18 +32,17 @@ export const emptyProcess: ProcessDefinition<{
 /**
  * TODO:
  */
-export function registerProcess<T extends StatesDefinition<StateData>>(
-  sim: Simulation,
-  process: ProcessDefinition<T>,
-): {
-  [type: ProcessType]:
-    | ProcessDefinition<T>
-    | ProcessDefinition<StatesDefinition<StateData>>;
-} {
+export function registerProcess<
+  R extends Record<string, ProcessDefinition<StepStateMap>>,
+  S extends StepStateMap,
+>(
+  sim: Simulation<R>,
+  process: ProcessDefinition<S> & { type: ProcessType },
+): R & { [P in ProcessType]: ProcessDefinition<S> } {
   return {
     ...sim.registry,
     [process.type]: process,
-  };
+  } as R & { [P in ProcessType]: ProcessDefinition<S> };
 }
 
 /**

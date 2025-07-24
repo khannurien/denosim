@@ -79,7 +79,9 @@ Deno.test("basic event ordering", () => {
     };
   };
 
-  const foo: ProcessDefinition = {
+  const foo: ProcessDefinition<{
+    start: StateData;
+  }> = {
     type: "foo",
     initial: "start",
     states: {
@@ -127,7 +129,9 @@ Deno.test("scheduling events in the past", () => {
     };
   };
 
-  const foo: ProcessDefinition = {
+  const foo: ProcessDefinition<{
+    start: StateData;
+  }> = {
     type: "foo",
     initial: "start",
     states: {
@@ -168,7 +172,9 @@ Deno.test("event process scheduling", () => {
     };
   };
 
-  const foo: ProcessDefinition = {
+  const foo: ProcessDefinition<{
+    start: StateData;
+  }> = {
     type: "foo",
     initial: "start",
     states: {

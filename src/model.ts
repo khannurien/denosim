@@ -3,7 +3,7 @@
  * - The current virtual time of the simulation
  * - All events that have been scheduled
  */
-export interface Simulation {
+export interface Simulation<R extends ProcessRegistry = ProcessRegistry> {
   /**
    * The current virtual time in the simulation.
    * Represents the timestamp up to which the simulation has processed.
@@ -23,7 +23,7 @@ export interface Simulation {
   /**
    * TODO:
    */
-  registry: Record<string, ProcessDefinition<StatesDefinition<StateData>>>;
+  registry: R;
 
   /**
    * TODO:
@@ -105,21 +105,23 @@ export type StepType = string;
 
 /** TODO: */
 export type StateData = Record<string, unknown>;
-// export interface StateData {
-//   [key: string]: unknown;
-// }
 
 /** TODO: */
-export type StatesDefinition<T extends StateData = StateData> = Record<
-  StepType,
-  ProcessHandler<T>
->;
+export type StepStateMap = Record<StepType, StateData>;
 
 /** TODO: */
-export interface ProcessDefinition<T extends StatesDefinition<StateData>> {
+export type StatesDefinition<T extends StepStateMap> = {
+  [K in keyof T]: ProcessHandler<T[K]>;
+};
+
+/** TODO: */
+type ProcessRegistry = Record<string, ProcessDefinition<StepStateMap>>;
+
+/** TODO: */
+export interface ProcessDefinition<T extends StepStateMap> {
   type: ProcessType;
   initial: keyof T;
-  states: T;
+  states: StatesDefinition<T>;
 }
 
 /** TODO: */
