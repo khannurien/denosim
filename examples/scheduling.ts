@@ -7,12 +7,10 @@ import {
 } from "../src/model.ts";
 import {
   createEvent,
-  deserializeSimulation,
   initializeSimulation,
   registerProcess,
   runSimulation,
   scheduleEvent,
-  serializeSimulation,
 } from "../src/simulation.ts";
 
 /**
@@ -400,11 +398,7 @@ if (import.meta.main) {
 
   const [stop, stats] = runSimulation(sim);
 
-  const stop2 = serializeSimulation(stop);
-  const stop3 = deserializeSimulation(stop2);
-  // console.log(stop3);
-
   console.log(`Simulation ended at ${stop.currentTime}`);
   console.log(`Simulation took: ${stats.duration} ms`);
-  // console.log("Events:", JSON.stringify(stop.events, null, 2));
+  console.log("Events:", JSON.stringify(stop.events, null, 2));
 }

@@ -12,41 +12,6 @@ import {
 } from "./model.ts";
 
 /**
- * TODO:
- */
-export const emptyProcess: ProcessDefinition<{
-  none: StateData;
-}> = {
-  type: "none",
-  initial: "none",
-  states: {
-    none(_sim, event, state): ProcessStep {
-      return {
-        updated: { ...event },
-        state: { ...state },
-      };
-    },
-  },
-};
-
-/**
- * TODO:
- */
-export function registerProcess<
-  R extends Record<string, ProcessDefinition<StepStateMap>>,
-  S extends StepStateMap,
-  K extends ProcessType,
->(
-  sim: Simulation<R>,
-  process: ProcessDefinition<S> & { type: K },
-): R & { [P in K]: ProcessDefinition<S> } {
-  return {
-    ...sim.registry,
-    [process.type]: process,
-  };
-}
-
-/**
  * Initializes a new simulation instance with:
  * - `currentTime` set to 0 (starting point of simulation)
  * - Empty events array (no scheduled events)
@@ -54,44 +19,31 @@ export function registerProcess<
  * - TODO: Empty state array
  */
 export function initializeSimulation(): Simulation {
+  const emptyProcess: ProcessDefinition<{
+    none: StateData;
+  }> = {
+    type: "none",
+    initial: "none",
+    states: {
+      none(_sim, event, state): ProcessStep {
+        return {
+          updated: { ...event },
+          state: { ...state },
+        };
+      },
+    },
+  };
+
   const sim = {
     currentTime: 0,
     events: [],
-    registry: {},
+    registry: {
+      "none": emptyProcess,
+    },
     state: {},
   };
 
-  sim.registry = registerProcess(sim, emptyProcess);
-
   return sim;
-}
-
-/**
- * Inspired by true events:
- * https://oprearocks.medium.com/serializing-object-methods-using-es6-template-strings-and-eval-c77c894651f0
- */
-function replacer(_key: string, value: unknown): unknown {
-  return typeof value === "function" ? value.toString() : value;
-}
-
-function reviver(_key: string, value: unknown): unknown {
-  return typeof value === "string" && value.indexOf("function ") === 0
-    ? eval(`(${value})`)
-    : value;
-}
-
-/**
- * TODO:
- */
-export function serializeSimulation(sim: Simulation): string {
-  return JSON.stringify(sim, replacer, 2);
-}
-
-/**
- * TODO:
- */
-export function deserializeSimulation(data: string): Simulation {
-  return JSON.parse(data, reviver);
 }
 
 /**
@@ -189,6 +141,8 @@ function handleEvent(
 
   const handler = definition.states[state.step];
 
+  console.log(handler);
+
   // TODO: Execute next step of the process
   const process = handler(sim, event, state);
 
@@ -207,6 +161,23 @@ function handleEvent(
     state: { ...process.state },
     // next: process.next ? { ...process.next, parent: event.id } : undefined,
     next: process.next ? { ...process.next } : undefined,
+  };
+}
+
+/**
+ * TODO:
+ */
+export function registerProcess<
+  R extends Record<string, ProcessDefinition<StepStateMap>>,
+  S extends StepStateMap,
+  K extends ProcessType,
+>(
+  sim: Simulation<R>,
+  process: ProcessDefinition<S> & { type: K },
+): R & { [P in K]: ProcessDefinition<S> } {
+  return {
+    ...sim.registry,
+    [process.type]: process,
   };
 }
 
