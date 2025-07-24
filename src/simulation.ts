@@ -35,14 +35,15 @@ export const emptyProcess: ProcessDefinition<{
 export function registerProcess<
   R extends Record<string, ProcessDefinition<StepStateMap>>,
   S extends StepStateMap,
+  K extends ProcessType,
 >(
   sim: Simulation<R>,
-  process: ProcessDefinition<S> & { type: ProcessType },
-): R & { [P in ProcessType]: ProcessDefinition<S> } {
+  process: ProcessDefinition<S> & { type: K },
+): R & { [P in K]: ProcessDefinition<S> } {
   return {
     ...sim.registry,
     [process.type]: process,
-  } as R & { [P in ProcessType]: ProcessDefinition<S> };
+  };
 }
 
 /**
