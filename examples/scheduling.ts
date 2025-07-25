@@ -1,17 +1,12 @@
 import {
-  Event,
-  ProcessDefinition,
-  ProcessState,
-  ProcessStep,
-  StateData,
-} from "../src/model.ts";
-import {
   createEvent,
   initializeSimulation,
+  ProcessDefinition,
   registerProcess,
   runSimulation,
   scheduleEvent,
-} from "../src/simulation.ts";
+  StateData,
+} from "../mod.ts";
 
 /**
  * Expected output:
@@ -30,15 +25,15 @@ import {
  * Simulation ended at 70
  */
 
-interface FooData extends StateData {
-  from: string;
-}
-
-interface TimeoutData extends StateData {
-  duration: number;
-}
-
 if (import.meta.main) {
+  interface FooData extends StateData {
+    from: string;
+  }
+
+  interface TimeoutData extends StateData {
+    duration: number;
+  }
+
   const sim = initializeSimulation();
 
   const fooCb: ProcessDefinition<{
@@ -47,7 +42,7 @@ if (import.meta.main) {
     type: "foo",
     initial: "none",
     states: {
-      none(sim, event, state): ProcessStep<FooData> {
+      none(sim, event, state) {
         console.log(`[${sim.currentTime}] foo from ${state.data["from"]}`);
 
         return {
@@ -68,7 +63,7 @@ if (import.meta.main) {
     type: "bar",
     initial: "start",
     states: {
-      start(sim, event, state): ProcessStep<TimeoutData> {
+      start(sim, event, state) {
         console.log(`[${sim.currentTime}] bar before timeout`);
 
         return {
@@ -92,43 +87,31 @@ if (import.meta.main) {
           ),
         };
       },
-      wait(sim, event, state): ProcessStep<TimeoutData> {
+      wait(sim, event, state) {
         const parent = sim.events.find((e) => e.id === event.parent);
         const startedAt = parent?.scheduledAt ?? sim.currentTime;
 
-        const nextStep = (sim.currentTime < startedAt + state.data["duration"])
-          ? "wait"
-          : "stop";
-
         const remaining = startedAt + state.data["duration"] - sim.currentTime;
+        const nextStep = remaining > 0 ? "wait" : "stop";
+        const nextEvent = createEvent(
+          sim,
+          {
+            parent: event.id,
+            scheduledAt: sim.currentTime + remaining,
+            process: {
+              type: event.process.type,
+              data: state.data,
+            },
+          },
+        );
 
         return {
           updated: { ...event },
           state: { ...state, step: nextStep },
-          next: nextStep == "stop"
-            ? createEvent(
-              sim,
-              {
-                parent: event.id,
-                scheduledAt: sim.currentTime,
-                process: {
-                  type: event.process.type,
-                },
-              },
-            )
-            : createEvent(
-              sim,
-              {
-                parent: event.id,
-                scheduledAt: sim.currentTime + remaining,
-                process: {
-                  type: event.process.type,
-                },
-              },
-            ),
+          next: nextEvent,
         };
       },
-      stop(sim, event, state): ProcessStep<TimeoutData> {
+      stop(sim, event, state) {
         console.log(`[${sim.currentTime}] bar after timeout`);
 
         return {
@@ -158,7 +141,7 @@ if (import.meta.main) {
     type: "step1",
     initial: "start",
     states: {
-      start(sim, event, state): ProcessStep<TimeoutData> {
+      start(sim, event, state) {
         console.log(`[${sim.currentTime}] callback from bar before timeout`);
 
         return {
@@ -182,43 +165,31 @@ if (import.meta.main) {
           ),
         };
       },
-      wait(sim, event, state): ProcessStep<TimeoutData> {
+      wait(sim, event, state) {
         const parent = sim.events.find((e) => e.id === event.parent);
         const startedAt = parent?.scheduledAt ?? sim.currentTime;
 
-        const nextStep = (sim.currentTime < startedAt + state.data["duration"])
-          ? "wait"
-          : "stop";
-
         const remaining = startedAt + state.data["duration"] - sim.currentTime;
+        const nextStep = remaining > 0 ? "wait" : "stop";
+        const nextEvent = createEvent(
+          sim,
+          {
+            parent: event.id,
+            scheduledAt: sim.currentTime + remaining,
+            process: {
+              type: event.process.type,
+              data: state.data,
+            },
+          },
+        );
 
         return {
           updated: { ...event },
           state: { ...state, step: nextStep },
-          next: nextStep == "stop"
-            ? createEvent(
-              sim,
-              {
-                parent: event.id,
-                scheduledAt: sim.currentTime,
-                process: {
-                  type: event.process.type,
-                },
-              },
-            )
-            : createEvent(
-              sim,
-              {
-                parent: event.id,
-                scheduledAt: sim.currentTime + remaining,
-                process: {
-                  type: event.process.type,
-                },
-              },
-            ),
+          next: nextEvent,
         };
       },
-      stop(sim, event, state): ProcessStep<TimeoutData> {
+      stop(sim, event, state) {
         console.log(`[${sim.currentTime}] callback from bar after timeout`);
 
         return {
@@ -246,7 +217,7 @@ if (import.meta.main) {
     type: "step2",
     initial: "none",
     states: {
-      none(sim, event, state): ProcessStep {
+      none(sim, event, state) {
         console.log(
           `[${sim.currentTime}] callback from the callback from bar after timeout`,
         );
@@ -269,11 +240,7 @@ if (import.meta.main) {
     type: "baz",
     initial: "start",
     states: {
-      start(
-        sim,
-        event: Event<TimeoutData>,
-        state: ProcessState<TimeoutData>,
-      ): ProcessStep<TimeoutData> {
+      start(sim, event, state) {
         console.log(`[${sim.currentTime}] baz before`);
 
         return {
@@ -297,51 +264,31 @@ if (import.meta.main) {
           ),
         };
       },
-      wait(
-        sim,
-        event: Event<TimeoutData>,
-        state: ProcessState<TimeoutData>,
-      ): ProcessStep<TimeoutData> {
+      wait(sim, event, state) {
         const parent = sim.events.find((e) => e.id === event.parent);
         const startedAt = parent?.scheduledAt ?? sim.currentTime;
 
-        const nextStep = (sim.currentTime < startedAt + state.data["duration"])
-          ? "wait"
-          : "stop";
-
         const remaining = startedAt + state.data["duration"] - sim.currentTime;
+        const nextStep = remaining > 0 ? "wait" : "stop";
+        const nextEvent = createEvent(
+          sim,
+          {
+            parent: event.id,
+            scheduledAt: sim.currentTime + remaining,
+            process: {
+              type: event.process.type,
+              data: state.data,
+            },
+          },
+        );
 
         return {
           updated: { ...event },
           state: { ...state, step: nextStep },
-          next: nextStep == "stop"
-            ? createEvent(
-              sim,
-              {
-                parent: event.id,
-                scheduledAt: sim.currentTime,
-                process: {
-                  type: event.process.type,
-                },
-              },
-            )
-            : createEvent(
-              sim,
-              {
-                parent: event.id,
-                scheduledAt: sim.currentTime + remaining,
-                process: {
-                  type: event.process.type,
-                },
-              },
-            ),
+          next: nextEvent,
         };
       },
-      stop(
-        sim,
-        event: Event<FooData>,
-        state: ProcessState<FooData>,
-      ): ProcessStep<FooData> {
+      stop(sim, event, state) {
         console.log(`[${sim.currentTime}] baz after`);
 
         return {

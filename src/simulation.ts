@@ -141,8 +141,6 @@ function handleEvent(
 
   const handler = definition.states[state.step];
 
-  console.log(handler);
-
   // TODO: Execute next step of the process
   const process = handler(sim, event, state);
 
