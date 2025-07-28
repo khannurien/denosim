@@ -46,8 +46,9 @@ if (import.meta.main) {
         console.log(`[${sim.currentTime}] foo from ${state.data["from"]}`);
 
         return {
-          updated: { ...event },
-          state: { ...state },
+          updated: event,
+          state,
+          next: [],
         };
       },
     },
@@ -67,7 +68,7 @@ if (import.meta.main) {
         console.log(`[${sim.currentTime}] bar before timeout`);
 
         return {
-          updated: { ...event },
+          updated: event,
           state: {
             ...state,
             step: "wait",
@@ -75,16 +76,18 @@ if (import.meta.main) {
               duration: 15,
             },
           },
-          next: createEvent(
-            sim,
-            {
-              parent: event.id,
-              scheduledAt: sim.currentTime,
-              process: {
-                type: event.process.type,
+          next: [
+            createEvent(
+              sim,
+              {
+                parent: event.id,
+                scheduledAt: sim.currentTime,
+                process: {
+                  type: event.process.type,
+                },
               },
-            },
-          ),
+            ),
+          ],
         };
       },
       wait(sim, event, state) {
@@ -106,26 +109,28 @@ if (import.meta.main) {
         );
 
         return {
-          updated: { ...event },
+          updated: event,
           state: { ...state, step: nextStep },
-          next: nextEvent,
+          next: [nextEvent],
         };
       },
       stop(sim, event, state) {
         console.log(`[${sim.currentTime}] bar after timeout`);
 
         return {
-          updated: { ...event },
-          state: { ...state },
-          next: createEvent(
-            sim,
-            {
-              scheduledAt: sim.currentTime,
-              process: {
-                type: "step1",
+          updated: event,
+          state,
+          next: [
+            createEvent(
+              sim,
+              {
+                scheduledAt: sim.currentTime,
+                process: {
+                  type: "step1",
+                },
               },
-            },
-          ),
+            ),
+          ],
         };
       },
     },
@@ -145,7 +150,7 @@ if (import.meta.main) {
         console.log(`[${sim.currentTime}] callback from bar before timeout`);
 
         return {
-          updated: { ...event },
+          updated: event,
           state: {
             ...state,
             step: "wait",
@@ -153,16 +158,18 @@ if (import.meta.main) {
               duration: 5,
             },
           },
-          next: createEvent(
-            sim,
-            {
-              parent: event.id,
-              scheduledAt: sim.currentTime,
-              process: {
-                type: event.process.type,
+          next: [
+            createEvent(
+              sim,
+              {
+                parent: event.id,
+                scheduledAt: sim.currentTime,
+                process: {
+                  type: event.process.type,
+                },
               },
-            },
-          ),
+            ),
+          ],
         };
       },
       wait(sim, event, state) {
@@ -184,18 +191,18 @@ if (import.meta.main) {
         );
 
         return {
-          updated: { ...event },
+          updated: event,
           state: { ...state, step: nextStep },
-          next: nextEvent,
+          next: [nextEvent],
         };
       },
       stop(sim, event, state) {
         console.log(`[${sim.currentTime}] callback from bar after timeout`);
 
         return {
-          updated: { ...event },
-          state: { ...state },
-          next: createEvent(
+          updated: event,
+          state,
+          next: [createEvent(
             sim,
             {
               scheduledAt: sim.currentTime,
@@ -203,7 +210,7 @@ if (import.meta.main) {
                 type: "step2",
               },
             },
-          ),
+          )],
         };
       },
     },
@@ -223,8 +230,9 @@ if (import.meta.main) {
         );
 
         return {
-          updated: { ...event },
-          state: { ...state },
+          updated: event,
+          state,
+          next: [],
         };
       },
     },
@@ -244,7 +252,7 @@ if (import.meta.main) {
         console.log(`[${sim.currentTime}] baz before`);
 
         return {
-          updated: { ...event },
+          updated: event,
           state: {
             ...state,
             step: "wait",
@@ -252,7 +260,7 @@ if (import.meta.main) {
               duration: 10,
             },
           },
-          next: createEvent(
+          next: [createEvent(
             sim,
             {
               parent: event.id,
@@ -261,7 +269,7 @@ if (import.meta.main) {
                 type: event.process.type,
               },
             },
-          ),
+          )],
         };
       },
       wait(sim, event, state) {
@@ -283,29 +291,31 @@ if (import.meta.main) {
         );
 
         return {
-          updated: { ...event },
+          updated: event,
           state: { ...state, step: nextStep },
-          next: nextEvent,
+          next: [nextEvent],
         };
       },
       stop(sim, event, state) {
         console.log(`[${sim.currentTime}] baz after`);
 
         return {
-          updated: { ...event },
-          state: { ...state },
-          next: createEvent(
-            sim,
-            {
-              scheduledAt: sim.currentTime,
-              process: {
-                type: "foo",
-                data: {
-                  from: "baz",
+          updated: event,
+          state,
+          next: [
+            createEvent(
+              sim,
+              {
+                scheduledAt: sim.currentTime,
+                process: {
+                  type: "foo",
+                  data: {
+                    from: "baz",
+                  },
                 },
               },
-            },
-          ),
+            ),
+          ],
         };
       },
     },
@@ -343,7 +353,8 @@ if (import.meta.main) {
   const e6 = createEvent(sim, { scheduledAt: 60, process: { type: "baz" } });
   sim.events = scheduleEvent(sim, e6);
 
-  const [stop, stats] = runSimulation(sim);
+  const [states, stats] = runSimulation(sim);
+  const stop = states[states.length - 1];
 
   console.log(`Simulation ended at ${stop.currentTime}`);
   console.log(`Simulation took: ${stats.duration} ms`);

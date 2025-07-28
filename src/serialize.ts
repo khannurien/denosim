@@ -25,13 +25,13 @@ function reviver(_key: string, value: unknown): unknown {
 /**
  * TODO:
  */
-export function serializeSimulation(sim: Simulation): string {
-  return JSON.stringify(sim, replacer, 2);
+export function serializeSimulation(states: Simulation[]): string {
+  return JSON.stringify(states, replacer, 2);
 }
 
 /**
  * TODO:
  */
-export function deserializeSimulation(data: string): Simulation {
+export function deserializeSimulation(data: string): Simulation[] {
   return JSON.parse(data, reviver);
 }

@@ -1,19 +1,16 @@
 import { assert, assertEquals, assertThrows } from "@std/assert";
 import {
+  createEvent,
   Event,
   EventState,
+  initializeSimulation,
   ProcessDefinition,
   ProcessHandler,
-  Simulation,
-  StateData,
-} from "../src/model.ts";
-import {
-  createEvent,
-  initializeSimulation,
   registerProcess,
   runSimulation,
   scheduleEvent,
-} from "../src/simulation.ts";
+  StateData,
+} from "../mod.ts";
 
 Deno.test("basic event scheduling", () => {
   const sim = initializeSimulation();
@@ -24,7 +21,9 @@ Deno.test("basic event scheduling", () => {
   sim.events = scheduleEvent(sim, e1);
   assertEquals(sim.events.length, 1);
 
-  const [stop, _stats] = runSimulation(sim);
+  const [states, _stats] = runSimulation(sim);
+  assert(states.length > 0);
+  const stop = states[states.length - 1];
 
   assertEquals(stop.events.length, 1);
   assertEquals(stop.events[0].finishedAt, 10);
@@ -37,7 +36,9 @@ Deno.test("zero-duration events", () => {
   const e1 = createEvent(sim, { scheduledAt: sim.currentTime });
   sim.events = scheduleEvent(sim, e1);
 
-  const [stop, _stats] = runSimulation(sim);
+  const [states, _stats] = runSimulation(sim);
+  assert(states.length > 0);
+  const stop = states[states.length - 1];
 
   assertEquals(stop.events[0].finishedAt, 0);
 });
@@ -55,7 +56,9 @@ Deno.test("basic out of order scheduling", () => {
   sim.events = scheduleEvent(sim, e1);
   assertEquals(sim.events.length, 3);
 
-  const [stop, _stats] = runSimulation(sim);
+  const [states, _stats] = runSimulation(sim);
+  assert(states.length > 0);
+  const stop = states[states.length - 1];
 
   assertEquals(stop.events.length, 3);
   assert(stop.events.every((event) => event.status == EventState.Finished));
@@ -70,12 +73,13 @@ Deno.test("basic event ordering", () => {
     processedOrder.push(event.scheduledAt);
 
     return {
-      updated: { ...event },
+      updated: event,
       state: {
         ...state,
         step: "start",
         data: { ...state.data },
       },
+      next: [],
     };
   };
 
@@ -105,7 +109,9 @@ Deno.test("basic event ordering", () => {
   sim.events = scheduleEvent(sim, e5);
   sim.events = scheduleEvent(sim, e6);
 
-  const [stop, _stats] = runSimulation(sim);
+  const [states, _stats] = runSimulation(sim);
+  assert(states.length > 0);
+  const stop = states[states.length - 1];
 
   assertEquals(stop.events.length, 6);
   assertEquals(processedOrder, [0, 2, 5, 10, 15, 50]);
@@ -120,12 +126,13 @@ Deno.test("scheduling events in the past", () => {
     sim.events = scheduleEvent(sim, past);
 
     return {
-      updated: { ...event },
+      updated: event,
       state: {
         ...state,
         step: "start",
         data: { ...state.data },
       },
+      next: [],
     };
   };
 
@@ -150,7 +157,7 @@ Deno.test("scheduling events in the past", () => {
   sim.events = scheduleEvent(sim, e2);
 
   assertThrows(() => {
-    const [_stop, _stats] = runSimulation(sim);
+    const [_states, _stats] = runSimulation(sim);
   });
 });
 
@@ -163,12 +170,13 @@ Deno.test("event process scheduling", () => {
     results[sim.currentTime] = event;
 
     return {
-      updated: { ...event },
+      updated: event,
       state: {
         ...state,
         step: "start",
         data: { ...state.data },
       },
+      next: [],
     };
   };
 
@@ -192,7 +200,9 @@ Deno.test("event process scheduling", () => {
   sim.events = scheduleEvent(sim, e3);
   assertEquals(sim.events.length, 3);
 
-  const [stop, _stats] = runSimulation(sim);
+  const [states, _stats] = runSimulation(sim);
+  assert(states.length > 0);
+  const stop = states[states.length - 1];
 
   assertEquals(results[10].id, e1.id);
   assertEquals(results[20].id, e2.id);
@@ -273,7 +283,7 @@ Deno.test("event process scheduling", () => {
 //   sim.events = scheduleEvent(sim, e1);
 //   assertEquals(sim.events.length, 1);
 
-//   const [stop, _stats] = runSimulation(sim);
+//   const [states, _stats] = runSimulation(sim);
 
 //   assertEquals(stop.events.length, 2);
 

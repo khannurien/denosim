@@ -36,9 +36,9 @@ if (import.meta.main) {
           : undefined;
 
         return {
-          updated: { ...event },
-          state: { ...state },
-          next: nextEvent,
+          updated: event,
+          state,
+          next: nextEvent ? [nextEvent] : [],
         };
       },
     },
@@ -52,7 +52,8 @@ if (import.meta.main) {
   });
   sim.events = scheduleEvent(sim, e1);
 
-  const [stop, stats] = runSimulation(sim);
+  const [states, stats] = runSimulation(sim);
+  const stop = states[states.length - 1];
 
   console.log(`Simulation ended at ${stop.currentTime}`);
   console.log(`Simulation took: ${stats.duration} ms`);

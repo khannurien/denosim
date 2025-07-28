@@ -29,6 +29,7 @@ export function initializeSimulation(): Simulation {
         return {
           updated: { ...event },
           state: { ...state },
+          next: [],
         };
       },
     },
@@ -52,8 +53,10 @@ export function initializeSimulation(): Simulation {
  * Stores intermediate simulation state (instances).
  * Returns the last simulation instance along with statistics about the simulation run.
  */
-export function runSimulation(sim: Simulation): [Simulation, SimulationStats] {
-  const states: Simulation[] = [sim];
+export function runSimulation(
+  sim: Simulation,
+): [Simulation[], SimulationStats] {
+  const states: Simulation[] = [{ ...sim }];
 
   const start = performance.now();
 
@@ -69,7 +72,7 @@ export function runSimulation(sim: Simulation): [Simulation, SimulationStats] {
   const end = performance.now();
 
   return [
-    states[states.length - 1],
+    states,
     {
       duration: end - start, // Return real-world time taken for simulation
     },
@@ -107,8 +110,7 @@ function step(sim: Simulation, event: Event): Simulation {
   // Advance simulation time to this event's scheduled time
   const nextSim = { ...sim, currentTime: event.scheduledAt };
 
-  // Handle the event by executing its process, which may yield a new event
-  // TODO: Multiple events? (i.e. process next step + callback invocation?)
+  // Handle the event by executing its process, which may yield new events
   const { updated, state, next } = handleEvent(nextSim, event);
 
   // Update the event's process state in the simulation container
@@ -119,9 +121,11 @@ function step(sim: Simulation, event: Event): Simulation {
     (previous.id === event.id) ? updated : previous
   );
 
-  // Schedule the next event yielded by the current process if necessary
+  // Schedule the next events yielded by the current process if necessary
   if (next) {
-    nextSim.events = scheduleEvent(nextSim, next);
+    for (const nextEvent of next) {
+      nextSim.events = scheduleEvent(nextSim, nextEvent);
+    }
   }
 
   return nextSim;
@@ -157,21 +161,14 @@ function handleEvent(
   // Execute next step of the process
   const process = handler(sim, event, state);
 
-  // If the process yielded a new event, schedule process continuation.
-  // TODO: We could automate setting the `parent` property here:
-  // - When the event is tied to a process that will be running for at least another step,
-  //   store the parent event ID into the next event to retrieve process state in the future;
-  // - Otherwise, the event spawns a new process that needs its state initialized:
-  //   do not store parent event ID, make it a root event.
+  // If the process yielded a new event, schedule process continuation
   return {
+    ...process,
     updated: {
       ...event,
       finishedAt: sim.currentTime,
       status: EventState.Finished,
     },
-    state: { ...process.state },
-    // next: process.next ? { ...process.next, parent: event.id } : undefined,
-    next: process.next ? { ...process.next } : undefined,
   };
 }
 

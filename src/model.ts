@@ -166,7 +166,7 @@ export interface ProcessStep<
    * TODO: Can be leveraged to spawn a new process
    * TODO: State will be initialized on process start
    */
-  next?: Event<T>;
+  next: Event<T>[];
 }
 
 /**
