@@ -1,64 +1,55 @@
-import { ProcessDefinition, ProcessHandler } from "../src/model.ts";
 import {
   createEvent,
   initializeSimulation,
+  ProcessDefinition,
   registerProcess,
   runSimulation,
   scheduleEvent,
-} from "../src/simulation.ts";
+  StateData,
+} from "../mod.ts";
 
 if (import.meta.main) {
   const sim = initializeSimulation();
 
-  let FOO = 0;
+  interface FooData extends StateData {
+    "count": number;
+  }
 
-  const startProcess: ProcessHandler = (sim, event, state) => {
-    if (sim.currentTime < 10000000) {
-      const newState = {
-        ...state,
-        step: "continue",
-        data: { ...state.data },
-      };
-      const nextEvent = { ...event };
-
-      return {
-        updated: { ...event },
-        state: {
-          ...state,
-          step: "start",
-          data: { ...state.data },
-        },
-        next: createEvent(sim, sim.currentTime + 1, "timeout", {
-          at: sim.currentTime + 1,
-          duration: 1,
-          callback: "foo",
-        }),
-      };
-    } else {
-      return {
-        updated: { ...event },
-        state: {
-          ...state,
-          step: "start",
-          data: { ...state.data },
-        },
-      };
-    }
+  const fooData: FooData = {
+    count: 0,
   };
 
-  const foo: ProcessDefinition = {
+  const foo: ProcessDefinition<{
+    none: FooData;
+  }> = {
     type: "foo",
-    initial: "start",
+    initial: "none",
     states: {
-      "start": startProcess,
-      "continue": continueProcess,
-      "stop": emptyProcess,
+      none(sim, event, state) {
+        console.log(`[${sim.currentTime}] Got ${state.data["count"]++}`);
+
+        const nextEvent = sim.currentTime < 10000
+          ? createEvent(sim, {
+            scheduledAt: sim.currentTime + 1,
+            process: { type: "foo", data: state.data },
+          })
+          : undefined;
+
+        return {
+          updated: { ...event },
+          state: { ...state },
+          next: nextEvent,
+        };
+      },
     },
   };
 
   sim.registry = registerProcess(sim, foo);
 
-  const e1 = createEvent(sim, 0, "foo");
+  const e1 = createEvent(sim, {
+    scheduledAt: 0,
+    process: { type: "foo", data: fooData },
+  });
   sim.events = scheduleEvent(sim, e1);
 
   const [stop, stats] = runSimulation(sim);

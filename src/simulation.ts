@@ -53,12 +53,11 @@ export function initializeSimulation(): Simulation {
  * Returns the last simulation instance along with statistics about the simulation run.
  */
 export function runSimulation(sim: Simulation): [Simulation, SimulationStats] {
-  let current = { ...sim };
   const start = performance.now();
   // TODO: Termination conditions
   // - End time (simulation stops when currentTime >= endTime)
   // - End event (simulation stops when endEvent.status === EventState.Finished)
-  const final = run(current);
+  const final = run({ ...sim });
   const end = performance.now();
 
   return [
