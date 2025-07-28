@@ -56,6 +56,7 @@ export function initializeSimulation(): Simulation {
 export function runSimulation(
   sim: Simulation,
 ): [Simulation[], SimulationStats] {
+  // TODO: Would a Record<Timestamp, Simulation> be more efficient?
   const states: Simulation[] = [{ ...sim }];
 
   const start = performance.now();

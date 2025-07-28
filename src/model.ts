@@ -140,12 +140,12 @@ export interface ProcessDefinition<M extends StepStateMap> {
   steps: StepsDefinition<M>;
 }
 
-/** 
+/**
  * Attached to an event that will spawn a process when handled.
  * FIXME: Not clear in current implementation:
  * - Process type and state can be passed through an event, but are ignored if the event has a parent
  * - In that case, process type and state are actually retrieved through the parent event ID
-*/
+ */
 export interface ProcessCall<T extends StateData = StateData> {
   /** Unique process type identifier */
   type: ProcessType;
