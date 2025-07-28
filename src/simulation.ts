@@ -49,42 +49,50 @@ export function initializeSimulation(): Simulation {
 /**
  * Runs the discrete-event simulation until no more events remain to process.
  * The simulation processes events in chronological order (earliest first).
- * FIXME: The simulation instance is updated at each simulation step.
+ * Stores intermediate simulation state (instances).
  * Returns the last simulation instance along with statistics about the simulation run.
  */
 export function runSimulation(sim: Simulation): [Simulation, SimulationStats] {
+  const states: Simulation[] = [sim];
+
   const start = performance.now();
+
   // TODO: Termination conditions
   // - End time (simulation stops when currentTime >= endTime)
   // - End event (simulation stops when endEvent.status === EventState.Finished)
-  const final = run({ ...sim });
+  while (true) {
+    const [next, continuation] = run(states[states.length - 1]);
+    states.push(next);
+    if (!continuation) break;
+  }
+
   const end = performance.now();
 
   return [
-    final,
+    states[states.length - 1],
     {
       duration: end - start, // Return real-world time taken for simulation
     },
   ];
 }
 
-function run(sim: Simulation): Simulation {
+function run(current: Simulation): [Simulation, boolean] {
   // Get all scheduled events that haven't been processed yet,
   // sorted in descending order so we can efficiently pop the earliest event
-  const eventsTodo = sim.events.filter((event) =>
-    (event.scheduledAt >= sim.currentTime) &&
+  const eventsTodo = current.events.filter((event) =>
+    (event.scheduledAt >= current.currentTime) &&
     (event.status === EventState.Scheduled)
   ).sort((a, b) => b.scheduledAt - a.scheduledAt);
 
   const event = eventsTodo.pop();
 
   if (!event) {
-    return sim; // No more events to process
+    return [current, false]; // No more events to process
   }
 
-  const nextStep = step(sim, event);
+  const next = step(current, event);
 
-  return run(nextStep);
+  return [next, true];
 }
 
 /**
