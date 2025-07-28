@@ -122,10 +122,8 @@ function step(sim: Simulation, event: Event): Simulation {
   );
 
   // Schedule the next events yielded by the current process if necessary
-  if (next) {
-    for (const nextEvent of next) {
-      nextSim.events = scheduleEvent(nextSim, nextEvent);
-    }
+  for (const nextEvent of next) {
+    nextSim.events = scheduleEvent(nextSim, nextEvent);
   }
 
   return nextSim;
