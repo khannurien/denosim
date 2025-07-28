@@ -2,6 +2,8 @@
  * Core simulation container that maintains:
  * - The current virtual time of the simulation
  * - All events that have been scheduled
+ * - A process definition registry for all processes available in the simulation
+ * - The current state of all running processes
  */
 export interface Simulation<R extends ProcessRegistry = ProcessRegistry> {
   /**
@@ -21,12 +23,16 @@ export interface Simulation<R extends ProcessRegistry = ProcessRegistry> {
   events: Event[];
 
   /**
-   * TODO:
+   * Registry of all process definitions available in the simulation.
+   * Maps process names to their definitions.
+   * Allows dynamic process registration and lookup.
+   * Includes a default `none` process for events without associated processes.
    */
   registry: R;
 
   /**
-   * TODO:
+   * Current simulation state of all running processes.
+   * Maps process IDs to their current state data.
    */
   state: Record<string, ProcessState>;
 }
@@ -44,7 +50,7 @@ export enum EventState {
 
   /**
    * Event has been scheduled for future processing.
-   * Will be executed when simulation time reaches scheduledAt.
+   * Will be executed when simulation time reaches `scheduledAt`.
    */
   Scheduled = "Scheduled",
 
@@ -57,13 +63,15 @@ export enum EventState {
 
 /**
  * Represents a discrete event in the simulation system.
- * Events are immutable - state changes create new instances.
+ * Events can be tied to processes, which define their behavior.
+ * Events are immutable - state changes are tied to new event instances.
+ * Events can have parent-child relationships in the context of their process.
  */
 export interface Event<T extends StateData = StateData> {
   /** Unique identifier for the event */
   id: EventID;
 
-  /** TODO: */
+  /** Optional parent event ID; defines a graph of events across processes */
   parent?: EventID;
 
   /** Current lifecycle state of the event */
@@ -71,7 +79,7 @@ export interface Event<T extends StateData = StateData> {
 
   /**
    * When the event was initially created.
-   * Represents the simulation time when createEvent() was called.
+   * Represents the simulation time when `createEvent()` was called.
    */
   firedAt: number;
 
@@ -83,74 +91,97 @@ export interface Event<T extends StateData = StateData> {
 
   /**
    * When the event completed processing.
-   * Only populated when status = EventState.Finished
+   * Only populated when `status` is `EventState.Finished`.
    */
   finishedAt?: number;
 
   /**
-   * TODO:
-   * TODO: Defaults to `none`, which calls a no-op process.
+   * Type of process to execute when event is handled.
+   * Defaults to `none`, which calls a no-op process.
+   * Optional data can be used to initialize the process state.
    */
   process: ProcessCall<T>;
 }
 
-/** TODO: */
+/** Unique identifier for an event. */
 export type EventID = string;
 
-/** TODO: */
+/** Unique identifier for a process. */
 export type ProcessType = string;
 
-/** TODO: */
+/** Identifier for a step within a process. Unique at process level. */
 export type StepType = string;
 
-/** TODO: */
+/** Represents any data that can be stored in the simulation state. **/
 export type StateData = Record<string, unknown>;
 
-/** TODO: */
-export type StepStateMap = Record<StepType, StateData>;
+/** Used to specify and narrow the types of state data for a given step. */
+type StateInput = StateData;
+type StateOutput = StateData[];
 
-/** TODO: */
-export type StatesDefinition<T extends StepStateMap> = {
-  [K in keyof T]: ProcessHandler<T[K]>;
+/** Maps process steps to their input and output state data types. */
+export type StepStateMap<
+  I extends StateInput = StateInput,
+  O extends StateOutput = StateOutput,
+> = Record<StepType, [I, O]>;
+
+/** Dynamically maps process steps to their corresponding handlers. */
+export type StepsDefinition<T extends StepStateMap> = {
+  [K in keyof T]: ProcessHandler<T[K][0], T[K][1]>;
 };
 
-/** TODO: */
+/** TODO: Not sure if that is useful... */
 type ProcessRegistry = Record<string, ProcessDefinition<StepStateMap>>;
 
-/** TODO: */
-export interface ProcessDefinition<T extends StepStateMap> {
+/** Defines a process with a unique type, initial step, and step definitions. **/
+export interface ProcessDefinition<M extends StepStateMap> {
   type: ProcessType;
-  initial: keyof T;
-  states: StatesDefinition<T>;
+  initial: keyof M;
+  steps: StepsDefinition<M>;
 }
 
-/** TODO: */
+/** 
+ * Attached to an event that will spawn a process when handled.
+ * FIXME: Not clear in current implementation:
+ * - Process type and state can be passed through an event, but are ignored if the event has a parent
+ * - In that case, process type and state are actually retrieved through the parent event ID
+*/
 export interface ProcessCall<T extends StateData = StateData> {
-  /** TODO: */
+  /** Unique process type identifier */
   type: ProcessType;
 
   /**
    * Optional data that can be passed to the process.
-   * TODO: Can be used to initialize process state.
+   * Can be used to initialize process state.
    */
   data?: T;
 }
 
 /**
- * TODO:
+ * A process handler is a function that executes the processing logic associated with an event, and returns a
+ * process step.
+ * Knowing the current simulation state, it is capable of computing the state of the process's next step.
  */
-export type ProcessHandler<T extends StateData = StateData> = (
+export type ProcessHandler<
+  I extends StateInput = StateInput,
+  O extends StateOutput = StateOutput,
+> = (
   sim: Simulation,
-  event: Event<T>,
-  state: ProcessState<T>,
-) => ProcessStep<T>;
+  event: Event<I>,
+  state: ProcessState<I>,
+) => ProcessStep<I, O>;
 
 /**
  * TODO: Process level
  */
 export interface ProcessState<T extends StateData = StateData> {
+  /** Unique process type identifier */
   type: ProcessType;
+
+  /** Current step of the process */
   step: StepType;
+
+  /** Current state data for the process */
   data: T;
 }
 
@@ -158,22 +189,27 @@ export interface ProcessState<T extends StateData = StateData> {
  * TODO: Scheduler level
  */
 export interface ProcessStep<
-  T extends StateData = StateData,
+  I extends StateInput = StateInput,
+  O extends StateOutput = StateOutput,
 > {
-  updated: Event<T>;
-  state: ProcessState<T>;
+  /** TODO: */
+  updated: Event<I>;
+
+  /** TODO: */
+  state: ProcessState<I>;
+
   /**
-   * TODO: Can be leveraged to spawn a new process
-   * TODO: State will be initialized on process start
+   * Mapped tuple type:
+   * - If `type O = [A, B, C]`, resolves to [Event<A>, Event<B>, Event<C>];
+   * - Mapped types over tuples preserve order and length.
    */
-  next: Event<T>[];
+  next: { [K in keyof O]: Event<O[K]> };
 }
 
 /**
  * Statistics about a simulation run.
  * Currently tracks only duration, but could be extended with:
- * - Events processed count
- * - Average event latency
+ * - Average process latency
  * - Other performance metrics
  */
 export interface SimulationStats {
@@ -182,7 +218,10 @@ export interface SimulationStats {
 }
 
 /**
- * TODO:
+ * Object used to create new events in the simulation.
+ * It must define a time to schedule the event at.
+ * If the event has a parent, it will inherit the parent's process.
+ * If no process is defined, the event will run the `none` process.
  */
 export interface CreateEventOptions<T extends StateData = StateData> {
   parent?: EventID;

@@ -20,12 +20,12 @@ import {
  */
 export function initializeSimulation(): Simulation {
   const emptyProcess: ProcessDefinition<{
-    none: StateData;
+    none: [StateData, []];
   }> = {
     type: "none",
     initial: "none",
-    states: {
-      none(_sim, event, state): ProcessStep {
+    steps: {
+      none(_sim, event, state) {
         return {
           updated: { ...event },
           state: { ...state },
@@ -50,7 +50,7 @@ export function initializeSimulation(): Simulation {
 /**
  * Runs the discrete-event simulation until no more events remain to process.
  * The simulation processes events in chronological order (earliest first).
- * Stores intermediate simulation state (instances).
+ * Stores intermediate simulation state (instances) for each event processed.
  * Returns the last simulation instance along with statistics about the simulation run.
  */
 export function runSimulation(
@@ -79,6 +79,10 @@ export function runSimulation(
   ];
 }
 
+/**
+ * Returns the next simulation state after processing the current event.
+ * Returns a boolean indicating whether the simulation should continue.
+ */
 function run(current: Simulation): [Simulation, boolean] {
   // Get all scheduled events that haven't been processed yet,
   // sorted in descending order so we can efficiently pop the earliest event
@@ -135,14 +139,19 @@ function step(sim: Simulation, event: Event): Simulation {
  * Returns the intermediate state for the completed simulation step:
  * - Handled event with updated status and timestamps;
  * - Updated state for the process associated to the event;
- * - Optional next event for multi-step processes.
+ * - Optional next events (for multi-step processes and/or spawning new processes).
  */
 function handleEvent(
   sim: Simulation,
   event: Event,
 ): ProcessStep {
+  // TODO: Not a fan of this...
+  const parent = event.parent && event.parent in sim.state
+    ? sim.state[event.parent]
+    : undefined;
+
   // Retrieve process definition from the registry
-  const definition = sim.registry[event.process.type];
+  const definition = sim.registry[parent ? parent.type : event.process.type];
 
   // Get current process state (tied to the parent event) or initialize it
   const state = event.parent && event.parent in sim.state
@@ -154,7 +163,7 @@ function handleEvent(
     };
 
   // Retrieve the process handler according to the state
-  const handler = definition.states[state.step];
+  const handler = definition.steps[state.step];
 
   // Execute next step of the process
   const process = handler(sim, event, state);
@@ -190,13 +199,13 @@ export function registerProcess<
 }
 
 /**
- * Creates a new event with:
+ * Returns a new event with:
  * - Unique ID
- * - Optional parent event ID (defaults to undefined)
+ * - Optional parent event ID (defaults to `undefined`)
  * - Initial event state set to `Fired`
  * - Timestamps for when it was created and scheduled
- * - Optional process to run on event handling (defaults to empty process)
- * - Optional data to carry, e.g. to initialize process state (defaults to undefined)
+ * - Optional process to run on event handling (defaults to `none`, the dummy process)
+ * - Optional data to carry, e.g. to initialize process state (defaults to `undefined`)
  */
 export function createEvent<T extends StateData>(
   sim: Simulation,

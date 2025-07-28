@@ -20,25 +20,33 @@ if (import.meta.main) {
   };
 
   const foo: ProcessDefinition<{
-    none: FooData;
+    start: [FooData, [FooData]];
+    stop: [FooData, []];
   }> = {
     type: "foo",
-    initial: "none",
-    states: {
-      none(sim, event, state) {
+    initial: "start",
+    steps: {
+      start(sim, event, state) {
         console.log(`[${sim.currentTime}] Got ${state.data["count"]++}`);
 
-        const nextEvent = sim.currentTime < 10000
-          ? createEvent(sim, {
-            scheduledAt: sim.currentTime + 1,
-            process: { type: "foo", data: state.data },
-          })
-          : undefined;
+        return {
+          updated: event,
+          state: { ...state, step: sim.currentTime < 10000 ? "start" : "stop" },
+          next: [
+            createEvent(sim, {
+              parent: event.id,
+              scheduledAt: sim.currentTime + 1,
+            }),
+          ],
+        };
+      },
+      stop(sim, event, state) {
+        console.log(`[${sim.currentTime}] Got ${state.data["count"]}`);
 
         return {
           updated: event,
           state,
-          next: nextEvent ? [nextEvent] : [],
+          next: [],
         };
       },
     },
