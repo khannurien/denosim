@@ -15,8 +15,8 @@ import {
  * Initializes a new simulation instance with:
  * - `currentTime` set to 0 (starting point of simulation)
  * - Empty events array (no scheduled events)
- * - TODO: Populate process registry
- * - TODO: Empty state array
+ * - Process registry populated with a dummy process (`none`)
+ * - Empty state array (no running processes)
  */
 export function initializeSimulation(): Simulation {
   const emptyProcess: ProcessDefinition<{
@@ -53,37 +53,39 @@ export function initializeSimulation(): Simulation {
  * Returns the last simulation instance along with statistics about the simulation run.
  */
 export function runSimulation(sim: Simulation): [Simulation, SimulationStats] {
+  let current = { ...sim };
   const start = performance.now();
-
   // TODO: Termination conditions
   // - End time (simulation stops when currentTime >= endTime)
   // - End event (simulation stops when endEvent.status === EventState.Finished)
-  while (true) {
-    // Get all scheduled events that haven't been processed yet,
-    // sorted in descending order so we can efficiently pop the earliest event
-    const eventsTodo = sim.events.filter((event) =>
-      (event.scheduledAt >= sim.currentTime) &&
-      (event.status === EventState.Scheduled)
-    ).sort((a, b) => b.scheduledAt - a.scheduledAt);
-
-    const event = eventsTodo.pop();
-
-    if (!event) {
-      break; // No more events to process
-    }
-
-    // FIXME: Review logic -- avoid mutating function parameter
-    sim = step(sim, event);
-  }
-
+  const final = run(current);
   const end = performance.now();
 
   return [
-    sim,
+    final,
     {
       duration: end - start, // Return real-world time taken for simulation
     },
   ];
+}
+
+function run(sim: Simulation): Simulation {
+  // Get all scheduled events that haven't been processed yet,
+  // sorted in descending order so we can efficiently pop the earliest event
+  const eventsTodo = sim.events.filter((event) =>
+    (event.scheduledAt >= sim.currentTime) &&
+    (event.status === EventState.Scheduled)
+  ).sort((a, b) => b.scheduledAt - a.scheduledAt);
+
+  const event = eventsTodo.pop();
+
+  if (!event) {
+    return sim; // No more events to process
+  }
+
+  const nextStep = step(sim, event);
+
+  return run(nextStep);
 }
 
 /**
@@ -99,7 +101,7 @@ function step(sim: Simulation, event: Event): Simulation {
   const nextSim = { ...sim, currentTime: event.scheduledAt };
 
   // Handle the event by executing its process, which may yield a new event
-  // FIXME: Multiple events? (i.e. process next step + callback invocation?)
+  // TODO: Multiple events? (i.e. process next step + callback invocation?)
   const { updated, state, next } = handleEvent(nextSim, event);
 
   // Update the event's process state in the simulation container
@@ -120,17 +122,20 @@ function step(sim: Simulation, event: Event): Simulation {
 
 /**
  * Processes an event by executing its associated process if any.
- * TODO: Handles both immediate completion and yielding of new events.
- * TODO: Returns the completed event with updated status and timestamps.
+ * Handles both immediate completion and yielding of new events.
+ * Returns the intermediate state for the completed simulation step:
+ * - Handled event with updated status and timestamps;
+ * - Updated state for the process associated to the event;
+ * - Optional next event for multi-step processes.
  */
 function handleEvent(
   sim: Simulation,
   event: Event,
 ): ProcessStep {
-  // TODO: Retrieve process definition from the registry
+  // Retrieve process definition from the registry
   const definition = sim.registry[event.process.type];
 
-  // TODO: Get current process state (tied to the parent event) or initialize it
+  // Get current process state (tied to the parent event) or initialize it
   const state = event.parent && event.parent in sim.state
     ? { ...sim.state[event.parent] }
     : {
@@ -139,19 +144,18 @@ function handleEvent(
       data: { ...event.process.data },
     };
 
+  // Retrieve the process handler according to the state
   const handler = definition.states[state.step];
 
-  console.log(handler);
-
-  // TODO: Execute next step of the process
+  // Execute next step of the process
   const process = handler(sim, event, state);
 
-  // TODO: If the original process yielded a new event, schedule process continuation
-  // FIXME: We could automate setting the `parent` property here:
-  // When the event is tied to a process that will be running for at least another step
-  // Store the parent event ID into the next event to retrieve process state in the future
-  // Otherwise, the event spawns a new process that needs its state initialized
-  // Do not store parent event ID, make it a root event
+  // If the process yielded a new event, schedule process continuation.
+  // TODO: We could automate setting the `parent` property here:
+  // - When the event is tied to a process that will be running for at least another step,
+  //   store the parent event ID into the next event to retrieve process state in the future;
+  // - Otherwise, the event spawns a new process that needs its state initialized:
+  //   do not store parent event ID, make it a root event.
   return {
     updated: {
       ...event,
@@ -165,7 +169,9 @@ function handleEvent(
 }
 
 /**
- * TODO:
+ * Registers a process for further use during simulation.
+ * Processes are spawned on event handling (see `CreateEventOptions`).
+ * Returns the updated process registry.
  */
 export function registerProcess<
   R extends Record<string, ProcessDefinition<StepStateMap>>,
@@ -184,11 +190,11 @@ export function registerProcess<
 /**
  * Creates a new event with:
  * - Unique ID
- * - TODO: Optional parent event ID (defaults to undefined)
- * - Initial state set to `Fired`
+ * - Optional parent event ID (defaults to undefined)
+ * - Initial event state set to `Fired`
  * - Timestamps for when it was created and scheduled
  * - Optional process to run on event handling (defaults to empty process)
- * - Optional item to carry (defaults to undefined)
+ * - Optional data to carry, e.g. to initialize process state (defaults to undefined)
  */
 export function createEvent<T extends StateData>(
   sim: Simulation,
