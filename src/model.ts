@@ -103,29 +103,39 @@ export interface Event<T extends StateData = StateData> {
   process: ProcessCall<T>;
 }
 
-/** Unique identifier for an event. */
+/** Timestamp for simulation clock */
+export type Timestamp = number;
+
+/** Unique identifier for an event */
 export type EventID = string;
 
-/** Unique identifier for a process. */
+/** Unique identifier for a process */
 export type ProcessType = string;
 
-/** Identifier for a step within a process. Unique at process level. */
+/** Identifier for a step within a process. Unique at process level */
 export type StepType = string;
 
-/** Represents any data that can be stored in the simulation state. **/
+/** Represents any data that can be stored in the simulation state */
 export type StateData = Record<string, unknown>;
 
-/** Used to specify and narrow the types of state data for a given step. */
+/** 
+ * Used to specify and narrow the type of input state data for a process.
+ * This is the type of the state data that is passed to the process step handler.
+ */
 type StateInput = StateData;
+/** 
+ * Used to specify and narrow the types of output state data for a process.
+ * This is an ordered list of types that map to the `next` events yielded by a process step.
+ */
 type StateOutput = StateData[];
 
-/** Maps process steps to their input and output state data types. */
+/** Maps process steps to their input and output state data types */
 export type StepStateMap<
   I extends StateInput = StateInput,
   O extends StateOutput = StateOutput,
 > = Record<StepType, [I, O]>;
 
-/** Dynamically maps process steps to their corresponding handlers. */
+/** Dynamically maps process steps to their corresponding handlers */
 export type StepsDefinition<T extends StepStateMap> = {
   [K in keyof T]: ProcessHandler<T[K][0], T[K][1]>;
 };
@@ -133,7 +143,7 @@ export type StepsDefinition<T extends StepStateMap> = {
 /** TODO: Not sure if that is useful... */
 type ProcessRegistry = Record<string, ProcessDefinition<StepStateMap>>;
 
-/** Defines a process with a unique type, initial step, and step definitions. **/
+/** Defines a process with a unique type, initial step, and step definitions */
 export interface ProcessDefinition<M extends StepStateMap> {
   type: ProcessType;
   initial: keyof M;
