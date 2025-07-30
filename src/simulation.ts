@@ -5,6 +5,7 @@ import {
   ProcessDefinition,
   ProcessStep,
   ProcessType,
+  RunSimulationOptions,
   Simulation,
   SimulationStats,
   StateData,
@@ -48,36 +49,71 @@ export function initializeSimulation(): Simulation {
 }
 
 /**
- * Runs the discrete-event simulation until no more events remain to process.
+ * Runs the discrete-event simulation until:
+ * - either no more events remain to process;
+ * - or the simulation time reaches at least the specified `until` time;
+ * - or the simulation reaches a point where the specified `until` event is processed.
  * The simulation processes events in chronological order (earliest first).
  * Stores intermediate simulation state (instances) for each event processed.
- * Returns the last simulation instance along with statistics about the simulation run.
+ * TODO: Publishes states as they go on the optional socket.
+ * Returns all the instances along with statistics about the simulation run.
  */
-export function runSimulation(
+export async function runSimulation(
   sim: Simulation,
-): [Simulation[], SimulationStats] {
-  // TODO: Would a Record<Timestamp, Simulation> be more efficient?
-  const states: Simulation[] = [{ ...sim }];
-
+  options: RunSimulationOptions,
+): Promise<[Simulation[], SimulationStats]> {
   const start = performance.now();
 
-  // TODO: Termination conditions
-  // - End time (simulation stops when currentTime >= endTime)
-  // - End event (simulation stops when endEvent.status === EventState.Finished)
-  while (true) {
-    const [next, continuation] = run(states[states.length - 1]);
-    states.push(next);
-    if (!continuation) break;
-  }
+  const states = await runWithDelay({ ...sim }, options);
 
   const end = performance.now();
 
   return [
-    states,
+    [{ ...sim }, ...states],
     {
+      end: states[states.length - 1].currentTime, // Return simulation time at end of run
       duration: end - start, // Return real-world time taken for simulation
     },
   ];
+}
+
+async function runWithDelay(
+  state: Simulation,
+  options: RunSimulationOptions,
+): Promise<Simulation[]> {
+  const [next, continuation] = run(state);
+
+  if (!continuation || shouldTerminate(next, options)) return [next];
+  await delay(options.rate);
+
+  try {
+    const result = await runWithDelay(next, options);
+    return [next, ...result];
+  } catch (error) {
+    throw error;
+  }
+}
+
+function delay(rate?: number): Promise<void> {
+  return new Promise((resolve) =>
+    setTimeout(resolve, rate && rate > 0 ? 1000 / rate : 0)
+  );
+}
+
+function shouldTerminate(
+  sim: Simulation,
+  options: RunSimulationOptions,
+): boolean {
+  const untilTime = options.untilTime;
+  const timeMet = untilTime !== undefined &&
+    sim.currentTime >= untilTime;
+
+  const untilEvent = options.untilEvent;
+  const eventMet = untilEvent !== undefined &&
+    sim.events.find((event) => event.id === untilEvent.id)?.status ===
+      EventState.Finished;
+
+  return timeMet || eventMet;
 }
 
 /**

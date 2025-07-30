@@ -1,4 +1,4 @@
-import { assert, assertEquals, assertThrows } from "@std/assert";
+import { assert, assertEquals, assertRejects, assertThrows } from "@std/assert";
 import {
   createEvent,
   Event,
@@ -11,7 +11,7 @@ import {
   StateData,
 } from "../mod.ts";
 
-Deno.test("basic event scheduling", () => {
+Deno.test("basic event scheduling", async () => {
   const sim = initializeSimulation();
 
   const e1 = createEvent(sim, { scheduledAt: 10 });
@@ -20,7 +20,7 @@ Deno.test("basic event scheduling", () => {
   sim.events = scheduleEvent(sim, e1);
   assertEquals(sim.events.length, 1);
 
-  const [states, _stats] = runSimulation(sim);
+  const [states, _stats] = await runSimulation(sim, {});
   assert(states.length > 0);
   const stop = states[states.length - 1];
 
@@ -29,20 +29,20 @@ Deno.test("basic event scheduling", () => {
   assert(stop.events.every((event) => event.status == EventState.Finished));
 });
 
-Deno.test("zero-duration events", () => {
+Deno.test("zero-duration events", async () => {
   const sim = initializeSimulation();
 
   const e1 = createEvent(sim, { scheduledAt: sim.currentTime });
   sim.events = scheduleEvent(sim, e1);
 
-  const [states, _stats] = runSimulation(sim);
+  const [states, _stats] = await runSimulation(sim, {});
   assert(states.length > 0);
   const stop = states[states.length - 1];
 
   assertEquals(stop.events[0].finishedAt, 0);
 });
 
-Deno.test("basic out of order scheduling", () => {
+Deno.test("basic out of order scheduling", async () => {
   const sim = initializeSimulation();
 
   const e1 = createEvent(sim, { scheduledAt: 10 });
@@ -55,7 +55,7 @@ Deno.test("basic out of order scheduling", () => {
   sim.events = scheduleEvent(sim, e1);
   assertEquals(sim.events.length, 3);
 
-  const [states, _stats] = runSimulation(sim);
+  const [states, _stats] = await runSimulation(sim, {});
   assert(states.length > 0);
   const stop = states[states.length - 1];
 
@@ -63,7 +63,7 @@ Deno.test("basic out of order scheduling", () => {
   assert(stop.events.every((event) => event.status == EventState.Finished));
 });
 
-Deno.test("basic event ordering", () => {
+Deno.test("basic event ordering", async () => {
   const sim = initializeSimulation();
 
   const processedOrder: number[] = [];
@@ -102,7 +102,7 @@ Deno.test("basic event ordering", () => {
   sim.events = scheduleEvent(sim, e5);
   sim.events = scheduleEvent(sim, e6);
 
-  const [states, _stats] = runSimulation(sim);
+  const [states, _stats] = await runSimulation(sim, {});
   assert(states.length > 0);
   const stop = states[states.length - 1];
 
@@ -142,12 +142,12 @@ Deno.test("scheduling events in the past", () => {
   });
   sim.events = scheduleEvent(sim, e2);
 
-  assertThrows(() => {
-    const [_states, _stats] = runSimulation(sim);
+  assertRejects(async () => {
+    const [_states, _stats] = await runSimulation(sim, {});
   });
 });
 
-Deno.test("event process scheduling", () => {
+Deno.test("event process scheduling", async () => {
   const sim = initializeSimulation();
 
   const results: Record<number, Event> = {};
@@ -180,7 +180,7 @@ Deno.test("event process scheduling", () => {
   sim.events = scheduleEvent(sim, e3);
   assertEquals(sim.events.length, 3);
 
-  const [states, _stats] = runSimulation(sim);
+  const [states, _stats] = await runSimulation(sim, {});
   assert(states.length > 0);
   const stop = states[states.length - 1];
 
@@ -189,4 +189,64 @@ Deno.test("event process scheduling", () => {
   assertEquals(results[30].id, e3.id);
 
   assert(stop.events.every((event) => event.status == EventState.Finished));
+});
+
+Deno.test("simulation until time condition", async () => {
+  const sim = initializeSimulation();
+
+  const e1 = createEvent(sim, { scheduledAt: 10 });
+  const e2 = createEvent(sim, { scheduledAt: 20 });
+  const e3 = createEvent(sim, { scheduledAt: 30 });
+  sim.events = scheduleEvent(sim, e1);
+  sim.events = scheduleEvent(sim, e2);
+  sim.events = scheduleEvent(sim, e3);
+
+  const [states, stats] = await runSimulation(sim, { untilTime: 20 });
+
+  assertEquals(stats.end, 20);
+
+  assert(states.length > 0);
+  const stop = states[states.length - 1];
+  assertEquals(
+    stop.events.find((event) => event.id === e1.id)?.status,
+    EventState.Finished,
+  );
+  assertEquals(
+    stop.events.find((event) => event.id === e2.id)?.status,
+    EventState.Finished,
+  );
+  assertEquals(
+    stop.events.find((event) => event.id === e3.id)?.status,
+    EventState.Scheduled,
+  );
+});
+
+Deno.test("simulation until event condition", async () => {
+  const sim = initializeSimulation();
+
+  const e1 = createEvent(sim, { scheduledAt: 10 });
+  const e2 = createEvent(sim, { scheduledAt: 20 });
+  const e3 = createEvent(sim, { scheduledAt: 30 });
+  sim.events = scheduleEvent(sim, e1);
+  sim.events = scheduleEvent(sim, e2);
+  sim.events = scheduleEvent(sim, e3);
+
+  const [states, stats] = await runSimulation(sim, { untilEvent: e2 });
+
+  assertEquals(stats.end, 20);
+
+  assert(states.length > 0);
+  const stop = states[states.length - 1];
+  assertEquals(
+    stop.events.find((event) => event.id === e1.id)?.status,
+    EventState.Finished,
+  );
+  assertEquals(
+    stop.events.find((event) => event.id === e2.id)?.status,
+    EventState.Finished,
+  );
+  assertEquals(
+    stop.events.find((event) => event.id === e3.id)?.status,
+    EventState.Scheduled,
+  );
 });

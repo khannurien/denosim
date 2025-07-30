@@ -11,7 +11,7 @@ export interface Simulation<R extends ProcessRegistry = ProcessRegistry> {
    * Represents the timestamp up to which the simulation has processed.
    * Measured in arbitrary time units (could be steps, seconds, etc.).
    */
-  currentTime: number;
+  currentTime: Timestamp;
 
   /**
    * Queue of all events in the system.
@@ -81,19 +81,19 @@ export interface Event<T extends StateData = StateData> {
    * When the event was initially created.
    * Represents the simulation time when `createEvent()` was called.
    */
-  firedAt: number;
+  firedAt: Timestamp;
 
   /**
    * When the event should be processed.
    * Simulation time will jump directly to this value when processed.
    */
-  scheduledAt: number;
+  scheduledAt: Timestamp;
 
   /**
    * When the event completed processing.
    * Only populated when `status` is `EventState.Finished`.
    */
-  finishedAt?: number;
+  finishedAt?: Timestamp;
 
   /**
    * Type of process to execute when event is handled.
@@ -118,12 +118,12 @@ export type StepType = string;
 /** Represents any data that can be stored in the simulation state */
 export type StateData = Record<string, unknown>;
 
-/** 
+/**
  * Used to specify and narrow the type of input state data for a process.
  * This is the type of the state data that is passed to the process step handler.
  */
 type StateInput = StateData;
-/** 
+/**
  * Used to specify and narrow the types of output state data for a process.
  * This is an ordered list of types that map to the `next` events yielded by a process step.
  */
@@ -218,13 +218,28 @@ export interface ProcessStep<
 
 /**
  * Statistics about a simulation run.
- * Currently tracks only duration, but could be extended with:
+ * Currently tracks only end timestamp and simulation duration, but could be extended with:
  * - Average process latency
  * - Other performance metrics
  */
 export interface SimulationStats {
+  /** Simulation time the simulation ended at */
+  end: Timestamp;
+
   /** Real-world time (in milliseconds) the simulation took to complete */
   duration: number;
+}
+
+/**
+ * Object used to configure a simulation run.
+ * Allows setting the rate of simulation to map wall-clock speed to the virtual passing of time.
+ * Allows setting either an end timestamp or an end event to stop the simulation at specific time.
+ * TODO: Can be used to pass a socket to the simulation to allow for remote control.
+ */
+export interface RunSimulationOptions<T extends StateData = StateData> {
+  rate?: number;
+  untilTime?: Timestamp;
+  untilEvent?: Event<T>;
 }
 
 /**
@@ -235,6 +250,6 @@ export interface SimulationStats {
  */
 export interface CreateEventOptions<T extends StateData = StateData> {
   parent?: EventID;
-  scheduledAt: number;
+  scheduledAt: Timestamp;
   process?: ProcessCall<T>;
 }
