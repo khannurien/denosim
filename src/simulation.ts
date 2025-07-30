@@ -65,49 +65,79 @@ export async function runSimulation(
 ): Promise<[Simulation[], SimulationStats]> {
   const start = performance.now();
 
-  const states = await runWithDelay({ ...sim }, options);
+  const states: Simulation[] = [{ ...sim }];
+
+  while (true) {
+    const current = states[states.length - 1];
+    const [next, continuation] = run(current);
+    states.push(next);
+
+    if (!continuation || shouldTerminate(next, options)) break;
+    if (options.rate) await delay(options.rate);
+  }
 
   const end = performance.now();
 
   return [
-    [{ ...sim }, ...states],
+    states,
     {
-      end: states[states.length - 1].currentTime, // Return simulation time at end of run
-      duration: end - start, // Return real-world time taken for simulation
+      end: states[states.length - 1].currentTime,
+      duration: end - start,
     },
   ];
 }
 
-/**
- * Main simulation loop; asynchronous to support delayed execution.
- * Checks continuation (events remaining) and termination conditions (i.e. timestamp or event).
- * Throws if an error occurs during event processing.
- */
-async function runWithDelay(
-  state: Simulation,
-  options: RunSimulationOptions,
-): Promise<Simulation[]> {
-  const [next, continuation] = run(state);
+// export async function runSimulation(
+//   sim: Simulation,
+//   options: RunSimulationOptions,
+// ): Promise<[Simulation[], SimulationStats]> {
+//   const start = performance.now();
 
-  if (!continuation || shouldTerminate(next, options)) return [next];
-  await delay(options.rate);
+//   // Performance: internally mutate accumulator array (constant heap allocations)
+//   const intermediateStates: Simulation[] = [{ ...sim }];
+//   const states = await runWithDelay({ ...sim }, options, intermediateStates);
 
-  try {
-    const result = await runWithDelay(next, options);
-    return [next, ...result];
-  } catch (error) {
-    throw error;
-  }
-}
+//   const end = performance.now();
+
+//   return [
+//     states,
+//     {
+//       end: states[states.length - 1].currentTime, // Return simulation time at end of run
+//       duration: end - start, // Return real-world time taken for simulation
+//     },
+//   ];
+// }
+
+// /**
+//  * Main simulation loop; asynchronous to support delayed execution.
+//  * Checks continuation (events remaining) and termination conditions (i.e. timestamp or event).
+//  * Throws if an error occurs during event processing.
+//  */
+// async function runWithDelay(
+//   state: Simulation,
+//   options: RunSimulationOptions,
+//   states: Simulation[],
+// ): Promise<Simulation[]> {
+//   const [next, continuation] = run(state);
+
+//   states.push(next);
+
+//   if (!continuation || shouldTerminate(next, options)) return states;
+//   // Performance: avoid unnecessary setTimeout call if no rate is specified
+//   // Yielding an empty Promise avoids unbounded recursion
+//   await ((options.rate) ? delay(options.rate) : Promise.resolve());
+
+//   return runWithDelay(next, options, states);
+// }
 
 /**
  * Helper function to introduce a delay based on desired simulation rate.
  * If rate is not provided, executes immediately.
  * Otherwise, computes delay in milliseconds and times out accordingly.
  */
-function delay(rate?: number): Promise<void> {
+function delay(rate: number): Promise<void> {
   return new Promise((resolve) =>
-    setTimeout(resolve, rate && rate > 0 ? 1000 / rate : 0)
+    setTimeout(resolve, rate > 0 ? 1000 / rate : 0)
   );
 }
 
