@@ -54,6 +54,7 @@ export function initializeSimulation(): Simulation {
  * - or the simulation time reaches at least the specified `until` time;
  * - or the simulation reaches a point where the specified `until` event is processed.
  * The simulation processes events in chronological order (earliest first).
+ * Playback speed can be adjusted by passing a simulation rate (expressed in Hz).
  * Stores intermediate simulation state (instances) for each event processed.
  * TODO: Publishes states as they go on the optional socket.
  * Returns all the instances along with statistics about the simulation run.
@@ -77,6 +78,11 @@ export async function runSimulation(
   ];
 }
 
+/**
+ * Main simulation loop; asynchronous to support delayed execution.
+ * Checks continuation (events remaining) and termination conditions (i.e. timestamp or event).
+ * Throws if an error occurs during event processing.
+ */
 async function runWithDelay(
   state: Simulation,
   options: RunSimulationOptions,
@@ -94,6 +100,11 @@ async function runWithDelay(
   }
 }
 
+/**
+ * Helper function to introduce a delay based on desired simulation rate.
+ * If rate is not provided, executes immediately.
+ * Otherwise, computes delay in milliseconds and times out accordingly.
+ */
 function delay(rate?: number): Promise<void> {
   return new Promise((resolve) =>
     setTimeout(resolve, rate && rate > 0 ? 1000 / rate : 0)
