@@ -182,7 +182,8 @@ export type ProcessHandler<
 ) => ProcessStep<I, O>;
 
 /**
- * TODO: Process level
+ * This is a process-level structure that is used to keep track of a process's progress and data.
+ * It is passed to the process handler of an event to compute the next step of the process.
  */
 export interface ProcessState<T extends StateData = StateData> {
   /** Unique process type identifier */
@@ -196,20 +197,22 @@ export interface ProcessState<T extends StateData = StateData> {
 }
 
 /**
- * TODO: Scheduler level
+ * This is a scheduler-level data structure that is used to keep track of a process's progress and data.
+ * It is returned by the process handler of an event and stored in the simulation state.
  */
 export interface ProcessStep<
   I extends StateInput = StateInput,
   O extends StateOutput = StateOutput,
 > {
-  /** TODO: */
+  /** Process handler returns the original event; scheduler marks it as finished */
   updated: Event<I>;
 
-  /** TODO: */
+  /** Process handler returns the updated state of the process */
   state: ProcessState<I>;
 
   /**
-   * Mapped tuple type:
+   * Process handler returns the next events to be scheduled.
+   * This is expressed as a mapped tuple type:
    * - If `type O = [A, B, C]`, resolves to [Event<A>, Event<B>, Event<C>];
    * - Mapped types over tuples preserve order and length.
    */
