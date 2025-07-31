@@ -57,6 +57,7 @@ export function initializeSimulation(): Simulation {
  * Playback speed can be adjusted by passing a simulation rate (expressed in Hz).
  * Stores intermediate simulation state (instances) for each event processed.
  * TODO: Publishes states as they go on the optional socket.
+ * Checks continuation (events remaining) and termination conditions (i.e. timestamp or event).
  * Returns all the instances along with statistics about the simulation run.
  */
 export async function runSimulation(
@@ -86,49 +87,6 @@ export async function runSimulation(
     },
   ];
 }
-
-// export async function runSimulation(
-//   sim: Simulation,
-//   options: RunSimulationOptions,
-// ): Promise<[Simulation[], SimulationStats]> {
-//   const start = performance.now();
-
-//   // Performance: internally mutate accumulator array (constant heap allocations)
-//   const intermediateStates: Simulation[] = [{ ...sim }];
-//   const states = await runWithDelay({ ...sim }, options, intermediateStates);
-
-//   const end = performance.now();
-
-//   return [
-//     states,
-//     {
-//       end: states[states.length - 1].currentTime, // Return simulation time at end of run
-//       duration: end - start, // Return real-world time taken for simulation
-//     },
-//   ];
-// }
-
-// /**
-//  * Main simulation loop; asynchronous to support delayed execution.
-//  * Checks continuation (events remaining) and termination conditions (i.e. timestamp or event).
-//  * Throws if an error occurs during event processing.
-//  */
-// async function runWithDelay(
-//   state: Simulation,
-//   options: RunSimulationOptions,
-//   states: Simulation[],
-// ): Promise<Simulation[]> {
-//   const [next, continuation] = run(state);
-
-//   states.push(next);
-
-//   if (!continuation || shouldTerminate(next, options)) return states;
-//   // Performance: avoid unnecessary setTimeout call if no rate is specified
-//   // Yielding an empty Promise avoids unbounded recursion
-//   await ((options.rate) ? delay(options.rate) : Promise.resolve());
-
-//   return runWithDelay(next, options, states);
-// }
 
 /**
  * Helper function to introduce a delay based on desired simulation rate.
