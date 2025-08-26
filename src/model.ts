@@ -32,9 +32,12 @@ export interface Simulation<R extends ProcessRegistry = ProcessRegistry> {
 
   /**
    * Current simulation state of all running processes.
-   * Maps process IDs to their current state data.
+   * Maps processes' event ID to their current state data.
    */
-  state: Record<string, ProcessState>;
+  state: Record<EventID, ProcessState>;
+
+  /** TODO: */
+  stores: Record<StoreID, Store>;
 }
 
 /**
@@ -53,6 +56,11 @@ export enum EventState {
    * Will be executed when simulation time reaches `scheduledAt`.
    */
   Scheduled = "Scheduled",
+
+  /**
+   * TODO:
+   */
+  Waiting = "Waiting",
 
   /**
    * Final state indicating the event has been fully processed.
@@ -103,16 +111,29 @@ export interface Event<T extends StateData = StateData> {
   process: ProcessCall<T>;
 }
 
+/**
+ * TODO:
+ */
+export interface Store<T extends StateData = StateData> {
+  id: StoreID;
+  capacity: number;
+  getRequests: Event<T>[];
+  putRequests: Event<T>[];
+}
+
 /** Timestamp for simulation clock */
 export type Timestamp = number;
 
-/** Unique identifier for an event */
+/** Unique, random identifier for an event */
 export type EventID = string;
 
-/** Unique identifier for a process */
+/** Unique, random identifier for a store */
+export type StoreID = string;
+
+/** Unique, user-defined identifier for a process */
 export type ProcessType = string;
 
-/** Identifier for a step within a process. Unique at process level */
+/** User-defined identifier for a step within a process. Unique at process level */
 export type StepType = string;
 
 /** Represents any data that can be stored in the simulation state */
@@ -141,7 +162,7 @@ export type StepsDefinition<T extends StepStateMap> = {
 };
 
 /** TODO: Not sure if that is useful... */
-type ProcessRegistry = Record<string, ProcessDefinition<StepStateMap>>;
+type ProcessRegistry = Record<ProcessType, ProcessDefinition<StepStateMap>>;
 
 /** Defines a process with a unique type, initial step, and step definitions */
 export interface ProcessDefinition<M extends StepStateMap> {
@@ -255,4 +276,11 @@ export interface CreateEventOptions<T extends StateData = StateData> {
   parent?: EventID;
   scheduledAt: Timestamp;
   process?: ProcessCall<T>;
+}
+
+/**
+ * TODO:
+ */
+export interface CreateStoreOptions<T extends StateData = StateData> {
+  capacity?: number;
 }

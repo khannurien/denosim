@@ -43,6 +43,7 @@ export function initializeSimulation(): Simulation {
       "none": emptyProcess,
     },
     state: {},
+    stores: {},
   };
 
   return sim;
@@ -62,7 +63,7 @@ export function initializeSimulation(): Simulation {
  */
 export async function runSimulation(
   sim: Simulation,
-  options: RunSimulationOptions,
+  options?: RunSimulationOptions,
 ): Promise<[Simulation[], SimulationStats]> {
   const start = performance.now();
 
@@ -73,8 +74,8 @@ export async function runSimulation(
     const [next, continuation] = run(current);
     states.push(next);
 
-    if (!continuation || shouldTerminate(next, options)) break;
-    if (options.rate) await delay(options.rate);
+    if (!continuation || (options && shouldTerminate(next, options))) break;
+    if (options?.rate) await delay(options.rate);
   }
 
   const end = performance.now();
@@ -89,7 +90,7 @@ export async function runSimulation(
 }
 
 /**
- * Helper function to introduce a delay based on desired simulation rate.
+ * Helper function to introduce a wall-clock delay based on desired simulation rate (in Hz).
  * If rate is not provided, executes immediately.
  * Otherwise, computes delay in milliseconds and times out accordingly.
  */
@@ -99,6 +100,12 @@ function delay(rate: number): Promise<void> {
   );
 }
 
+/**
+ * Helper function to check simulation termination conditions.
+ * If `untilTime` is provided, terminates when current time is greater than or equal to `untilTime`.
+ * If `untilEvent` is provided, terminates when the event is finished.
+ * Always returns false if neither condition is provided.
+ */
 function shouldTerminate(
   sim: Simulation,
   options: RunSimulationOptions,
@@ -118,16 +125,17 @@ function shouldTerminate(
 /**
  * Returns the next simulation state after processing the current event.
  * Returns a boolean indicating whether the simulation should continue.
+ * Simulation should continue if there are more events to process in queue.
  */
 function run(current: Simulation): [Simulation, boolean] {
   // Get all scheduled events that haven't been processed yet,
   // sorted in descending order so we can efficiently pop the earliest event
-  const eventsTodo = current.events.filter((event) =>
+  const pending = current.events.filter((event) =>
     (event.scheduledAt >= current.currentTime) &&
     (event.status === EventState.Scheduled)
   ).sort((a, b) => b.scheduledAt - a.scheduledAt);
 
-  const event = eventsTodo.pop();
+  const event = pending.pop();
 
   if (!event) {
     return [current, false]; // No more events to process
@@ -204,13 +212,15 @@ function handleEvent(
   // Execute next step of the process
   const process = handler(sim, event, state);
 
-  // If the process yielded a new event, schedule process continuation
+  // TODO: Mark the event as finished unless it is tied to a waiting process
   return {
     ...process,
     updated: {
       ...event,
       finishedAt: sim.currentTime,
-      status: EventState.Finished,
+      status: event.status === EventState.Waiting
+        ? EventState.Waiting
+        : EventState.Finished,
     },
   };
 }

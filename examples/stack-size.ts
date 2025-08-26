@@ -73,7 +73,7 @@ if (import.meta.main) {
   });
   sim.events = scheduleEvent(sim, e1);
 
-  const [states, stats] = await runSimulation(sim, {});
+  const [states, stats] = await runSimulation(sim);
   const stop = states[states.length - 1];
 
   console.log(`Simulation ended at ${stop.currentTime}`);

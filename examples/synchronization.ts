@@ -1,51 +1,113 @@
-// import { timeout } from "../mod.ts";
-// import { Process, Store } from "../src/model.ts";
-// import { createStore, get, put } from "../src/resources.ts";
-// import {
-//   createEvent,
-//   initializeSimulation,
-//   runSimulation,
-//   scheduleEvent,
-// } from "../src/simulation.ts";
+import {
+  createEvent,
+  Event,
+  EventState,
+  initializeSimulation,
+  initializeStore,
+  ProcessDefinition,
+  put,
+  registerProcess,
+  registerStore,
+  runSimulation,
+  scheduleEvent,
+  StateData,
+} from "../mod.ts";
 
-// if (import.meta.main) {
-//   const sim = initializeSimulation();
+if (import.meta.main) {
+  const sim = initializeSimulation();
 
-//   const store: Store<boolean> = createStore<boolean>();
+  interface FooData extends StateData {
+    "store": string;
+    "data": FooStoreData;
+  }
 
-//   const p1: Process<boolean> = function* (sim, _event) {
-//     let step = yield* timeout(sim, 10);
-//     console.log(`[${step.sim.currentTime}] p1 -- true`);
-//     step = yield* put(step.sim, step.event, store, true);
-//     console.log(`[${step.sim.currentTime}] p1 -- done`);
+  interface FooStoreData extends StateData {
+    "foo": string;
+  }
 
-//     console.log(`[${step.sim.currentTime}] p1 -- trying...`);
-//     step = yield* get(step.sim, step.event, store);
-//     console.log(`[${step.sim.currentTime}] p1 -- ${step.event}: success!`);
+  const store = initializeStore<FooStoreData>(
+    {},
+  );
 
-//     return yield;
-//   };
+  sim.stores = registerStore(sim, store);
 
-//   const p2: Process<boolean> = function* (sim, event) {
-//     console.log(`[${sim.currentTime}] p2 -- trying...`);
-//     let step = yield* get(sim, event, store);
-//     console.log(`[${step.sim.currentTime}] p2 -- ${step.event}: success!`);
-//     step = yield* timeout(step.sim, 20);
-//     step = yield* put(step.sim, step.event, store, true);
-//     console.log(`[${step.sim.currentTime}] p2 -- done`);
+  const prod: ProcessDefinition<{
+    start: [FooData, [FooData]];
+    stop: [FooData, []];
+  }> = {
+    type: "prod",
+    initial: "start",
+    steps: {
+      start(sim, event, state) {
+        console.log(`[${sim.currentTime}] prod @ start`);
 
-//     return yield;
-//   };
+        const request = put(sim, event, state.data["store"], {
+          ...state.data,
+          data: { foo: "bar" },
+        });
 
-//   const e1 = createEvent(sim, 0, p1);
-//   sim.events = scheduleEvent(sim, e1);
+        // TODO:
+        if (request.id !== event.id) {
+          // It worked
+        } else {
+          // Delayed
+        }
 
-//   const e2 = createEvent(sim, 0, p2);
-//   sim.events = scheduleEvent(sim, e2);
+        const nextState = { ...state, step: "check" };
+        const nextEvent = createEvent<FooData>(
+          sim,
+          {
+            scheduledAt: sim.currentTime,
+          },
+        );
 
-//   const [stop, stats] = runSimulation(sim);
+        return {
+          updated: event,
+          state: nextState,
+          next: [{ ...nextEvent, status: EventState.Waiting }],
+        };
+      },
+      stop(sim, event, state) {
+        console.log(
+          `[${sim.currentTime}] prod @ stop`,
+        );
 
-//   console.log(`Simulation ended at ${stop.currentTime}`);
-//   console.log(`Simulation took: ${stats.duration} ms`);
-//   console.log("Events:", JSON.stringify(stop.events, null, 2));
-// }
+        return {
+          updated: event,
+          state,
+          next: [],
+        };
+      },
+    },
+  };
+
+  sim.registry = registerProcess(sim, prod);
+
+  const e1 = createEvent(sim, {
+    scheduledAt: 0,
+    process: {
+      type: "prod",
+      data: {
+        store: store.id,
+      },
+    },
+  });
+  sim.events = scheduleEvent(sim, e1);
+
+  const e2 = createEvent(sim, {
+    scheduledAt: 0,
+    process: {
+      type: "cons",
+      data: {
+        store: store.id,
+      },
+    },
+  });
+  sim.events = scheduleEvent(sim, e2);
+
+  const [states, stats] = await runSimulation(sim);
+  const stop = states[states.length - 1];
+
+  console.log(`Simulation ended at ${stop.currentTime}`);
+  console.log(`Simulation took: ${stats.duration} ms`);
+}

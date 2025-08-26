@@ -20,7 +20,7 @@ Deno.test("basic event scheduling", async () => {
   sim.events = scheduleEvent(sim, e1);
   assertEquals(sim.events.length, 1);
 
-  const [states, _stats] = await runSimulation(sim, {});
+  const [states, _stats] = await runSimulation(sim);
   assert(states.length > 0);
   const stop = states[states.length - 1];
 
@@ -35,7 +35,7 @@ Deno.test("zero-duration events", async () => {
   const e1 = createEvent(sim, { scheduledAt: sim.currentTime });
   sim.events = scheduleEvent(sim, e1);
 
-  const [states, _stats] = await runSimulation(sim, {});
+  const [states, _stats] = await runSimulation(sim);
   assert(states.length > 0);
   const stop = states[states.length - 1];
 
@@ -55,7 +55,7 @@ Deno.test("basic out of order scheduling", async () => {
   sim.events = scheduleEvent(sim, e1);
   assertEquals(sim.events.length, 3);
 
-  const [states, _stats] = await runSimulation(sim, {});
+  const [states, _stats] = await runSimulation(sim);
   assert(states.length > 0);
   const stop = states[states.length - 1];
 
@@ -102,7 +102,7 @@ Deno.test("basic event ordering", async () => {
   sim.events = scheduleEvent(sim, e5);
   sim.events = scheduleEvent(sim, e6);
 
-  const [states, _stats] = await runSimulation(sim, {});
+  const [states, _stats] = await runSimulation(sim);
   assert(states.length > 0);
   const stop = states[states.length - 1];
 
@@ -143,7 +143,7 @@ Deno.test("scheduling events in the past", () => {
   sim.events = scheduleEvent(sim, e2);
 
   assertRejects(async () => {
-    const [_states, _stats] = await runSimulation(sim, {});
+    const [_states, _stats] = await runSimulation(sim);
   });
 });
 
@@ -180,7 +180,7 @@ Deno.test("event process scheduling", async () => {
   sim.events = scheduleEvent(sim, e3);
   assertEquals(sim.events.length, 3);
 
-  const [states, _stats] = await runSimulation(sim, {});
+  const [states, _stats] = await runSimulation(sim);
   assert(states.length > 0);
   const stop = states[states.length - 1];
 
