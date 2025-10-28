@@ -178,7 +178,7 @@ function step(sim: Simulation, event: Event): Simulation {
 }
 
 /**
- * Processes an event by executing its associated process if any.
+ * Processes an event by executing its associated process, if any.
  * Handles both immediate completion and yielding of new events.
  * Returns the intermediate state for the completed simulation step:
  * - Handled event with updated status and timestamps;
@@ -198,13 +198,11 @@ function handleEvent(
   const definition = sim.registry[parent ? parent.type : event.process.type];
 
   // Get current process state (tied to the parent event) or initialize it
-  const state = event.parent && event.parent in sim.state
-    ? { ...sim.state[event.parent] }
-    : {
-      type: definition.type,
-      step: definition.initial,
-      data: { ...event.process.data },
-    };
+  const state = parent ? { ...parent } : {
+    type: definition.type,
+    step: definition.initial,
+    data: { ...event.process.data },
+  };
 
   // Retrieve the process handler according to the state
   const handler = definition.steps[state.step];
@@ -212,7 +210,11 @@ function handleEvent(
   // Execute next step of the process
   const process = handler(sim, event, state);
 
+  // FIXME: not sure if that would happen
+  if (event.status === EventState.Waiting) console.error("STATUS WAITING");
+
   // TODO: Mark the event as finished unless it is tied to a waiting process
+  // FIXME: Should we even handle waiting processes?
   return {
     ...process,
     updated: {
