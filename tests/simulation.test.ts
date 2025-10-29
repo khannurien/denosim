@@ -513,7 +513,7 @@ Deno.test("priority with simple events at same time", async () => {
   assertEquals(executionOrder, ["default", "high", "medium", "low"]);
 });
 
-Deno.test("priority with different process types - DEBUG", async () => {
+Deno.test("priority with different process types", async () => {
   const sim = initializeSimulation();
   const executionOrder: string[] = [];
 

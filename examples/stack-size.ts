@@ -24,7 +24,11 @@ if (import.meta.main) {
     initial: "start",
     steps: {
       start(sim, event, state) {
-        console.log(`[${sim.currentTime}] Event id = ${event.id}; got count = ${state.data["count"]}`);
+        console.log(
+          `[${sim.currentTime}] Event id = ${event.id}; got count = ${
+            state.data["count"]
+          }`,
+        );
 
         return {
           updated: event,
@@ -47,7 +51,7 @@ if (import.meta.main) {
                   : sim.currentTime,
               }),
             ]
-          : []
+            : [],
         };
       },
       stop(sim, event, state) {

@@ -1,94 +1,255 @@
-// import { Process, Store } from "../src/model.ts";
-// import { createStore, get, put } from "../src/resources.ts";
-// import {
-//   createEvent,
-//   initializeSimulation,
-//   runSimulation,
-//   scheduleEvent,
-// } from "../src/simulation.ts";
+import {
+  createEvent,
+  EventState,
+  get,
+  initializeSimulation,
+  initializeStore,
+  ProcessDefinition,
+  put,
+  registerProcess,
+  registerStore,
+  runSimulation,
+  scheduleEvent,
+  StateData,
+} from "../mod.ts";
 
-// /**
-//  * Expected output (non-blocking):
-//  *
-//  * [20] Cons -- trying to get [#1]...
-//  * [25] Prod -- put foobar in store
-//  * [25] Cons -- item: "foobar"
-//  * [25] Prod -- done [#1]...
-//  * [45] Prod -- put foobar in store
-//  * [45] Prod -- done [#2]...
-//  * [50] Cons -- trying to get [#2]...
-//  * [50] Cons -- item: "foobar"
-//  * [60] Cons -- trying to get [#3]...
-//  * [60] Prod -- put foobar in store
-//  * [60] Cons -- item: "foobar"
-//  * [60] Prod -- done [#3]...
-//  *
-//  * Expected output (blocking):
-//  * [20] Cons -- trying to get [#1]...
-//  * [25] Prod -- put foobar in store
-//  * [25] Cons -- item: "foobar"
-//  * [25] Prod -- done [#1]...
-//  * [45] Prod -- put foobar in store
-//  * [50] Cons -- trying to get [#2]...
-//  * [50] Prod -- done [#2]...
-//  * [50] Cons -- item: "foobar"
-//  * [60] Cons -- trying to get [#3]...
-//  * [60] Prod -- put foobar in store
-//  * [60] Cons -- item: "foobar"
-//  * [60] Prod -- done [#3]...
-//  */
-// if (import.meta.main) {
-//   const sim = initializeSimulation();
+/**
+ * Expected output (non-blocking):
+ *
+ * [20] Cons -- trying to get [#1]...
+ * [25] Prod -- put foobar in store
+ * [25] Cons -- item: "foobar"
+ * [25] Prod -- done [#1]...
+ * [45] Prod -- put foobar in store
+ * [45] Prod -- done [#2]...
+ * [50] Cons -- trying to get [#2]...
+ * [50] Cons -- item: "foobar"
+ * [60] Cons -- trying to get [#3]...
+ * [60] Prod -- put foobar in store
+ * [60] Cons -- item: "foobar"
+ * [60] Prod -- done [#3]...
+ *
+ * Expected output (blocking):
+ * [20] Cons -- trying to get [#1]...
+ * [25] Prod -- put foobar in store
+ * [25] Cons -- item: "foobar"
+ * [25] Prod -- done [#1]...
+ * [45] Prod -- put foobar in store
+ * [50] Cons -- trying to get [#2]...
+ * [50] Prod -- done [#2]...
+ * [50] Cons -- item: "foobar"
+ * [60] Cons -- trying to get [#3]...
+ * [60] Prod -- put foobar in store
+ * [60] Cons -- item: "foobar"
+ * [60] Prod -- done [#3]...
+ */
 
-//   const store: Store<string> = createStore<string>(1);
+if (import.meta.main) {
+  const sim = initializeSimulation();
 
-//   let consCount = 0;
-//   let prodCount = 0;
+  interface StringData extends StateData {
+    item: string;
+  }
 
-//   const prod: Process<string> = function* (sim, event) {
-//     const item = "foobar";
-//     console.log(`[${sim.currentTime}] Prod -- put ${item} in store`);
-//     const step = yield* put(sim, event, store, item);
-//     console.log(`[${step.sim.currentTime}] Prod -- done [#${++prodCount}]...`);
+  // Create a non-blocking store with capacity 1 for the expected output
+  const store = initializeStore<StringData>({
+    capacity: 1,
+    blocking: true, // Change to true for blocking behavior
+  });
 
-//     return step;
-//   };
+  sim.stores = registerStore(sim, store);
 
-//   const cons: Process<string> = function* (sim, event) {
-//     console.log(
-//       `[${sim.currentTime}] Cons -- trying to get [#${++consCount}]...`,
-//     );
-//     const step = yield* get(sim, event, store);
-//     console.log(
-//       `[${step.sim.currentTime}] Cons -- item: ${
-//         JSON.stringify(step.event.item, null, 2)
-//       }`,
-//     );
+  let consCount = 0;
+  let prodCount = 0;
 
-//     return step;
-//   };
+  const prod: ProcessDefinition<{
+    put: [StringData, [StringData] | []];
+    done: [StringData, []];
+  }> = {
+    type: "prod",
+    initial: "put",
+    steps: {
+      put(sim, event, state) {
+        // Wakeup case: already completed put, just finish
+        if (state.data.item) {
+          console.log(`[${sim.currentTime}] Prod -- done [#${++prodCount}]...`);
+          return {
+            updated: {
+              ...event,
+              scheduledAt: sim.currentTime,
+              status: EventState.Scheduled,
+            },
+            state: { ...state, step: "done" },
+            next: [],
+          };
+        }
 
-//   const e1 = createEvent(sim, 20, cons);
-//   sim.events = scheduleEvent(sim, e1);
+        // New put operation
+        const item = "foobar";
+        console.log(`[${sim.currentTime}] Prod -- put ${item} in store`);
 
-//   const e2 = createEvent(sim, 25, prod);
-//   sim.events = scheduleEvent(sim, e2);
+        const request = put(sim, event, store.id, { item });
 
-//   const e3 = createEvent(sim, 45, prod);
-//   sim.events = scheduleEvent(sim, e3);
+        if (
+          request.id !== event.id || request.status === EventState.Scheduled
+        ) {
+          // Immediate success
+          console.log(`[${sim.currentTime}] Prod -- done [#${++prodCount}]...`);
+          return {
+            updated: {
+              ...event,
+              scheduledAt: sim.currentTime,
+              status: EventState.Scheduled,
+            },
+            state: { ...state, step: "done" },
+            next: request.id !== event.id ? [request] : [],
+          };
+        }
 
-//   const e4 = createEvent(sim, 50, cons);
-//   sim.events = scheduleEvent(sim, e4);
+        // Blocked - store the item and retry
+        return {
+          updated: {
+            ...event,
+            scheduledAt: sim.currentTime,
+            status: EventState.Waiting,
+          },
+          state: { ...state, data: { item }, step: "put" },
+          next: [],
+        };
+      },
+      done(_sim, event, state) {
+        return { updated: event, state, next: [] };
+      },
+    },
+  };
 
-//   const e5 = createEvent(sim, 60, prod);
-//   sim.events = scheduleEvent(sim, e5);
+  const cons: ProcessDefinition<{
+    get: [StringData, [StringData] | []];
+    done: [StringData, []];
+  }> = {
+    type: "cons",
+    initial: "get",
+    steps: {
+      get(sim, event, state) {
+        // Wakeup case: already have data
+        if (event.process.data?.item) {
+          const obtained = event.process.data as StringData;
+          console.log(
+            `[${sim.currentTime}] Cons -- item: ${
+              JSON.stringify(obtained.item)
+            }`,
+          );
+          return {
+            updated: {
+              ...event,
+              scheduledAt: sim.currentTime,
+              status: EventState.Scheduled,
+            },
+            state: { ...state, data: obtained, step: "done" },
+            next: [],
+          };
+        }
 
-//   const e6 = createEvent(sim, 60, cons);
-//   sim.events = scheduleEvent(sim, e6);
+        console.log(
+          `[${sim.currentTime}] Cons -- trying to get [#${++consCount}]...`,
+        );
+        const request = get(sim, event, store.id);
 
-//   const [stop, stats] = runSimulation(sim);
+        // Success cases
+        if (
+          (!store.blocking && request.status === EventState.Scheduled &&
+            request.process.data) ||
+          (request.id !== event.id && request.process.type === "prod")
+        ) {
+          const obtained = request.process.data as StringData;
+          console.log(
+            `[${sim.currentTime}] Cons -- item: ${
+              JSON.stringify(obtained.item)
+            }`,
+          );
 
-//   console.log(`Simulation ended at ${stop.currentTime}`);
-//   console.log(`Simulation took: ${stats.duration} ms`);
-//   console.log("Events:", JSON.stringify(stop.events, null, 2));
-// }
+          return {
+            updated: {
+              ...event,
+              scheduledAt: sim.currentTime,
+              status: EventState.Scheduled,
+            },
+            state: { ...state, data: obtained, step: "done" },
+            next: request.id !== event.id ? [request] : [],
+          };
+        }
+
+        // Still waiting
+        return {
+          updated: {
+            ...event,
+            scheduledAt: sim.currentTime,
+            status: EventState.Waiting,
+          },
+          state: { ...state, step: "get" },
+          next: [],
+        };
+      },
+      done(_sim, event, state) {
+        return { updated: event, state, next: [] };
+      },
+    },
+  };
+
+  sim.registry = registerProcess(sim, prod);
+  sim.registry = registerProcess(sim, cons);
+
+  const e1 = createEvent(sim, {
+    scheduledAt: 20,
+    process: {
+      type: "cons",
+    },
+  });
+  sim.events = scheduleEvent(sim, e1);
+
+  const e2 = createEvent(sim, {
+    scheduledAt: 25,
+    process: {
+      type: "prod",
+    },
+  });
+  sim.events = scheduleEvent(sim, e2);
+
+  const e3 = createEvent(sim, {
+    scheduledAt: 45,
+    process: {
+      type: "prod",
+    },
+  });
+  sim.events = scheduleEvent(sim, e3);
+
+  const e4 = createEvent(sim, {
+    scheduledAt: 50,
+    process: {
+      type: "cons",
+    },
+  });
+  sim.events = scheduleEvent(sim, e4);
+
+  const e5 = createEvent(sim, {
+    scheduledAt: 60,
+    process: {
+      type: "prod",
+    },
+  });
+  sim.events = scheduleEvent(sim, e5);
+
+  const e6 = createEvent(sim, {
+    scheduledAt: 60,
+    process: {
+      type: "cons",
+    },
+  });
+  sim.events = scheduleEvent(sim, e6);
+
+  const [states, stats] = await runSimulation(sim);
+  const stop = states[states.length - 1];
+
+  console.log(`Simulation ended at ${stop.currentTime}`);
+  console.log(`Simulation took: ${stats.duration} ms`);
+}
