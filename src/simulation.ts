@@ -3,6 +3,7 @@ import {
   Event,
   EventState,
   ProcessDefinition,
+  ProcessState,
   ProcessStep,
   ProcessType,
   RunSimulationOptions,
@@ -133,7 +134,11 @@ function run(current: Simulation): [Simulation, boolean] {
   const pending = current.events.filter((event) =>
     (event.scheduledAt >= current.currentTime) &&
     (event.status === EventState.Scheduled)
-  ).sort((a, b) => b.scheduledAt - a.scheduledAt);
+  ).sort((a, b) => {
+    return a.scheduledAt !== b.scheduledAt
+      ? b.scheduledAt - a.scheduledAt
+      : b.priority - a.priority
+  });
 
   const event = pending.pop();
 
@@ -189,20 +194,51 @@ function handleEvent(
   sim: Simulation,
   event: Event,
 ): ProcessStep {
-  // TODO: Not a fan of this...
-  const parent = event.parent && event.parent in sim.state
+  // Retrieve process definition from the registry
+  const definition = sim.registry[event.process.type];
+
+  // Retrieve parent process state if it exists
+  const parentState = event.parent && event.parent in sim.state
     ? sim.state[event.parent]
     : undefined;
 
-  // Retrieve process definition from the registry
-  const definition = sim.registry[parent ? parent.type : event.process.type];
-
-  // Get current process state (tied to the parent event) or initialize it
-  const state = parent ? { ...parent } : {
-    type: definition.type,
-    step: definition.initial,
-    data: { ...event.process.data },
-  };
+  // Get current process state:
+  // - either from multi-step continuation: copy previous state and override with updated state;
+  // - TODO: fork/exec
+  // - or tied to the parent event: copy parent state and override with child state;
+  // - or initialize it from process definition in case of a first run.
+  const state: ProcessState = event.id in sim.state
+    ? {
+      ...sim.state[event.id],
+      data: {
+        ...sim.state[event.id].data,
+        ...event.process.data,
+      },
+    }
+    : parentState && event.process.inheritStep &&
+        parentState.type === event.process.type
+    ? {
+      type: definition.type,
+      step: parentState.step,
+      data: {
+        ...parentState.data,
+        ...event.process.data,
+      },
+    }
+    : parentState
+    ? {
+      type: definition.type,
+      step: definition.initial,
+      data: {
+        ...parentState.data,
+        ...event.process.data,
+      },
+    }
+    : {
+      type: definition.type,
+      step: definition.initial,
+      data: { ...event.process.data },
+    };
 
   // Retrieve the process handler according to the state
   const handler = definition.steps[state.step];
@@ -210,21 +246,23 @@ function handleEvent(
   // Execute next step of the process
   const process = handler(sim, event, state);
 
-  // FIXME: not sure if that would happen
-  if (event.status === EventState.Waiting) console.error("STATUS WAITING");
-
-  // TODO: Mark the event as finished unless it is tied to a waiting process
-  // FIXME: Should we even handle waiting processes?
-  return {
-    ...process,
-    updated: {
-      ...event,
-      finishedAt: sim.currentTime,
-      status: event.status === EventState.Waiting
-        ? EventState.Waiting
-        : EventState.Finished,
-    },
-  };
+  // If the process did not progress, it means it is finished
+  // Legitimate loops should use parent-child event semantics
+  return process.state.step !== state.step
+    ? {
+      ...process,
+      updated: {
+        ...process.updated,
+      },
+    }
+    : {
+      ...process,
+      updated: {
+        ...process.updated,
+        status: EventState.Finished,
+        finishedAt: sim.currentTime,
+      },
+    };
 }
 
 /**
@@ -251,9 +289,9 @@ export function registerProcess<
  * - Unique ID
  * - Optional parent event ID (defaults to `undefined`)
  * - Initial event state set to `Fired`
+ * - TODO: Priority
  * - Timestamps for when it was created and scheduled
  * - Optional process to run on event handling (defaults to `none`, the dummy process)
- * - Optional data to carry, e.g. to initialize process state (defaults to `undefined`)
  */
 export function createEvent<T extends StateData>(
   sim: Simulation,
@@ -263,6 +301,7 @@ export function createEvent<T extends StateData>(
     ...options,
     id: crypto.randomUUID(),
     status: EventState.Fired,
+    priority: options.priority ?? 0,
     firedAt: sim.currentTime,
     process: options.process ? { ...options.process } : {
       type: "none",

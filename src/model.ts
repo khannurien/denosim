@@ -85,6 +85,9 @@ export interface Event<T extends StateData = StateData> {
   /** Current lifecycle state of the event */
   status: EventState;
 
+  /** TODO: */
+  priority: number;
+
   /**
    * When the event was initially created.
    * Represents the simulation time when `createEvent()` was called.
@@ -117,6 +120,8 @@ export interface Event<T extends StateData = StateData> {
 export interface Store<T extends StateData = StateData> {
   id: StoreID;
   capacity: number;
+  blocking: boolean;
+  buffer: Event<T>[];
   getRequests: Event<T>[];
   putRequests: Event<T>[];
 }
@@ -173,13 +178,18 @@ export interface ProcessDefinition<M extends StepStateMap> {
 
 /**
  * Attached to an event that will spawn a process when handled.
- * FIXME: Not clear in current implementation:
- * - Process type and state can be passed through an event, but are ignored if the event has a parent
- * - In that case, process type and state are actually retrieved through the parent event ID
+ * For process state initialization, refer to `handleEvent` implementation.
  */
 export interface ProcessCall<T extends StateData = StateData> {
   /** Unique process type identifier */
   type: ProcessType;
+
+  /**
+   * Optional flag to control step inheritance from parent events.
+   * When true, child events start from the parent's current step instead of their definition's initial step.
+   * TODO: fork() + exec() analogy
+   */
+  inheritStep?: boolean;
 
   /**
    * Optional data that can be passed to the process.
@@ -274,13 +284,16 @@ export interface RunSimulationOptions<T extends StateData = StateData> {
  */
 export interface CreateEventOptions<T extends StateData = StateData> {
   parent?: EventID;
+  priority?: number;
   scheduledAt: Timestamp;
   process?: ProcessCall<T>;
 }
 
 /**
  * TODO:
+ * Defaults to blocking operations with capacity for one single item.
  */
 export interface CreateStoreOptions<T extends StateData = StateData> {
+  blocking?: boolean;
   capacity?: number;
 }

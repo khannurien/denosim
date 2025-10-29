@@ -250,3 +250,333 @@ Deno.test("simulation until event condition", async () => {
     EventState.Scheduled,
   );
 });
+
+Deno.test("events with same time process by priority order (lower number = higher priority)", async () => {
+  const sim = initializeSimulation();
+  const executionOrder: string[] = [];
+
+  const testProcess: ProcessDefinition<{
+    log: [StateData, []];
+  }> = {
+    type: "test",
+    initial: "log",
+    steps: {
+      log(_sim, event, state) {
+        executionOrder.push(state.data.name as string);
+        return {
+          updated: event,
+          state,
+          next: [],
+        };
+      },
+    },
+  };
+
+  sim.registry = registerProcess(sim, testProcess);
+
+  // Create events at same time with different priorities
+  const lowPriority = createEvent(sim, {
+    scheduledAt: 10,
+    priority: 10, // Higher number = lower priority (processed later)
+    process: { type: "test", data: { name: "low" } },
+  });
+
+  const mediumPriority = createEvent(sim, {
+    scheduledAt: 10,
+    priority: 5, // Medium priority
+    process: { type: "test", data: { name: "medium" } },
+  });
+
+  const highPriority = createEvent(sim, {
+    scheduledAt: 10,
+    priority: 1, // Lower number = higher priority (processed first)
+    process: { type: "test", data: { name: "high" } },
+  });
+
+  const defaultPriority = createEvent(sim, {
+    scheduledAt: 10,
+    // No priority specified = default 0 = highest priority
+    process: { type: "test", data: { name: "default" } },
+  });
+
+  sim.events = scheduleEvent(sim, lowPriority);
+  sim.events = scheduleEvent(sim, mediumPriority);
+  sim.events = scheduleEvent(sim, highPriority);
+  sim.events = scheduleEvent(sim, defaultPriority);
+
+  await runSimulation(sim);
+
+  // Should process in priority order: lowest number first (highest priority)
+  assertEquals(executionOrder, ["default", "high", "medium", "low"]);
+});
+
+Deno.test("priority only affects ordering at same time", async () => {
+  const sim = initializeSimulation();
+  const executionOrder: string[] = [];
+
+  const testProcess: ProcessDefinition<{
+    log: [StateData, []];
+  }> = {
+    type: "test",
+    initial: "log",
+    steps: {
+      log(sim, event, state) {
+        executionOrder.push(`${state.data.name}-${sim.currentTime}`);
+        return {
+          updated: event,
+          state,
+          next: [],
+        };
+      },
+    },
+  };
+
+  sim.registry = registerProcess(sim, testProcess);
+
+  // Mix of times and priorities - time should dominate
+  const earlyLowPriority = createEvent(sim, {
+    scheduledAt: 5,
+    priority: 10, // Low priority but early time
+    process: { type: "test", data: { name: "earlyLow" } },
+  });
+
+  const lateHighPriority = createEvent(sim, {
+    scheduledAt: 15,
+    priority: 1, // High priority but late time
+    process: { type: "test", data: { name: "lateHigh" } },
+  });
+
+  const mediumDefault = createEvent(sim, {
+    scheduledAt: 10,
+    process: { type: "test", data: { name: "medium" } },
+  });
+
+  sim.events = scheduleEvent(sim, earlyLowPriority);
+  sim.events = scheduleEvent(sim, lateHighPriority);
+  sim.events = scheduleEvent(sim, mediumDefault);
+
+  await runSimulation(sim);
+
+  // Time ordering should dominate over priority
+  assertEquals(executionOrder, ["earlyLow-5", "medium-10", "lateHigh-15"]);
+});
+
+Deno.test("default priority is 0 (highest priority)", async () => {
+  const sim = initializeSimulation();
+  const executionOrder: string[] = [];
+
+  const testProcess: ProcessDefinition<{
+    log: [StateData, []];
+  }> = {
+    type: "test",
+    initial: "log",
+    steps: {
+      log(_sim, event, state) {
+        executionOrder.push(state.data.priority as string);
+        return {
+          updated: event,
+          state,
+          next: [],
+        };
+      },
+    },
+  };
+
+  sim.registry = registerProcess(sim, testProcess);
+
+  const withPriority = createEvent(sim, {
+    scheduledAt: 10,
+    priority: 1, // Lower priority than default 0
+    process: { type: "test", data: { priority: "explicit" } },
+  });
+
+  const withoutPriority = createEvent(sim, {
+    scheduledAt: 10,
+    process: { type: "test", data: { priority: "default" } },
+  });
+
+  sim.events = scheduleEvent(sim, withPriority);
+  sim.events = scheduleEvent(sim, withoutPriority);
+
+  await runSimulation(sim);
+
+  // Default 0 should process before explicit 1
+  assertEquals(executionOrder, ["default", "explicit"]);
+});
+
+Deno.test("negative priorities work correctly (very high priority)", async () => {
+  const sim = initializeSimulation();
+  const executionOrder: string[] = [];
+
+  const testProcess: ProcessDefinition<{
+    log: [StateData, []];
+  }> = {
+    type: "test",
+    initial: "log",
+    steps: {
+      log(_sim, event, state) {
+        executionOrder.push(state.data.name as string);
+        return {
+          updated: event,
+          state,
+          next: [],
+        };
+      },
+    },
+  };
+
+  sim.registry = registerProcess(sim, testProcess);
+
+  const veryHigh = createEvent(sim, {
+    scheduledAt: 10,
+    priority: -10, // Very high priority (lowest number)
+    process: { type: "test", data: { name: "veryHigh" } },
+  });
+
+  const high = createEvent(sim, {
+    scheduledAt: 10,
+    priority: -5, // High priority
+    process: { type: "test", data: { name: "high" } },
+  });
+
+  const normal = createEvent(sim, {
+    scheduledAt: 10,
+    priority: 0, // Normal high priority (default)
+    process: { type: "test", data: { name: "normal" } },
+  });
+
+  sim.events = scheduleEvent(sim, veryHigh);
+  sim.events = scheduleEvent(sim, high);
+  sim.events = scheduleEvent(sim, normal);
+
+  await runSimulation(sim);
+
+  // Lower number = higher priority
+  assertEquals(executionOrder, ["veryHigh", "high", "normal"]);
+});
+
+Deno.test("priority with simple events at same time", async () => {
+  const sim = initializeSimulation();
+  const executionOrder: string[] = [];
+
+  const testProcess: ProcessDefinition<{
+    log: [StateData, []];
+  }> = {
+    type: "test",
+    initial: "log",
+    steps: {
+      log(_sim, event, state) {
+        executionOrder.push(state.data.name as string);
+        return {
+          updated: event,
+          state,
+          next: [],
+        };
+      },
+    },
+  };
+
+  sim.registry = registerProcess(sim, testProcess);
+
+  // Test simple priority ordering without parent-child complexity
+  const lowPriority = createEvent(sim, {
+    scheduledAt: 10,
+    priority: 10,
+    process: { type: "test", data: { name: "low" } },
+  });
+
+  const mediumPriority = createEvent(sim, {
+    scheduledAt: 10,
+    priority: 5,
+    process: { type: "test", data: { name: "medium" } },
+  });
+
+  const highPriority = createEvent(sim, {
+    scheduledAt: 10,
+    priority: 1,
+    process: { type: "test", data: { name: "high" } },
+  });
+
+  const defaultPriority = createEvent(sim, {
+    scheduledAt: 10,
+    process: { type: "test", data: { name: "default" } },
+  });
+
+  sim.events = scheduleEvent(sim, lowPriority);
+  sim.events = scheduleEvent(sim, mediumPriority);
+  sim.events = scheduleEvent(sim, highPriority);
+  sim.events = scheduleEvent(sim, defaultPriority);
+
+  await runSimulation(sim);
+
+  // Should process in priority order: lowest number first
+  assertEquals(executionOrder, ["default", "high", "medium", "low"]);
+});
+
+Deno.test("priority with different process types - DEBUG", async () => {
+  const sim = initializeSimulation();
+  const executionOrder: string[] = [];
+
+  const processA: ProcessDefinition<{
+    log: [StateData, []];
+  }> = {
+    type: "A",
+    initial: "log",
+    steps: {
+      log(sim, event, state) {
+        executionOrder.push(`A-${state.data.name}@${sim.currentTime}`);
+        return {
+          updated: event,
+          state,
+          next: [],
+        };
+      },
+    },
+  };
+
+  const processB: ProcessDefinition<{
+    log: [StateData, []];
+  }> = {
+    type: "B",
+    initial: "log",
+    steps: {
+      log(sim, event, state) {
+        executionOrder.push(`B-${state.data.name}@${sim.currentTime}`);
+        return {
+          updated: event,
+          state,
+          next: [],
+        };
+      },
+    },
+  };
+
+  sim.registry = registerProcess(sim, processA);
+  sim.registry = registerProcess(sim, processB);
+
+  // Create events and log their priorities
+  const aLow = createEvent(sim, {
+    scheduledAt: 10,
+    priority: 5,
+    process: { type: "A", data: { name: "low" } },
+  });
+
+  const bHigh = createEvent(sim, {
+    scheduledAt: 10,
+    priority: 1,
+    process: { type: "B", data: { name: "high" } },
+  });
+
+  const aDefault = createEvent(sim, {
+    scheduledAt: 10,
+    process: { type: "A", data: { name: "default" } },
+  });
+
+  sim.events = scheduleEvent(sim, aLow);
+  sim.events = scheduleEvent(sim, bHigh);
+  sim.events = scheduleEvent(sim, aDefault);
+
+  await runSimulation(sim);
+
+  assertEquals(executionOrder, ["A-default@10", "B-high@10", "A-low@10"]);
+});

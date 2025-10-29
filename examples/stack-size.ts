@@ -17,14 +17,14 @@ if (import.meta.main) {
   }
 
   const foo: ProcessDefinition<{
-    start: [FooData, [FooData]];
+    start: [FooData, [FooData] | []];
     stop: [FooData, []];
   }> = {
     type: "foo",
     initial: "start",
     steps: {
       start(sim, event, state) {
-        console.log(`[${sim.currentTime}] Got ${state.data["count"]}`);
+        console.log(`[${sim.currentTime}] Event id = ${event.id}; got count = ${state.data["count"]}`);
 
         return {
           updated: event,
@@ -35,14 +35,19 @@ if (import.meta.main) {
               : { ...state.data },
             step: sim.currentTime < state.data["stop"] ? "start" : "stop",
           },
-          next: [
-            createEvent(sim, {
-              parent: event.id,
-              scheduledAt: sim.currentTime < state.data["stop"]
-                ? sim.currentTime + 1
-                : sim.currentTime,
-            }),
-          ],
+          next: sim.currentTime < state.data["stop"]
+            ? [
+              createEvent(sim, {
+                parent: event.id,
+                process: {
+                  type: "foo",
+                },
+                scheduledAt: sim.currentTime < state.data["stop"]
+                  ? sim.currentTime + 1
+                  : sim.currentTime,
+              }),
+            ]
+          : []
         };
       },
       stop(sim, event, state) {

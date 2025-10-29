@@ -1,12 +1,10 @@
 import {
   createEvent,
-  Event,
   EventState,
   get,
   initializeSimulation,
   initializeStore,
   ProcessDefinition,
-  ProcessState,
   put,
   registerProcess,
   registerStore,
@@ -37,11 +35,10 @@ if (import.meta.main) {
     steps: {
       start(sim, event, state) {
         console.log(`[${sim.currentTime}] prod @ start`);
-        console.log(`[${sim.currentTime}] prod state = ${state.data.foo}`);
+        console.log(`[${sim.currentTime}] prod @ start state = ${state.data.foo}`);
 
-        // TODO: If there is a pending get request, it will be popped from the store
-        // and returned by `put`.
-        // TODO: If there is none, `put` will:
+        // If there is a pending get request, it will be popped from the store and returned by `put`.
+        // If there is none, `put` will:
         // - store the event as a new put request in the store's queue;
         // - return the event updated with stored data.
         const request = put(sim, event, store.id, {
@@ -95,11 +92,10 @@ if (import.meta.main) {
     steps: {
       start(sim, event, state) {
         console.log(`[${sim.currentTime}] cons @ start`);
-        console.log(`[${sim.currentTime}] cons state = ${state.data.foo}`);
+        console.log(`[${sim.currentTime}] cons @ start state = ${state.data.foo}`);
 
         const request = get(sim, event, store.id);
 
-        // TODO: Update process state with event data?
         if (request.id !== event.id) {
           // It worked
           const obtained = { ...request.process.data };
@@ -117,7 +113,9 @@ if (import.meta.main) {
 
         return {
           updated: nextEvent,
-          state: { ...state, step: "stop" },
+          state: request.id !== event.id
+            ? { ...state, data: request.process.data ? { ...request.process.data } : state.data, step: "stop" }
+            : { ...state, step: "stop" },
           next: request.id !== event.id ? [request] : [],
         };
       },
@@ -125,7 +123,7 @@ if (import.meta.main) {
         console.log(
           `[${sim.currentTime}] cons @ stop`,
         );
-        console.log(`[${sim.currentTime}] cons state = ${state.data.foo}`);
+        console.log(`[${sim.currentTime}] cons @ stop state = ${state.data.foo}`);
 
         return {
           updated: event,
@@ -156,6 +154,25 @@ if (import.meta.main) {
     },
   });
   sim.events = scheduleEvent(sim, e2);
+
+  const e3 = createEvent(sim, {
+    scheduledAt: 5,
+    process: {
+      type: "cons",
+    },
+  });
+  sim.events = scheduleEvent(sim, e3);
+
+  const e4 = createEvent(sim, {
+    scheduledAt: 10,
+    process: {
+      type: "prod",
+      data: {
+        "foo": "snafu",
+      }
+    },
+  });
+  sim.events = scheduleEvent(sim, e4);
 
   const [states, stats] = await runSimulation(sim);
   const stop = states[states.length - 1];
