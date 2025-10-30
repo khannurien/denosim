@@ -37,7 +37,7 @@ export function serializeSimulation(states: Simulation[]): string {
  * This is the reverse operation of `serializeSimulation`.
  * It will restore the simulation state, including all functions.
  * The simulation can then be resumed from the point where it was serialized.
- * * TODO: Explore how to resume from deltas instead of the whole state
+ * TODO: Explore how to resume from deltas instead of the whole state
  */
 export function deserializeSimulation(data: string): Simulation[] {
   return JSON.parse(data, reviver);

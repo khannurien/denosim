@@ -118,6 +118,7 @@ if (import.meta.main) {
         };
       },
       done(_sim, event, state) {
+        console.log("prod done")
         return { updated: event, state, next: [] };
       },
     },
@@ -191,6 +192,7 @@ if (import.meta.main) {
         };
       },
       done(_sim, event, state) {
+        console.log("cons done")
         return { updated: event, state, next: [] };
       },
     },

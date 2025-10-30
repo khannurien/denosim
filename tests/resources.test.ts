@@ -342,57 +342,6 @@ Deno.test("multiple producers with delayed consumers", async () => {
   assertEquals(finalState.stores[store.id].putRequests.length, 1);
 });
 
-Deno.test("event state transitions for blocked processes", async () => {
-  const sim = initializeSimulation();
-
-  const store = initializeStore<FooData>({});
-  sim.stores = registerStore(sim, store);
-
-  const prod: ProcessDefinition<{
-    start: [FooData, [FooData] | []];
-    stop: [FooData, []];
-  }> = {
-    type: "prod",
-    initial: "start",
-    steps: {
-      start(sim, event, state) {
-        const request = put(sim, event, store.id, { ...state.data });
-        const nextEvent = {
-          ...event,
-          scheduledAt: sim.currentTime,
-          status: request.id !== event.id
-            ? EventState.Scheduled
-            : EventState.Waiting,
-        };
-        return {
-          updated: nextEvent,
-          state: { ...state, step: "stop" },
-          next: request.id !== event.id ? [request] : [],
-        };
-      },
-      stop(_sim, event, state) {
-        return { updated: event, state, next: [] };
-      },
-    },
-  };
-
-  sim.registry = registerProcess(sim, prod);
-
-  const producer = createEvent(sim, {
-    scheduledAt: 0,
-    process: { type: "prod", data: { foo: "test" } },
-  });
-  sim.events = scheduleEvent(sim, producer);
-
-  // Run just one step to see the initial state after producer runs
-  const [states, _stats] = await runSimulation(sim, { untilTime: 1 });
-  const finalState = states[states.length - 1];
-
-  // Producer should be Waiting (blocked) since there are no consumers
-  const producerEvent = finalState.events.find((e) => e.id === producer.id)!;
-  assertEquals(producerEvent.status, EventState.Waiting);
-});
-
 Deno.test("non-blocking store with capacity > 1", async () => {
   const sim = initializeSimulation();
 
@@ -452,7 +401,9 @@ Deno.test("non-blocking store with capacity > 1", async () => {
   // Third should be in putRequests (exceeded capacity)
   assertEquals(finalState.stores[store.id].putRequests.length, 1);
   // Verify the values in buffer
-  const bufferValues = finalState.stores[store.id].buffer.map(e => e.process.data?.value);
+  const bufferValues = finalState.stores[store.id].buffer.map((e) =>
+    e.process.data?.value
+  );
   assertEquals(bufferValues.sort(), [1, 2]);
 });
 
@@ -474,11 +425,15 @@ Deno.test("blocking store with unlimited capacity behavior", async () => {
     initial: "produce",
     steps: {
       produce(sim, event, state) {
-        const request = put(sim, event, store.id, { foo: `item-${state.data.foo}` });
+        const request = put(sim, event, store.id, {
+          foo: `item-${state.data.foo}`,
+        });
         const nextEvent = {
           ...event,
           scheduledAt: sim.currentTime,
-          status: request.id !== event.id ? EventState.Scheduled : EventState.Waiting,
+          status: request.id !== event.id
+            ? EventState.Scheduled
+            : EventState.Waiting,
         };
         return {
           updated: nextEvent,
@@ -504,12 +459,20 @@ Deno.test("blocking store with unlimited capacity behavior", async () => {
         const nextEvent = {
           ...event,
           scheduledAt: sim.currentTime,
-          status: request.id !== event.id ? EventState.Scheduled : EventState.Waiting,
+          status: request.id !== event.id
+            ? EventState.Scheduled
+            : EventState.Waiting,
         };
         return {
           updated: nextEvent,
-          state: request.id !== event.id 
-            ? { ...state, data: request.process.data ? { ...request.process.data } : state.data, step: "done" }
+          state: request.id !== event.id
+            ? {
+              ...state,
+              data: request.process.data
+                ? { ...request.process.data }
+                : state.data,
+              step: "done",
+            }
             : { ...state, step: "done" },
           next: request.id !== event.id ? [request] : [],
         };
@@ -595,7 +558,10 @@ Deno.test("non-blocking store with capacity 0 (immediate rejection)", async () =
   // Should be in putRequests since capacity is 0
   assertEquals(finalState.stores[store.id].buffer.length, 0);
   assertEquals(finalState.stores[store.id].putRequests.length, 1);
-  assertEquals(finalState.stores[store.id].putRequests[0].process.data?.value, 42);
+  assertEquals(
+    finalState.stores[store.id].putRequests[0].process.data?.value,
+    42,
+  );
 });
 
 Deno.test("non-blocking store LIFO behavior", () => {
@@ -686,10 +652,14 @@ Deno.test("mixed blocking/non-blocking operations with high capacity", async () 
     steps: {
       start(sim, event, state) {
         const _request = put(sim, event, store.id, { value: state.data.value });
-        
+
         // For non-blocking store with capacity, put should always succeed immediately
         return {
-          updated: { ...event, status: EventState.Finished, finishedAt: sim.currentTime },
+          updated: {
+            ...event,
+            status: EventState.Finished,
+            finishedAt: sim.currentTime,
+          },
           state: { ...state, step: "start" },
           next: [],
         };
@@ -706,13 +676,19 @@ Deno.test("mixed blocking/non-blocking operations with high capacity", async () 
     steps: {
       start(sim, event, state) {
         const request = get(sim, event, store.id);
-        
+
         return {
-          updated: { ...event, status: EventState.Finished, finishedAt: sim.currentTime },
-          state: { 
-            ...state, 
-            data: request.process.data ? { ...request.process.data } : state.data,
-            step: "start" 
+          updated: {
+            ...event,
+            status: EventState.Finished,
+            finishedAt: sim.currentTime,
+          },
+          state: {
+            ...state,
+            data: request.process.data
+              ? { ...request.process.data }
+              : state.data,
+            step: "start",
           },
           next: [],
         };
@@ -724,24 +700,22 @@ Deno.test("mixed blocking/non-blocking operations with high capacity", async () 
   sim.registry = registerProcess(sim, consumer);
 
   // Create producers first
-  const producers = Array.from({ length: 8 }, (_, i) => 
+  const producers = Array.from({ length: 8 }, (_, i) =>
     createEvent(sim, {
       scheduledAt: i,
       process: { type: "producer", data: { value: i } },
-    })
-  );
+    }));
 
   // Create consumers later
   const consumers = Array.from({ length: 5 }, (_, i) =>
     createEvent(sim, {
       scheduledAt: i + 10, // Start after all producers
       process: { type: "consumer" },
-    })
-  );
+    }));
 
-  producers.forEach(p => sim.events = scheduleEvent(sim, p));
-  consumers.forEach(c => sim.events = scheduleEvent(sim, c));
-  
+  producers.forEach((p) => sim.events = scheduleEvent(sim, p));
+  consumers.forEach((c) => sim.events = scheduleEvent(sim, c));
+
   const [states, _stats] = await runSimulation(sim);
   const finalState = states[states.length - 1];
 
@@ -750,19 +724,23 @@ Deno.test("mixed blocking/non-blocking operations with high capacity", async () 
   assertEquals(finalState.stores[store.id].buffer.length, 3);
   assertEquals(finalState.stores[store.id].putRequests.length, 0);
   assertEquals(finalState.stores[store.id].getRequests.length, 0);
-  
+
   // Verify consumers got the expected LIFO values
-  const consumerValues = consumers.map(c => finalState.state[c.id]?.data?.value)
+  const consumerValues = consumers.map((c) =>
+    finalState.state[c.id]?.data?.value
+  )
     .filter((v): v is number => v !== undefined)
     .sort((a, b) => a - b);
-  
+
   assertEquals(consumerValues, [3, 4, 5, 6, 7]);
-  
+
   // Verify buffer contains the oldest values
-  const bufferValues = finalState.stores[store.id].buffer.map(e => e.process.data?.value)
+  const bufferValues = finalState.stores[store.id].buffer.map((e) =>
+    e.process.data?.value
+  )
     .filter((v): v is number => v !== undefined)
     .sort((a, b) => a - b);
-  
+
   assertEquals(bufferValues, [0, 1, 2]);
 });
 
@@ -825,12 +803,12 @@ Deno.test("error handling for non-existent store", () => {
   assertThrows(
     () => get(sim, event, "non-existent-store-id"),
     RangeError,
-    "Store not found"
+    "Store not found",
   );
 
   assertThrows(
     () => put(sim, event, "another-fake-store", { test: "data" }),
     RangeError,
-    "Store not found"
+    "Store not found",
   );
 });

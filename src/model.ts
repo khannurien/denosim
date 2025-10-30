@@ -36,13 +36,13 @@ export interface Simulation<R extends ProcessRegistry = ProcessRegistry> {
    */
   state: Record<EventID, ProcessState>;
 
-  /** TODO: */
+  /** Current state of all stores in the simulation, used for process synchronization */
   stores: Record<StoreID, Store>;
 }
 
 /**
  * Lifecycle states for events within the simulation.
- * Follows a strict progression: Fired → Scheduled → Finished
+ * Events progress through states with possible blocking at Waiting.
  */
 export enum EventState {
   /**
@@ -58,7 +58,9 @@ export enum EventState {
   Scheduled = "Scheduled",
 
   /**
-   * TODO:
+   * Event is blocked waiting for external conditions.
+   * Used by store operations and synchronization primitives.
+   * Events remain in this state until unblocked by another process.
    */
   Waiting = "Waiting",
 
@@ -85,7 +87,10 @@ export interface Event<T extends StateData = StateData> {
   /** Current lifecycle state of the event */
   status: EventState;
 
-  /** TODO: */
+  /**
+   * Optional event priority for scheduling; lower value yields higher priority (cf. UNIX `nice`).
+   * Defaults to `0`.
+   */
   priority: number;
 
   /**
@@ -115,14 +120,30 @@ export interface Event<T extends StateData = StateData> {
 }
 
 /**
- * TODO:
+ * Synchronization primitive for coordinating processes.
+ * Stores manage items and block processes when conditions aren't met.
+ * Used for producer-consumer patterns and resource sharing.
  */
 export interface Store<T extends StateData = StateData> {
+  /** Unique identifier for this store */
   id: StoreID;
+
+  /** Maximum items the store can hold before `put` operations block. Defaults to `1`. */
   capacity: number;
+
+  /**
+   * Controls whether the store enables synchronous (blocking) or asynchronous coordination.
+   * Defaults to `true`.
+   */
   blocking: boolean;
+
+  /** Items currently stored by non-blocking `put` operations and awaiting consumption */
   buffer: Event<T>[];
+
+  /** Processes blocked waiting to get items */
   getRequests: Event<T>[];
+
+  /** Processes blocked waiting to put items */
   putRequests: Event<T>[];
 }
 
@@ -169,10 +190,19 @@ export type StepsDefinition<T extends StepStateMap> = {
 /** TODO: Not sure if that is useful... */
 type ProcessRegistry = Record<ProcessType, ProcessDefinition<StepStateMap>>;
 
-/** Defines a process with a unique type, initial step, and step definitions */
+/**
+ * Defines a process with a unique type and its state machine behavior.
+ * Processes progress through steps, each with specific input/output state types.
+ * Used to model workflows, state machines, and temporal patterns in the simulation.
+ */
 export interface ProcessDefinition<M extends StepStateMap> {
+  /** Unique identifier for this process type */
   type: ProcessType;
+
+  /** Starting step in the state machine when process is first created */
   initial: keyof M;
+
+  /** Step handlers defining the process behavior */
   steps: StepsDefinition<M>;
 }
 
@@ -186,8 +216,7 @@ export interface ProcessCall<T extends StateData = StateData> {
 
   /**
    * Optional flag to control step inheritance from parent events.
-   * When true, child events start from the parent's current step instead of their definition's initial step.
-   * TODO: fork() + exec() analogy
+   * When true, the process starts from the parent's current step instead of their definition's initial step.
    */
   inheritStep?: boolean;
 
@@ -268,32 +297,51 @@ export interface SimulationStats {
  * Object used to configure a simulation run.
  * Allows setting the rate of simulation to map wall-clock speed to the virtual passing of time.
  * Allows setting either an end timestamp or an end event to stop the simulation at specific time.
- * TODO: Can be used to pass a socket to the simulation to allow for remote control.
  */
 export interface RunSimulationOptions<T extends StateData = StateData> {
+  /** Simulation speed in Hz (events per second) */
   rate?: number;
+
+  /** Stop simulation when `currentTime` reaches this value */
   untilTime?: Timestamp;
+
+  /** Stop simulation when this specific event finishes */
   untilEvent?: Event<T>;
 }
 
 /**
- * Object used to create new events in the simulation.
- * It must define a time to schedule the event at.
- * If the event has a parent, it will inherit the parent's process.
- * If no process is defined, the event will run the `none` process.
+ * Object used to create new events in the simulation. It must define a time to schedule the event at.
+ * An event will always trigger a process. If no process is specified, the event will run the `none` process.
+ * Optional parent-child relationships enable various inheritance patterns:
+ * - No parent: New process with provided process definition;
+ * - Parent without `inheritStep`: New process with parent data;
+ * - Parent with `inheritStep`: Continue parent's process.
  */
 export interface CreateEventOptions<T extends StateData = StateData> {
+  /** Optional parent event ID for state inheritance patterns */
   parent?: EventID;
+
+  /** Optional event priority for scheduling; lower value yields higher priority (cf. UNIX `nice`) */
   priority?: number;
+
+  /** Simulation time when event will be processed */
   scheduledAt: Timestamp;
+
+  /** Process to execute, defaults to a dummy `none` process */
   process?: ProcessCall<T>;
 }
 
 /**
- * TODO:
+ * Object used to create new stores in the simulation.
+ * Stores enable (possibly blocking) coordination between processes via get/put operations.
  * Defaults to blocking operations with capacity for one single item.
+ * Capacity determines how many items the store can hold before put operations block.
+ * Blocking operations use EventState.Waiting to pause processes until conditions resolve.
  */
 export interface CreateStoreOptions<T extends StateData = StateData> {
+  /** Controls whether the store enables synchronous (blocking) or asynchronous coordination */
   blocking?: boolean;
+
+  /** Maximum items the store can hold before `put` operations block */
   capacity?: number;
 }

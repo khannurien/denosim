@@ -137,7 +137,7 @@ function run(current: Simulation): [Simulation, boolean] {
   ).sort((a, b) => {
     return a.scheduledAt !== b.scheduledAt
       ? b.scheduledAt - a.scheduledAt
-      : b.priority - a.priority
+      : b.priority - a.priority;
   });
 
   const event = pending.pop();
@@ -183,12 +183,11 @@ function step(sim: Simulation, event: Event): Simulation {
 }
 
 /**
- * Processes an event by executing its associated process, if any.
- * Handles both immediate completion and yielding of new events.
- * Returns the intermediate state for the completed simulation step:
- * - Handled event with updated status and timestamps;
+ * Handles an event by executing its associated process.
+ * Returns the intermediate result for the completed simulation step:
+ * - Handled event with updated status and timestamps reflecting process state;
  * - Updated state for the process associated to the event;
- * - Optional next events (for multi-step processes and/or spawning new processes).
+ * - Optional next events for process continuation or spawning new processes.
  */
 function handleEvent(
   sim: Simulation,
@@ -202,11 +201,34 @@ function handleEvent(
     ? sim.state[event.parent]
     : undefined;
 
-  // Get current process state:
-  // - either from multi-step continuation: copy previous state and override with updated state;
-  // - TODO: fork/exec
-  // - or tied to the parent event: copy parent state and override with child state;
-  // - or initialize it from process definition in case of a first run.
+  // Get current process state in four different cases; respectively:
+  // CASE 1: EVENT REPROCESSING with state persistence (UNIX context switch)
+  // The same event ID is being processed again with its persisted state.
+  // This happens when:
+  // - A process returns itself with a step change (e.g., stack-size.ts recursion)
+  // - Store operations unblock a waiting event (put/get synchronization)
+  // - Any event that needs multiple processing cycles to complete
+  // The event continues from its previous state with any new data merged in.
+  // CASE 2: PROCESS CONTINUATION with step inheritance (UNIX fork)
+  // Child event explicitly continues parent's process instance.
+  // This creates true process continuation where:
+  // - Timeout completions pick up from parent's waiting step
+  // - Child events continue parent's exact execution point
+  // - The same process instance advances through multiple events
+  // Used for temporal patterns (timeouts) and explicit continuations.
+  // CASE 3: NEW PROCESS with data inheritance (UNIX fork/exec)
+  // Child starts a new process instance but inherits parent's data.
+  // This creates related but independent processes:
+  // - Parent spawning worker processes with shared context
+  // - Main process creating sub-processes with initialization data
+  // - Any parent-child relationship where data flows downstream
+  // CASE 4: BRAND NEW PROCESS (UNIX execve)
+  // Completely new process with no parent relationship.
+  // Process state initialized from process definition.
+  // This is the entry point for:
+  // - Initial events scheduled in the simulation
+  // - External triggers starting new workflows
+  // - Root processes with no dependencies
   const state: ProcessState = event.id in sim.state
     ? {
       ...sim.state[event.id],
@@ -246,14 +268,33 @@ function handleEvent(
   // Execute next step of the process
   const process = handler(sim, event, state);
 
-  // If the process did not progress, it means it is finished
-  // Legitimate loops should use parent-child event semantics
-  return process.state.step !== state.step
+  // The process has finished when ALL conditions are met:
+  // 1. Step hasn't changed (no progression in this execution)
+  //    - The process didn't advance to a new step
+  // 2. No next events scheduled (no work remaining)
+  //    - The process didn't spawn any child events to continue work
+  // 3. Not currently in Waiting state (not blocked)
+  //    - The process isn't blocked waiting for external resources
+  //
+  // When ALL three conditions are true, the process has truly completed
+  // its work and can be marked as Finished.
+  //
+  // Otherwise, the process continues:
+  // - If step changed → more work in the state machine
+  // - If next events exist → child processes to handle
+  // - If Waiting → blocked until external condition resolves
+  //
+  // This ensures processes only finish when they have:
+  // - Reached a terminal state in their state machine
+  // - Spawned all required child processes
+  // - Resolved all blocking conditions
+  return (
+      process.state.step !== state.step &&
+      process.next.length === 0 &&
+      process.updated.status !== EventState.Waiting
+    )
     ? {
       ...process,
-      updated: {
-        ...process.updated,
-      },
     }
     : {
       ...process,
@@ -289,7 +330,7 @@ export function registerProcess<
  * - Unique ID
  * - Optional parent event ID (defaults to `undefined`)
  * - Initial event state set to `Fired`
- * - TODO: Priority
+ * - An optional priority value (the lower the value, the higher the priority; defaults to 0)
  * - Timestamps for when it was created and scheduled
  * - Optional process to run on event handling (defaults to `none`, the dummy process)
  */

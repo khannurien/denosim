@@ -65,7 +65,11 @@ export function put<T extends StateData = StateData>(
   ) {
     // Blocking store: no buffer, only direct handoff or queue
     // Non-blocking store: no capacity, delay put request
-    const updatedPut = { ...event, process: { ...event.process, data }, status: EventState.Waiting };
+    const updatedPut = {
+      ...event,
+      process: { ...event.process, data },
+      status: EventState.Waiting,
+    };
     const updatedStore = {
       ...store,
       putRequests: [...store.putRequests, updatedPut],
