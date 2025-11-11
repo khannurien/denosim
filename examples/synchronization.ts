@@ -36,7 +36,9 @@ if (import.meta.main) {
     initial: "start",
     steps: {
       start(sim, event, state) {
-        console.log(`[${sim.currentTime}] prod @ start -- ${event.id} -- ${event.parent}`);
+        console.log(
+          `[${sim.currentTime}] prod @ start -- ${event.id} -- ${event.parent}`,
+        );
         console.log(
           `[${sim.currentTime}] prod @ start state = ${state.data.foo}`,
         );
@@ -46,7 +48,7 @@ if (import.meta.main) {
         });
 
         console.log(
-          `[${sim.currentTime}] prod received: step = ${step} | resume = ${resume}`
+          `[${sim.currentTime}] prod received: step = ${step} | resume = ${resume}`,
         );
 
         if (step.status === EventState.Waiting) {
@@ -97,7 +99,7 @@ if (import.meta.main) {
         const { step, resume } = get(sim, event, store.id);
 
         console.log(
-          `[${sim.currentTime}] cons received: step = ${step} | resume = ${resume}`
+          `[${sim.currentTime}] cons received: step = ${step} | resume = ${resume}`,
         );
 
         if (step.status === EventState.Waiting) {
@@ -113,7 +115,11 @@ if (import.meta.main) {
         }
 
         return {
-          state: { ...state, data: { ...step.process.data ?? state.data }, step: "stop" },
+          state: {
+            ...state,
+            data: { ...step.process.data ?? state.data },
+            step: "stop",
+          },
           next: resume ? [step, resume] : [step],
         };
       },

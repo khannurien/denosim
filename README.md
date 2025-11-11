@@ -4,7 +4,7 @@ A discrete-event simulation library for Deno. Features a stateful, event-driven 
 
 ## Main characteristics and features
 
-- ⚙️ Define **processes** using finite state machines -- your code determines state transitions;
+- ⚙️ Define **processes** using finite-state machines -- your code determines state transitions;
 - 🔗 Use **resources** to model shared data -- synchronize processes using `put`/`get` semantics;
 - ⏯️ Leverage **immutability** to pause and resume simulations -- snapshot the whole simulation state and restore it later.
 

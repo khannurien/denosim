@@ -49,12 +49,15 @@ Deno.test("producer-consumer synchronization with blocking", async () => {
           next: [],
         };
       },
-    }
-  }
+    },
+  };
 
   sim.registry = registerProcess(sim, foo);
 
-  const e1 = createEvent(sim, { scheduledAt: sim.currentTime, process: { type: "foo" } });
+  const e1 = createEvent(sim, {
+    scheduledAt: sim.currentTime,
+    process: { type: "foo" },
+  });
 
   sim.events = scheduleEvent(sim, e1);
 

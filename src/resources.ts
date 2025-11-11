@@ -52,25 +52,28 @@ export function put<T extends StateData = StateData>(
     const getRequest = store.getRequests.pop()!;
 
     console.log("data = ", data);
-    console.log("getRequest.process = ", getRequest.process)
+    console.log("getRequest.process = ", getRequest.process);
 
     // Reschedule the get request with the data attached
     const updatedGet: Event<T> = createEvent(sim, {
       parent: getRequest.parent,
       scheduledAt: sim.currentTime,
       process: {
-        ...getRequest.process, inheritStep: true, data: { ...data },
+        ...getRequest.process,
+        inheritStep: true,
+        data: { ...data },
       },
     });
 
-    console.log("updatedGet.process = ", updatedGet.process)
+    console.log("updatedGet.process = ", updatedGet.process);
 
     const updatedPut: Event<T> = createEvent(sim, {
       parent: event.id,
       scheduledAt: sim.currentTime,
       process: {
-        ...event.process, inheritStep: true
-      }
+        ...event.process,
+        inheritStep: true,
+      },
     });
 
     return { step: updatedPut, resume: updatedGet };
@@ -85,7 +88,8 @@ export function put<T extends StateData = StateData>(
       waiting: true,
       scheduledAt: sim.currentTime,
       process: {
-        ...event.process, inheritStep: true
+        ...event.process,
+        inheritStep: true,
       },
     });
 
@@ -103,7 +107,8 @@ export function put<T extends StateData = StateData>(
     parent: event.id,
     scheduledAt: sim.currentTime,
     process: {
-      ...event.process, inheritStep: true
+      ...event.process,
+      inheritStep: true,
     },
   });
 
@@ -146,7 +151,11 @@ export function get<T extends StateData = StateData>(
     const updatedGet = createEvent(sim, {
       parent: event.id,
       scheduledAt: sim.currentTime,
-      process: { ... event.process, inheritStep: true, data: { ...updatedPut.process.data } },
+      process: {
+        ...event.process,
+        inheritStep: true,
+        data: { ...updatedPut.process.data },
+      },
     }) as Event<T>;
 
     return { step: updatedGet, resume: updatedPut };
@@ -162,7 +171,11 @@ export function get<T extends StateData = StateData>(
     const updatedGet = createEvent(sim, {
       parent: event.id,
       scheduledAt: sim.currentTime,
-      process: { ...event.process, inheritStep: true, data: { ...buffered.process.data } },
+      process: {
+        ...event.process,
+        inheritStep: true,
+        data: { ...buffered.process.data },
+      },
     }) as Event<T>;
 
     return { step: updatedGet };
@@ -173,7 +186,7 @@ export function get<T extends StateData = StateData>(
     parent: event.id,
     scheduledAt: sim.currentTime,
     waiting: true,
-    process: { ...event.process, inheritStep: true }
+    process: { ...event.process, inheritStep: true },
   });
 
   const updatedStore = {

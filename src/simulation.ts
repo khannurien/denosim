@@ -170,11 +170,13 @@ function step(sim: Simulation, event: Event): Simulation {
 
   // Update the event instance in the event queue if necessary
   nextSim.events = nextSim.events.map((previous) =>
-    (previous.id === event.id) ? {
-      ...previous,
-      status: EventState.Finished,
-      finishedAt: nextSim.currentTime,
-    } : previous
+    (previous.id === event.id)
+      ? {
+        ...previous,
+        status: EventState.Finished,
+        finishedAt: nextSim.currentTime,
+      }
+      : previous
   );
 
   // Schedule the next events yielded by the current process if necessary
@@ -215,43 +217,44 @@ function handleEvent(
     // - The same process instance advances through multiple events
     // Used for temporal patterns (timeouts), synchronous I/O (synchronization).
     (
-      parentState && event.process.inheritStep &&
-      parentState.type === event.process.type
-    ) ? {
-      type: parentState.type,
-      step: parentState.step,
-      data: {
-        ...parentState.data,
-        ...event.process.data,
-      },
-    }
-    // NEW PROCESS with data inheritance (UNIX `fork`/`exec`)
-    // Child starts a new process instance but inherits parent's data.
-    // This creates related but independent processes:
-    // - Parent spawning worker processes with shared context
-    // - Main process creating sub-processes with initialization data
-    // - Any parent-child relationship where data flows downstream
-    : parentState
-    ? {
-      type: definition.type,
-      step: definition.initial,
-      data: {
-        ...parentState.data,
-        ...event.process.data,
-      },
-    }
-    // BRAND NEW PROCESS (UNIX `execve`)
-    // Completely new process with no parent relationship.
-    // Process state initialized from process definition.
-    // This is the entry point for:
-    // - Initial events scheduled in the simulation
-    // - External triggers starting new workflows
-    // - Root processes with no dependencies
-    : {
-      type: definition.type,
-      step: definition.initial,
-      data: { ...event.process.data },
-    };
+        parentState && event.process.inheritStep &&
+        parentState.type === event.process.type
+      )
+      ? {
+        type: parentState.type,
+        step: parentState.step,
+        data: {
+          ...parentState.data,
+          ...event.process.data,
+        },
+      }
+      // NEW PROCESS with data inheritance (UNIX `fork`/`exec`)
+      // Child starts a new process instance but inherits parent's data.
+      // This creates related but independent processes:
+      // - Parent spawning worker processes with shared context
+      // - Main process creating sub-processes with initialization data
+      // - Any parent-child relationship where data flows downstream
+      : parentState
+      ? {
+        type: definition.type,
+        step: definition.initial,
+        data: {
+          ...parentState.data,
+          ...event.process.data,
+        },
+      }
+      // BRAND NEW PROCESS (UNIX `execve`)
+      // Completely new process with no parent relationship.
+      // Process state initialized from process definition.
+      // This is the entry point for:
+      // - Initial events scheduled in the simulation
+      // - External triggers starting new workflows
+      // - Root processes with no dependencies
+      : {
+        type: definition.type,
+        step: definition.initial,
+        data: { ...event.process.data },
+      };
 
   // Retrieve process step handler according to the process state
   const handler = definition.steps[state.step];

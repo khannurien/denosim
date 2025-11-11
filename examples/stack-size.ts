@@ -26,14 +26,16 @@ if (import.meta.main) {
     steps: {
       start(sim, event, state) {
         console.log(
-          `[${sim.currentTime}] Event id = ${event.id}; stop = ${state.data["stop"]}; got count = ${
-            state.data["count"]
-          }`,
+          `[${sim.currentTime}] Event id = ${event.id}; stop = ${
+            state.data["stop"]
+          }; got count = ${state.data["count"]}`,
         );
 
         const nextEvent: Event<FooData> = createEvent(sim, {
           parent: event.id,
-          scheduledAt: sim.currentTime < state.data["stop"] ? sim.currentTime + 1 : sim.currentTime,
+          scheduledAt: sim.currentTime < state.data["stop"]
+            ? sim.currentTime + 1
+            : sim.currentTime,
           process: {
             type: "foo",
             inheritStep: true,
@@ -48,7 +50,7 @@ if (import.meta.main) {
               : { ...state.data },
             step: sim.currentTime < state.data["stop"] ? "start" : "stop",
           },
-          next: [nextEvent]
+          next: [nextEvent],
         };
       },
       stop(sim, _event, state) {
