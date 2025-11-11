@@ -1,140 +1,187 @@
-import { Event, ProcessState, Simulation, Store } from "./model.ts";
+import {
+  CreateStoreOptions,
+  Event,
+  Simulation,
+  StateData,
+  Store,
+  StoreID,
+  StoreResult,
+} from "./model.ts";
+import { createEvent } from "./simulation.ts";
 
-/**
- * Creates a new store with:
- * - Unique ID
- * - Array of initial items (defaults to an empty array)
- * - Empty requests arrays (no scheduled get requests)
- * - Maximum capacity (defaults to 1 item at any time)
- */
-export function createStore<T>(capacity: number = 1): Store<T> {
-  if (capacity < 0) {
+export function initializeStore<T extends StateData = StateData>(
+  options: CreateStoreOptions<T>,
+): Store<T> {
+  return {
+    ...options,
+    id: crypto.randomUUID(),
+    blocking: options.blocking ?? true,
+    capacity: options.capacity ?? 1,
+    buffer: [],
+    getRequests: [],
+    putRequests: [],
+  };
+}
+
+export function registerStore<T extends StateData = StateData>(
+  sim: Simulation,
+  store: Store<T>,
+): Record<StoreID, Store> {
+  return { ...sim.stores, [store.id]: { ...store } };
+}
+
+export function put<T extends StateData = StateData>(
+  sim: Simulation,
+  event: Event<T>,
+  id: StoreID,
+  data: T,
+): StoreResult<T> {
+  // Retrieve store
+  // FIXME: Explicit cast. Need a mapped type?
+  const store = sim.stores[id] as Store<T>;
+  if (!store) {
     throw RangeError(
-      `Store cannot be created with a negative capacity (got ${capacity}).`,
+      `Store not found: ${id}` +
+        `(scheduled at: ${event.scheduledAt}; current time: ${sim.currentTime})`,
     );
   }
 
-  return {
-    capacity,
-    getRequests: [],
-    putRequests: [],
-    delayedPutRequests: [],
-  };
-}
+  // Blocking store or non-blocking store at capacity: check for pending get request
+  if (store.getRequests.length > 0) {
+    console.log("store.getRequests.length > 0");
+    const getRequest = store.getRequests.pop()!;
 
-/**
- * Blocking operations that gets an item from a store.
- * Pops an item from the store if available, returning it immediately.
- * If there is no item in store, yields control and resumes on the next put operation.
- * Returns the item that has been put into the request.
- */
-export function* get<T>(
-  sim: Simulation,
-  event: Event<T>,
-  store: Store<T>,
-): ProcessState<T> {
-  while (true) {
-    // Fetch delayed put requests first, if any
-    const sourceQueue = store.delayedPutRequests.length > 0
-      ? store.delayedPutRequests
-      : store.putRequests;
+    console.log("data = ", data);
+    console.log("getRequest.process = ", getRequest.process)
 
-    // Sort put requests in descending order so we can efficiently pop the earliest one
-    const putRequest = sourceQueue.sort((a, b) => b.scheduledAt - a.scheduledAt)
-      .pop();
+    // Reschedule the get request with the data attached
+    const updatedGet: Event<T> = createEvent(sim, {
+      parent: getRequest.parent,
+      scheduledAt: sim.currentTime,
+      process: {
+        ...getRequest.process, inheritStep: true, data: { ...data },
+      },
+    });
 
-    // If a put request was already fired
-    if (putRequest) {
-      // Return the completed request to be rescheduled immediately
-      const updated = { ...putRequest, scheduledAt: sim.currentTime };
-      yield updated;
-      return { sim, event: updated };
-    }
+    console.log("updatedGet.process = ", updatedGet.process)
 
-    // There was no pending put request, store the get request
-    store.getRequests = [...store.getRequests, event];
+    const updatedPut: Event<T> = createEvent(sim, {
+      parent: event.id,
+      scheduledAt: sim.currentTime,
+      process: {
+        ...event.process, inheritStep: true
+      }
+    });
 
-    // Yield control
-    return yield;
+    return { step: updatedPut, resume: updatedGet };
   }
-}
 
-/**
- * Store operation that makes an item available from a store.
- * Non-blocking by default; the operation can be configured to be blocked until a
- * corresponding get request is registered in the store.
- * If there are pending get requests, handles the earliest one with passed item.
- * Otherwise, stores the item in a put request for future use.
- */
-export function* put<T>(
-  sim: Simulation,
-  event: Event<T>,
-  store: Store<T>,
-  item: T,
-  blocking: boolean = false,
-): ProcessState<T> {
-  // TODO: Refactor to merge put and blockingPut with capacity handling
+  // // Blocking store or non-blocking store without pending get request: block put
   if (
-    blocking ||
-    store.putRequests.length - store.getRequests.length >= store.capacity
+    store.blocking || (!store.blocking && store.buffer.length >= store.capacity)
   ) {
-    return yield* blockingPut(sim, event, store, item);
+    const updatedPut: Event<T> = createEvent(sim, {
+      parent: event.id,
+      waiting: true,
+      scheduledAt: sim.currentTime,
+      process: {
+        ...event.process, inheritStep: true
+      },
+    });
+
+    const updatedStore = {
+      ...store,
+      putRequests: [...store.putRequests, updatedPut],
+    };
+    sim.stores = { ...sim.stores, [store.id]: updatedStore };
+
+    return { step: updatedPut };
   }
 
-  // Sort get requests in descending order so we can efficiently pop the earliest one
-  const getRequest = store.getRequests.sort((a, b) =>
-    b.scheduledAt - a.scheduledAt
-  ).pop();
-
-  // Either create a new put request or reschedule an existing get request
-  const putRequest = (!getRequest) ? { ...event, item } : {
-    ...getRequest,
+  // Non-blocking store with capacity available: use buffer
+  const updatedPut: Event<T> = createEvent(sim, {
+    parent: event.id,
     scheduledAt: sim.currentTime,
-    item,
+    process: {
+      ...event.process, inheritStep: true
+    },
+  });
+
+  const updatedStore = {
+    ...store,
+    buffer: [...store.buffer, updatedPut],
   };
 
-  // There was no pending get request, store the put request
-  if (!getRequest) {
-    store.putRequests = [...store.putRequests, putRequest];
-  }
+  sim.stores = { ...sim.stores, [store.id]: updatedStore };
 
-  // Yield continuation
-  return yield putRequest;
+  return { step: updatedPut };
 }
 
-/**
- * Blocking put -- private function, for internal use only.
- */
-function* blockingPut<T>(
+export function get<T extends StateData = StateData>(
   sim: Simulation,
   event: Event<T>,
-  store: Store<T>,
-  item: T,
-): ProcessState<T> {
-  while (true) {
-    // Sort get requests in descending order so we can efficiently pop the earliest one
-    const getRequest = store.getRequests.sort((a, b) =>
-      b.scheduledAt - a.scheduledAt
-    ).pop();
-
-    // If a get request was already fired
-    if (getRequest) {
-      // Return the updated request to be rescheduled immediately
-      const updated = { ...getRequest, scheduledAt: sim.currentTime, item };
-      yield updated;
-      return { sim, event: updated };
-    }
-
-    const putRequest = { ...event, item };
-    // There was no pending get request, store the put request
-    if (store.putRequests.length - store.getRequests.length >= store.capacity) {
-      // Do not exceed store capacity
-      store.delayedPutRequests = [...store.delayedPutRequests, putRequest];
-    } else {
-      store.putRequests = [...store.putRequests, putRequest];
-    }
-
-    // Yield control
-    return yield;
+  id: StoreID,
+): StoreResult<T> {
+  // Retrieve store
+  // FIXME: Explicit cast. Need a mapped type?
+  const store = sim.stores[id] as Store<T>;
+  if (!store) {
+    throw RangeError(
+      `Store not found: ${id}` +
+        `(scheduled at: ${event.scheduledAt}; current time: ${sim.currentTime})`,
+    );
   }
+
+  // Check for pending put request (blocked producers)
+  if (store.putRequests.length > 0) {
+    const putRequest = store.putRequests.pop()!;
+
+    const updatedPut: Event<T> = createEvent(sim, {
+      parent: putRequest.parent,
+      scheduledAt: sim.currentTime,
+      process: { ...putRequest.process, inheritStep: true },
+    });
+
+    // FIXME: Explicit cast
+    const updatedGet = createEvent(sim, {
+      parent: event.id,
+      scheduledAt: sim.currentTime,
+      process: { ... event.process, inheritStep: true, data: { ...updatedPut.process.data } },
+    }) as Event<T>;
+
+    return { step: updatedGet, resume: updatedPut };
+  }
+
+  // Non-blocking store: check buffer (completed puts)
+  if (!store.blocking && store.buffer.length > 0) {
+    // Get data from buffer
+    const buffered = store.buffer.pop()!;
+
+    // Return get request with the obtained data
+    // FIXME: Explicit cast
+    const updatedGet = createEvent(sim, {
+      parent: event.id,
+      scheduledAt: sim.currentTime,
+      process: { ...event.process, inheritStep: true, data: { ...buffered.process.data } },
+    }) as Event<T>;
+
+    return { step: updatedGet };
+  }
+
+  // No data available: wait in queue
+  const updatedGet = createEvent(sim, {
+    parent: event.id,
+    scheduledAt: sim.currentTime,
+    waiting: true,
+    process: { ...event.process, inheritStep: true }
+  });
+
+  const updatedStore = {
+    ...store,
+    getRequests: [...store.getRequests, updatedGet],
+  };
+
+  sim.stores = { ...sim.stores, [store.id]: updatedStore };
+
+  return { step: updatedGet };
 }

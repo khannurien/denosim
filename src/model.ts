@@ -2,35 +2,47 @@
  * Core simulation container that maintains:
  * - The current virtual time of the simulation
  * - All events that have been scheduled
+ * - A process definition registry for all processes available in the simulation
+ * - The current state of all running processes
  */
-export interface Simulation {
+export interface Simulation<R extends ProcessRegistry = ProcessRegistry> {
   /**
    * The current virtual time in the simulation.
    * Represents the timestamp up to which the simulation has processed.
    * Measured in arbitrary time units (could be steps, seconds, etc.).
    */
-  currentTime: number;
+  currentTime: Timestamp;
 
   /**
    * Queue of all events in the system.
    * Includes:
    * - Newly scheduled but not yet processed events
-   * - Partially processed events with generator state
+   * - Partially processed events, which have related process execution state
    * - Completed events (for historical tracking)
    */
-  events: Event<unknown>[];
+  events: Event[];
 
   /**
-   * Optional generator state for multi-step processes.
-   * Generators are associated with their original event ID.
-   * Preserves execution context between partial processing runs.
+   * Registry of all process definitions available in the simulation.
+   * Maps process names to their definitions.
+   * Allows dynamic process registration and lookup.
+   * Includes a default `none` process for events without associated processes.
    */
-  state: Record<string, ProcessState<unknown>>;
+  registry: R;
+
+  /**
+   * Current simulation state of all running processes.
+   * Maps processes' event ID to their current state data.
+   */
+  state: Record<EventID, ProcessState>;
+
+  /** Current state of all stores in the simulation, used for process synchronization */
+  stores: Record<StoreID, Store>;
 }
 
 /**
  * Lifecycle states for events within the simulation.
- * Follows a strict progression: Fired → Scheduled → Finished
+ * Events progress through states with possible blocking at Waiting.
  */
 export enum EventState {
   /**
@@ -41,9 +53,16 @@ export enum EventState {
 
   /**
    * Event has been scheduled for future processing.
-   * Will be executed when simulation time reaches scheduledAt.
+   * Will be executed when simulation time reaches `scheduledAt`.
    */
   Scheduled = "Scheduled",
+
+  /**
+   * Event is blocked waiting for external conditions.
+   * Used by store operations and synchronization primitives.
+   * Events remain in this state until unblocked by another process.
+   */
+  Waiting = "Waiting",
 
   /**
    * Final state indicating the event has been fully processed.
@@ -53,137 +72,287 @@ export enum EventState {
 }
 
 /**
- * Holds the state of the ongoing process for an event in a generator.
- * Can yield an event for execution continuation.
- * Can return a final value.
- */
-export type ProcessState<T = void> = Generator<
-  Event<T> | undefined,
-  ProcessReturn<T>,
-  ProcessReturn<T>
->;
-
-/**
- * Represents a step of event handling. It holds:
- * - A copy of the original event, updated after it has been handled;
- * - The current state of its associated process;
- * - A successor event to schedule in case of a multi-step process.
- */
-export interface ProcessStep<T = void> {
-  /** The updated event */
-  updated: Event<T>;
-
-  /** The current process state */
-  state: ProcessState<T>;
-
-  /** Optional next event to be scheduled */
-  next?: Event<T>;
-}
-
-/**
- * Holds the simulation state updated after a process step.
- * Returned by the process generator, and fed into its next step.
- */
-export interface ProcessReturn<T = void> {
-  /** The updated simulation */
-  sim: Simulation;
-
-  /** The updated original event */
-  event: Event<T>;
-}
-
-/**
- * Type definition for event process logic.
- * Generator function that defines an event's behavior.
- * Can yield to pause execution and schedule intermediate events.
- */
-export type Process<T = void> = (
-  sim: Simulation, // Reference to the running simulation
-  event: Event<T>, // The event instance being processed
-) => ProcessState<T>; // Generator that can yield events or nothing
-
-/**
  * Represents a discrete event in the simulation system.
- * Events are immutable - state changes create new instances.
+ * Events can be tied to processes, which define their behavior.
+ * Events are immutable - state changes are tied to new event instances.
+ * Events can have parent-child relationships in the context of their process.
  */
-export interface Event<T = void> {
+export interface Event<T extends StateData = StateData> {
   /** Unique identifier for the event */
-  id: string;
+  id: EventID;
+
+  /** Optional parent event ID; defines a graph of events across processes */
+  parent?: EventID;
 
   /** Current lifecycle state of the event */
   status: EventState;
 
   /**
-   * When the event was initially created.
-   * Represents the simulation time when createEvent() was called.
+   * Optional event priority for scheduling; lower value yields higher priority (cf. UNIX `nice`).
+   * Defaults to `0`.
    */
-  firedAt: number;
+  priority: number;
+
+  /**
+   * When the event was initially created.
+   * Represents the simulation time when `createEvent()` was called.
+   */
+  firedAt: Timestamp;
 
   /**
    * When the event should be processed.
    * Simulation time will jump directly to this value when processed.
    */
-  scheduledAt: number;
+  scheduledAt: Timestamp;
 
   /**
    * When the event completed processing.
-   * Only populated when status = EventState.Finished
+   * Only populated when `status` is `EventState.Finished`.
    */
-  finishedAt?: number;
+  finishedAt?: Timestamp;
 
   /**
-   * Optional item that can be passed through the event.
+   * Type of process to execute when event is handled.
+   * Defaults to `none`, which calls a no-op process.
+   * Optional data can be used to initialize the process state.
    */
-  item?: T;
+  process: ProcessCall<T>;
+}
+
+/**
+ * Synchronization data structure used for coordinating processes.
+ * Stores are used through `get` and `put` primitives that work in a LIFO fashion.
+ * Used for inter-process synchronization, producer-consumer patterns, resource sharing, etc.
+ */
+export interface Store<T extends StateData = StateData> {
+  /** Unique identifier for this store */
+  id: StoreID;
+
+  /** Maximum items the store can hold before `put` operations block. Defaults to `1`. */
+  capacity: number;
 
   /**
-   * The process logic to execute when this event is processed.
-   * Generator function that can yield to pause/resume execution.
+   * Controls whether the store enables synchronous (blocking) or asynchronous coordination.
+   * Defaults to `true`.
    */
-  callback: Process<T>;
+  blocking: boolean;
+
+  /** Items currently stored by non-blocking `put` operations and awaiting consumption */
+  buffer: Event<T>[];
+
+  /** Processes blocked waiting to get items */
+  getRequests: Event<T>[];
+
+  /** Processes blocked waiting to put items */
+  putRequests: Event<T>[];
+}
+
+/**
+ * TODO:
+ */
+export interface StoreResult<T extends StateData = StateData> {
+  /** TODO: Continuation event for the calling process */
+  step: Event<T>;
+
+  /** TODO: Resume event for the blocked process, if any */
+  resume?: Event<T>;
+}
+
+/** Timestamp for simulation clock */
+export type Timestamp = number;
+
+/** Unique, random identifier for an event */
+export type EventID = string;
+
+/** Unique, random identifier for a store */
+export type StoreID = string;
+
+/** Unique, user-defined identifier for a process */
+export type ProcessType = string;
+
+/** User-defined identifier for a step within a process. Unique at process level */
+export type StepType = string;
+
+/** Represents any data that can be stored in the simulation state */
+export type StateData = Record<string, unknown>;
+
+/**
+ * Used to specify and narrow the type of input state data for a process.
+ * This is the type of the state data that is passed to the process step handler.
+ */
+type StateInput = StateData;
+/**
+ * Used to specify and narrow the types of output state data for a process.
+ * This is an ordered list of types that map to the `next` events yielded by a process step.
+ */
+type StateOutput = StateData[];
+
+/** Maps process steps to their input and output state data types */
+export type StepStateMap<
+  I extends StateInput = StateInput,
+  O extends StateOutput = StateOutput,
+> = Record<StepType, [I, O]>;
+
+/** Dynamically maps process steps to their corresponding handlers */
+export type StepsDefinition<T extends StepStateMap> = {
+  [K in keyof T]: ProcessHandler<T[K][0], T[K][1]>;
+};
+
+/** TODO: Not sure if that is useful... */
+type ProcessRegistry = Record<ProcessType, ProcessDefinition<StepStateMap>>;
+
+/**
+ * Defines a process with a unique type and its state machine behavior.
+ * Processes progress through steps, each with specific input/output state types.
+ * Used to model workflows, state machines, and temporal patterns in the simulation.
+ */
+export interface ProcessDefinition<M extends StepStateMap> {
+  /** Unique identifier for this process type */
+  type: ProcessType;
+
+  /** Starting step in the state machine when process is first created */
+  initial: keyof M;
+
+  /** Step handlers defining the process behavior */
+  steps: StepsDefinition<M>;
+}
+
+/**
+ * Attached to an event that will spawn a process when handled.
+ * For process state initialization, refer to `handleEvent` implementation.
+ */
+export interface ProcessCall<T extends StateData = StateData> {
+  /** Unique process type identifier */
+  type: ProcessType;
+
+  /**
+   * Optional flag to control step inheritance from parent events.
+   * When true, the process starts from the parent's current step instead of their definition's initial step.
+   */
+  inheritStep?: boolean;
+
+  /**
+   * Optional data that can be passed to the process.
+   * Can be used to initialize process state.
+   */
+  data?: T;
+}
+
+/**
+ * A process handler is a function that executes the processing logic associated with an event, and returns a
+ * process step.
+ * Knowing the current simulation state, it is capable of computing the state of the process's next step.
+ */
+export type ProcessHandler<
+  I extends StateInput = StateInput,
+  O extends StateOutput = StateOutput,
+> = (
+  sim: Simulation,
+  event: Event<I>,
+  state: ProcessState<I>,
+) => ProcessStep<I, O>;
+
+/**
+ * This is a process-level structure that is used to keep track of a process's progress and data.
+ * It is passed to the process handler of an event to compute the next step of the process.
+ */
+export interface ProcessState<T extends StateData = StateData> {
+  /** Unique process type identifier */
+  type: ProcessType;
+
+  /** Current step of the process */
+  step: StepType;
+
+  /** Current state data for the process */
+  data: T;
+}
+
+/**
+ * This is a scheduler-level data structure that is used to keep track of a process's progress and data.
+ * It is returned by the process handler of an event and stored in the simulation state.
+ */
+export interface ProcessStep<
+  I extends StateInput = StateInput,
+  O extends StateOutput = StateOutput,
+> {
+  /** Process handler returns the updated state of the process */
+  state: ProcessState<I>;
+
+  /**
+   * Process handler returns the next events to be scheduled.
+   * This is expressed as a mapped tuple type:
+   * - If `type O = [A, B, C]`, resolves to [Event<A>, Event<B>, Event<C>];
+   * - Mapped types over tuples preserve order and length.
+   */
+  next: { [K in keyof O]: Event<O[K]> };
 }
 
 /**
  * Statistics about a simulation run.
- * Currently tracks only duration, but could be extended with:
- * - Events processed count
- * - Average event latency
+ * Currently tracks only end timestamp and simulation duration, but could be extended with:
+ * - Average process latency
  * - Other performance metrics
  */
 export interface SimulationStats {
+  /** Simulation time the simulation ended at */
+  end: Timestamp;
+
   /** Real-world time (in milliseconds) the simulation took to complete */
   duration: number;
 }
 
 /**
- * Utility data structure for inter-process synchronization.
- * Put/Get operations (see resources.ts) work in a FIFO fashion.
+ * Object used to configure a simulation run.
+ * Allows setting the rate of simulation to map wall-clock speed to the virtual passing of time.
+ * Allows setting either an end timestamp or an end event to stop the simulation at specific time.
  */
-export interface Store<T> {
-  /**
-   * Maximum number of items a store can hold at any time.
-   * If a put request is fired and capacity is already reached,
-   * the request will be delayed.
-   */
-  readonly capacity: number;
+export interface RunSimulationOptions<T extends StateData = StateData> {
+  /** Simulation speed in Hz (events per second) */
+  rate?: number;
 
-  /**
-   * Array of pending get requests in the store.
-   * Earliest requests will be handled first.
-   */
-  getRequests: Event<T>[];
+  /** Stop simulation when `currentTime` reaches this value */
+  untilTime?: Timestamp;
 
-  /**
-   * Array of pending put requests in the store.
-   * Earliest requests will be handled first.
-   */
-  putRequests: Event<T>[];
+  /** Stop simulation when this specific event finishes */
+  untilEvent?: Event<T>;
+}
 
-  /**
-   * Array of delayed put requests in the store.
-   * Requests can be delayed because store capacity has been reached,
-   * or because a blocking put request has been fired and is waiting for a get request.
-   * Earliest requests will be handled first.
-   */
-  delayedPutRequests: Event<T>[];
+/**
+ * Object used to create new events in the simulation. It must define a time to schedule the event at.
+ * An event will always trigger a process. If no process is specified, the event will run the `none` process.
+ * Optional parent-child relationships enable various inheritance patterns:
+ * - No parent: New process with provided process definition;
+ * - Parent without `inheritStep`: New process with parent data;
+ * - Parent with `inheritStep`: Continue parent's process.
+ */
+export interface CreateEventOptions<T extends StateData = StateData> {
+  /** Optional parent event ID for state inheritance patterns */
+  parent?: EventID;
+
+  /** TODO: If `true`, the event will not be scheduled for process execution */
+  waiting?: boolean;
+
+  /** Optional event priority for scheduling; lower value yields higher priority (cf. UNIX `nice`) */
+  priority?: number;
+
+  /** Simulation time when event will be processed */
+  scheduledAt: Timestamp;
+
+  /** Process to execute, defaults to a dummy `none` process */
+  process?: ProcessCall<T>;
+}
+
+/**
+ * Object used to create new stores in the simulation.
+ * Stores enable (possibly blocking) coordination between processes via `get`/`put` operations.
+ * Defaults to blocking operations with capacity for one single item.
+ * Capacity determines how many items the store can hold before `put` operations block.
+ * Blocking operations use `EventState.Waiting` to pause processes until conditions resolve.
+ */
+export interface CreateStoreOptions<T extends StateData = StateData> {
+  /** Controls whether the store enables synchronous (blocking) or asynchronous coordination */
+  blocking?: boolean;
+
+  /** Maximum items the store can hold before `put` operations block */
+  capacity?: number;
 }

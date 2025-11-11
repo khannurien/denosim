@@ -1,51 +1,183 @@
-import { timeout } from "../mod.ts";
-import { Process, Store } from "../src/model.ts";
-import { createStore, get, put } from "../src/resources.ts";
 import {
   createEvent,
+  EventState,
+  get,
   initializeSimulation,
+  initializeStore,
+  ProcessDefinition,
+  put,
+  registerProcess,
+  registerStore,
   runSimulation,
   scheduleEvent,
-} from "../src/simulation.ts";
+  StateData,
+} from "../mod.ts";
 
 if (import.meta.main) {
   const sim = initializeSimulation();
 
-  const store: Store<boolean> = createStore<boolean>();
+  interface FooData extends StateData {
+    "foo": string;
+  }
 
-  const p1: Process<boolean> = function* (sim, _event) {
-    let step = yield* timeout(sim, 10);
-    console.log(`[${step.sim.currentTime}] p1 -- true`);
-    step = yield* put(step.sim, step.event, store, true);
-    console.log(`[${step.sim.currentTime}] p1 -- done`);
+  const store = initializeStore<FooData>(
+    {
+      blocking: true,
+    },
+  );
 
-    console.log(`[${step.sim.currentTime}] p1 -- trying...`);
-    step = yield* get(step.sim, step.event, store);
-    console.log(`[${step.sim.currentTime}] p1 -- ${step.event}: success!`);
+  sim.stores = registerStore(sim, store);
 
-    return yield;
+  const prod: ProcessDefinition<{
+    start: [FooData, [FooData, FooData] | [FooData]];
+    stop: [FooData, []];
+  }> = {
+    type: "prod",
+    initial: "start",
+    steps: {
+      start(sim, event, state) {
+        console.log(`[${sim.currentTime}] prod @ start -- ${event.id} -- ${event.parent}`);
+        console.log(
+          `[${sim.currentTime}] prod @ start state = ${state.data.foo}`,
+        );
+
+        const { step, resume } = put(sim, event, store.id, {
+          ...state.data,
+        });
+
+        console.log(
+          `[${sim.currentTime}] prod received: step = ${step} | resume = ${resume}`
+        );
+
+        if (step.status === EventState.Waiting) {
+          // Delayed
+          console.log(
+            `[${sim.currentTime}] prod put request for "${state.data.foo}" blocked on store ${store.id}`,
+          );
+        } else {
+          // Succeeded
+          console.log(
+            `[${sim.currentTime}] prod put "${state.data.foo}" in store ${store.id}`,
+          );
+        }
+
+        return {
+          state: { ...state, step: "stop" },
+          next: resume ? [step, resume] : [step],
+        };
+      },
+      stop(sim, event, state) {
+        console.log(
+          `[${sim.currentTime}] prod @ stop -- ${event.id} -- ${event.parent}`,
+        );
+
+        return {
+          state,
+          next: [],
+        };
+      },
+    },
   };
 
-  const p2: Process<boolean> = function* (sim, event) {
-    console.log(`[${sim.currentTime}] p2 -- trying...`);
-    let step = yield* get(sim, event, store);
-    console.log(`[${step.sim.currentTime}] p2 -- ${step.event}: success!`);
-    step = yield* timeout(step.sim, 20);
-    step = yield* put(step.sim, step.event, store, true);
-    console.log(`[${step.sim.currentTime}] p2 -- done`);
+  sim.registry = registerProcess(sim, prod);
 
-    return yield;
+  const cons: ProcessDefinition<{
+    start: [FooData, [FooData, FooData] | [FooData]];
+    stop: [FooData, []];
+  }> = {
+    type: "cons",
+    initial: "start",
+    steps: {
+      start(sim, event, state) {
+        console.log(`[${sim.currentTime}] cons @ start`);
+        console.log(
+          `[${sim.currentTime}] cons @ start state = ${state.data.foo}`,
+        );
+
+        const { step, resume } = get(sim, event, store.id);
+
+        console.log(
+          `[${sim.currentTime}] cons received: step = ${step} | resume = ${resume}`
+        );
+
+        if (step.status === EventState.Waiting) {
+          // Delayed
+          console.log(
+            `[${sim.currentTime}] cons get request blocked on store ${store.id}`,
+          );
+        } else {
+          // Succeeded
+          console.log(
+            `[${sim.currentTime}] cons got data from store ${store.id}`,
+          );
+        }
+
+        return {
+          state: { ...state, data: { ...step.process.data ?? state.data }, step: "stop" },
+          next: resume ? [step, resume] : [step],
+        };
+      },
+      stop(sim, _event, state) {
+        console.log(
+          `[${sim.currentTime}] cons @ stop`,
+        );
+        console.log(
+          `[${sim.currentTime}] cons @ stop state = ${state.data.foo}`,
+        );
+
+        return {
+          state,
+          next: [],
+        };
+      },
+    },
   };
 
-  const e1 = createEvent(sim, 0, p1);
+  sim.registry = registerProcess(sim, cons);
+
+  const e1 = createEvent(sim, {
+    scheduledAt: 0,
+    process: {
+      type: "prod",
+      data: {
+        foo: "bar",
+      },
+    },
+  });
   sim.events = scheduleEvent(sim, e1);
 
-  const e2 = createEvent(sim, 0, p2);
+  const e2 = createEvent(sim, {
+    scheduledAt: 1,
+    process: {
+      type: "cons",
+    },
+  });
   sim.events = scheduleEvent(sim, e2);
 
-  const [stop, stats] = runSimulation(sim);
+  const e3 = createEvent(sim, {
+    scheduledAt: 5,
+    process: {
+      type: "cons",
+    },
+  });
+  sim.events = scheduleEvent(sim, e3);
+
+  const e4 = createEvent(sim, {
+    scheduledAt: 10,
+    process: {
+      type: "prod",
+      data: {
+        "foo": "snafu",
+      },
+    },
+  });
+  sim.events = scheduleEvent(sim, e4);
+
+  const [states, stats] = await runSimulation(sim);
+  const stop = states[states.length - 1];
+
+  console.log(stop.events);
 
   console.log(`Simulation ended at ${stop.currentTime}`);
   console.log(`Simulation took: ${stats.duration} ms`);
-  console.log("Events:", JSON.stringify(stop.events, null, 2));
 }

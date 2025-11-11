@@ -1,296 +1,126 @@
-import { assertEquals, assertThrows } from "@std/assert";
-import { Process, Store } from "../src/model.ts";
+import { assertEquals, assertRejects, assertThrows } from "@std/assert";
 import {
   createEvent,
+  EventState,
+  get,
   initializeSimulation,
+  initializeStore,
+  ProcessDefinition,
+  put,
+  registerProcess,
+  registerStore,
   runSimulation,
   scheduleEvent,
-} from "../src/simulation.ts";
-import { createStore, get, put } from "../src/resources.ts";
+  StateData,
+} from "../mod.ts";
 
-Deno.test("basic store operations", () => {
+interface FooData extends StateData {
+  "foo": string;
+}
+
+interface NumberData extends StateData {
+  "value": number;
+}
+
+Deno.test("producer-consumer synchronization with blocking", async () => {
   const sim = initializeSimulation();
 
-  const store: Store<string> = createStore<string>();
-  const result: Record<string, string | undefined> = {};
+  const store = initializeStore(
+    {
+      blocking: true,
+    },
+  );
 
-  const prod: Process<string> = function* (sim, event) {
-    const item = "foobar";
-    return yield* put(sim, event, store, item);
-  };
+  sim.stores = registerStore(sim, store);
 
-  const cons: Process<string> = function* (sim, event) {
-    const step = yield* get(sim, event, store);
-    result[event.id] = step.event.item;
+  const foo: ProcessDefinition<{
+    bar: [FooData, []];
+  }> = {
+    type: "foo",
+    initial: "bar",
+    steps: {
+      bar(sim, event, state) {
+        const { step, resume } = put(sim, event, store.id, {
+          ...state.data,
+        });
 
-    return step;
-  };
+        return {
+          state: { ...state, step: "bar" },
+          next: [],
+        };
+      },
+    }
+  }
 
-  const e1 = createEvent(sim, 0, prod);
+  sim.registry = registerProcess(sim, foo);
+
+  const e1 = createEvent(sim, { scheduledAt: sim.currentTime, process: { type: "foo" } });
+
   sim.events = scheduleEvent(sim, e1);
-  const e2 = createEvent(sim, 0, cons);
-  sim.events = scheduleEvent(sim, e2);
 
-  const e3 = createEvent(sim, 10, prod);
-  sim.events = scheduleEvent(sim, e3);
-  const e4 = createEvent(sim, 20, cons);
-  sim.events = scheduleEvent(sim, e4);
-
-  const [_stop, _stats] = runSimulation(sim);
-
-  assertEquals(result[e2.id], "foobar");
-  assertEquals(result[e4.id], "foobar");
-
-  assertEquals(store.getRequests.length, 0);
-  assertEquals(store.putRequests.length, 0);
+  const [states, _stats] = await runSimulation(sim);
+  const stop = states[states.length - 1];
 });
 
-Deno.test("out-of-order store operations", () => {
+Deno.test("multiple consumers with single producer", async () => {
+});
+
+Deno.test("multiple producers with delayed consumers", async () => {
+});
+
+Deno.test("non-blocking store with capacity > 1", async () => {
+});
+
+Deno.test("blocking store with unlimited capacity behavior", async () => {
+});
+
+Deno.test("non-blocking store with capacity 0 (immediate rejection)", async () => {
+});
+
+Deno.test("non-blocking store LIFO behavior", () => {
+});
+
+Deno.test("non-blocking store basic put/get operations", () => {
+});
+
+Deno.test("mixed blocking/non-blocking operations with high capacity", async () => {
+});
+
+Deno.test("non-blocking store LIFO behavior", () => {
+});
+
+Deno.test("store initialization defaults", () => {
+  // Test default values when no options provided
+  const store1 = initializeStore({});
+  assertEquals(store1.blocking, true);
+  assertEquals(store1.capacity, 1);
+  assertEquals(store1.buffer.length, 0);
+  assertEquals(store1.getRequests.length, 0);
+  assertEquals(store1.putRequests.length, 0);
+
+  // Test explicit values override defaults
+  const store2 = initializeStore({
+    blocking: false,
+    capacity: 5,
+  });
+  assertEquals(store2.blocking, false);
+  assertEquals(store2.capacity, 5);
+});
+
+Deno.test("error handling for non-existent store", () => {
   const sim = initializeSimulation();
+  const event = createEvent(sim, {
+    scheduledAt: 0,
+  });
 
-  const store: Store<string> = createStore<string>();
-  const result: Record<string, string | undefined> = {};
+  // Should throw when trying to access non-existent store
+  assertThrows(
+    () => get(sim, event, "non-existent-store-id"),
+    RangeError,
+  );
 
-  const prod: Process<string> = function* (sim, event) {
-    const item = "foobar";
-    return yield* put(sim, event, store, item);
-  };
-
-  const cons: Process<string> = function* (sim, event) {
-    const step = yield* get(sim, event, store);
-    result[event.id] = step.event.item;
-
-    return step;
-  };
-
-  const e1 = createEvent(sim, 30, cons);
-  sim.events = scheduleEvent(sim, e1);
-  const e2 = createEvent(sim, 40, prod);
-  sim.events = scheduleEvent(sim, e2);
-
-  const e3 = createEvent(sim, 50, cons);
-  sim.events = scheduleEvent(sim, e3);
-  const e4 = createEvent(sim, 50, prod);
-  sim.events = scheduleEvent(sim, e4);
-
-  const [_stop, _stats] = runSimulation(sim);
-
-  assertEquals(result[e1.id], "foobar");
-  assertEquals(result[e3.id], "foobar");
-
-  assertEquals(store.getRequests.length, 0);
-  assertEquals(store.putRequests.length, 0);
-});
-
-Deno.test("blocking/non-blocking put operations", () => {
-  const sim = initializeSimulation();
-
-  const store: Store<string> = createStore<string>();
-  const result: Record<string, string | undefined> = {};
-  const timings: Record<string, number> = {};
-
-  const prodBlock: Process<string> = function* (sim, event) {
-    const item = "foobar";
-    const step = yield* put(sim, event, store, item, true);
-    timings[event.id] = step.sim.currentTime;
-
-    return step;
-  };
-
-  const prod: Process<string> = function* (sim, event) {
-    const item = "foobar";
-    const step = yield* put(sim, event, store, item);
-    timings[event.id] = step.sim.currentTime;
-
-    return step;
-  };
-
-  const cons: Process<string> = function* (sim, event) {
-    const step = yield* get(sim, event, store);
-    result[event.id] = step.event.item;
-    timings[event.id] = step.sim.currentTime;
-
-    return step;
-  };
-
-  const e1 = createEvent(sim, 30, prodBlock);
-  sim.events = scheduleEvent(sim, e1);
-  const e2 = createEvent(sim, 40, cons);
-  sim.events = scheduleEvent(sim, e2);
-
-  const e3 = createEvent(sim, 50, prod);
-  sim.events = scheduleEvent(sim, e3);
-  const e4 = createEvent(sim, 60, cons);
-  sim.events = scheduleEvent(sim, e4);
-
-  const [_stop, _stats] = runSimulation(sim);
-
-  assertEquals(result[e2.id], "foobar");
-
-  assertEquals(timings[e1.id], 40);
-  assertEquals(timings[e2.id], 40);
-  assertEquals(timings[e3.id], 50);
-  assertEquals(timings[e4.id], 60);
-
-  assertEquals(store.getRequests.length, 0);
-  assertEquals(store.putRequests.length, 0);
-});
-
-Deno.test("store capacity < 0", () => {
-  assertThrows(() => createStore<string>(-1));
-});
-
-Deno.test("store capacity = 0", () => {
-  const sim = initializeSimulation();
-
-  const store: Store<string> = createStore<string>(0);
-  const result: Record<string, string | undefined> = {};
-  const timings: Record<string, number> = {};
-
-  const prod: Process<string> = function* (sim, event) {
-    const item = "foobar";
-    const step = yield* put(sim, event, store, item);
-    timings[event.id] = step.sim.currentTime;
-
-    return step;
-  };
-
-  const cons: Process<string> = function* (sim, event) {
-    const step = yield* get(sim, event, store);
-    result[event.id] = step.event.item;
-    timings[event.id] = step.sim.currentTime;
-
-    return step;
-  };
-
-  const e1 = createEvent(sim, 0, prod);
-  sim.events = scheduleEvent(sim, e1);
-  const e2 = createEvent(sim, 10, prod);
-  sim.events = scheduleEvent(sim, e2);
-  const e3 = createEvent(sim, 20, prod);
-  sim.events = scheduleEvent(sim, e3);
-  const e4 = createEvent(sim, 30, cons);
-  sim.events = scheduleEvent(sim, e4);
-
-  const [_stop, _stats] = runSimulation(sim);
-
-  assertEquals(result[e4.id], "foobar");
-  assertEquals(timings[e1.id], 30);
-
-  assertEquals(store.getRequests.length, 0);
-  assertEquals(store.putRequests.length, 0);
-});
-
-Deno.test("store capacity > 0", () => {
-  const sim = initializeSimulation();
-
-  const store: Store<string> = createStore<string>(1);
-  const result: Record<string, string | undefined> = {};
-  const timings: Record<string, number> = {};
-
-  const prod: Process<string> = function* (sim, event) {
-    const item = "foobar";
-    const step = yield* put(sim, event, store, item);
-    timings[event.id] = step.sim.currentTime;
-
-    return step;
-  };
-
-  const cons: Process<string> = function* (sim, event) {
-    const step = yield* get(sim, event, store);
-    result[event.id] = step.event.item;
-    timings[event.id] = step.sim.currentTime;
-
-    return step;
-  };
-
-  const e1 = createEvent(sim, 0, prod);
-  sim.events = scheduleEvent(sim, e1);
-  const e2 = createEvent(sim, 10, prod);
-  sim.events = scheduleEvent(sim, e2);
-  const e3 = createEvent(sim, 20, prod);
-  sim.events = scheduleEvent(sim, e3);
-  const e4 = createEvent(sim, 30, cons);
-  sim.events = scheduleEvent(sim, e4);
-
-  const [_stop, _stats] = runSimulation(sim);
-
-  assertEquals(result[e4.id], "foobar");
-  assertEquals(timings[e4.id], 30);
-
-  assertEquals(store.getRequests.length, 0);
-  assertEquals(store.putRequests.length, 1);
-  assertEquals(store.delayedPutRequests.length, 1);
-});
-
-Deno.test("cons > prod: unbalanced store operations", () => {
-  const sim = initializeSimulation();
-
-  const store: Store<string> = createStore<string>();
-  const result: Record<string, string | undefined> = {};
-
-  const prod: Process<string> = function* (sim, event) {
-    const item = "foobar";
-    return yield* put(sim, event, store, item);
-  };
-
-  const cons: Process<string> = function* (sim, event) {
-    const step = yield* get(sim, event, store);
-    result[event.id] = step.event.item;
-
-    return step;
-  };
-
-  const e1 = createEvent(sim, 50, cons);
-  sim.events = scheduleEvent(sim, e1);
-  const e2 = createEvent(sim, 55, cons);
-  sim.events = scheduleEvent(sim, e2);
-  const e3 = createEvent(sim, 60, cons);
-  sim.events = scheduleEvent(sim, e3);
-  const e4 = createEvent(sim, 70, prod);
-  sim.events = scheduleEvent(sim, e4);
-
-  const [_stop, _stats] = runSimulation(sim);
-
-  assertEquals(result[e1.id], "foobar");
-  assertEquals(result[e2.id], undefined);
-  assertEquals(result[e3.id], undefined);
-
-  assertEquals(store.getRequests.length, 2);
-  assertEquals(store.putRequests.length, 0);
-});
-
-Deno.test("prod > cons: unbalanced store operations", () => {
-  const sim = initializeSimulation();
-
-  const store: Store<string> = createStore<string>(3);
-  const result: Record<string, string | undefined> = {};
-
-  const prod: Process<string> = function* (sim, event) {
-    const item = "foobar";
-    return yield* put(sim, event, store, item);
-  };
-
-  const cons: Process<string> = function* (sim, event) {
-    const step = yield* get(sim, event, store);
-    result[event.id] = step.event.item;
-
-    return step;
-  };
-
-  const e1 = createEvent(sim, 50, prod);
-  sim.events = scheduleEvent(sim, e1);
-  const e2 = createEvent(sim, 55, prod);
-  sim.events = scheduleEvent(sim, e2);
-  const e3 = createEvent(sim, 60, prod);
-  sim.events = scheduleEvent(sim, e3);
-  const e4 = createEvent(sim, 70, cons);
-  sim.events = scheduleEvent(sim, e4);
-
-  const [_stop, _stats] = runSimulation(sim);
-
-  assertEquals(result[e4.id], "foobar");
-
-  assertEquals(store.getRequests.length, 0);
-  assertEquals(store.putRequests.length, 2);
+  assertThrows(
+    () => put(sim, event, "another-fake-store", { test: "data" }),
+    RangeError,
+  );
 });

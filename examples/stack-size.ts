@@ -1,31 +1,85 @@
-import { Process } from "../src/model.ts";
 import {
   createEvent,
+  Event,
   initializeSimulation,
+  ProcessDefinition,
+  registerProcess,
   runSimulation,
   scheduleEvent,
-  timeout,
-} from "../src/simulation.ts";
+  StateData,
+} from "../mod.ts";
 
 if (import.meta.main) {
   const sim = initializeSimulation();
 
-  let FOO = 0;
+  interface FooData extends StateData {
+    "count": number;
+    "stop": number;
+  }
 
-  const foo: Process = function* (sim, event) {
-    if (sim.currentTime < 10000000) {
-      console.log(`[${sim.currentTime}] ${event.id} -- foo @ wake up: ${FOO}`);
-      FOO += 1;
-      return yield* timeout(sim, 1, foo);
-    } else {
-      return yield;
-    }
+  const foo: ProcessDefinition<{
+    start: [FooData, [FooData]];
+    stop: [FooData, []];
+  }> = {
+    type: "foo",
+    initial: "start",
+    steps: {
+      start(sim, event, state) {
+        console.log(
+          `[${sim.currentTime}] Event id = ${event.id}; stop = ${state.data["stop"]}; got count = ${
+            state.data["count"]
+          }`,
+        );
+
+        const nextEvent: Event<FooData> = createEvent(sim, {
+          parent: event.id,
+          scheduledAt: sim.currentTime < state.data["stop"] ? sim.currentTime + 1 : sim.currentTime,
+          process: {
+            type: "foo",
+            inheritStep: true,
+          },
+        });
+
+        return {
+          state: {
+            ...state,
+            data: sim.currentTime < state.data["stop"]
+              ? { ...state.data, count: state.data["count"] + 1 }
+              : { ...state.data },
+            step: sim.currentTime < state.data["stop"] ? "start" : "stop",
+          },
+          next: [nextEvent]
+        };
+      },
+      stop(sim, _event, state) {
+        console.log(
+          `[${sim.currentTime}] Process finished with ${state.data["count"]}`,
+        );
+
+        return {
+          state,
+          next: [],
+        };
+      },
+    },
   };
 
-  const e1 = createEvent(sim, 0, foo);
+  sim.registry = registerProcess(sim, foo);
+
+  const e1 = createEvent(sim, {
+    scheduledAt: 0,
+    process: {
+      type: "foo",
+      data: {
+        count: 0,
+        stop: 10000,
+      },
+    },
+  });
   sim.events = scheduleEvent(sim, e1);
 
-  const [stop, stats] = runSimulation(sim);
+  const [states, stats] = await runSimulation(sim);
+  const stop = states[states.length - 1];
 
   console.log(`Simulation ended at ${stop.currentTime}`);
   console.log(`Simulation took: ${stats.duration} ms`);
