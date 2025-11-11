@@ -1,5 +1,6 @@
 import {
   createEvent,
+  Event,
   initializeSimulation,
   ProcessDefinition,
   registerProcess,
@@ -17,7 +18,7 @@ if (import.meta.main) {
   }
 
   const foo: ProcessDefinition<{
-    start: [FooData, [FooData] | []];
+    start: [FooData, [FooData]];
     stop: [FooData, []];
   }> = {
     type: "foo",
@@ -25,13 +26,21 @@ if (import.meta.main) {
     steps: {
       start(sim, event, state) {
         console.log(
-          `[${sim.currentTime}] Event id = ${event.id}; got count = ${
+          `[${sim.currentTime}] Event id = ${event.id}; stop = ${state.data["stop"]}; got count = ${
             state.data["count"]
           }`,
         );
 
+        const nextEvent: Event<FooData> = createEvent(sim, {
+          parent: event.id,
+          scheduledAt: sim.currentTime < state.data["stop"] ? sim.currentTime + 1 : sim.currentTime,
+          process: {
+            type: "foo",
+            inheritStep: true,
+          },
+        });
+
         return {
-          updated: event,
           state: {
             ...state,
             data: sim.currentTime < state.data["stop"]
@@ -39,28 +48,15 @@ if (import.meta.main) {
               : { ...state.data },
             step: sim.currentTime < state.data["stop"] ? "start" : "stop",
           },
-          next: sim.currentTime < state.data["stop"]
-            ? [
-              createEvent(sim, {
-                parent: event.id,
-                process: {
-                  type: "foo",
-                },
-                scheduledAt: sim.currentTime < state.data["stop"]
-                  ? sim.currentTime + 1
-                  : sim.currentTime,
-              }),
-            ]
-            : [],
+          next: [nextEvent]
         };
       },
-      stop(sim, event, state) {
+      stop(sim, _event, state) {
         console.log(
           `[${sim.currentTime}] Process finished with ${state.data["count"]}`,
         );
 
         return {
-          updated: event,
           state,
           next: [],
         };

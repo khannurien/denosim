@@ -120,9 +120,9 @@ export interface Event<T extends StateData = StateData> {
 }
 
 /**
- * Synchronization primitive for coordinating processes.
- * Stores manage items and block processes when conditions aren't met.
- * Used for producer-consumer patterns and resource sharing.
+ * Synchronization data structure used for coordinating processes.
+ * Stores are used through `get` and `put` primitives that work in a LIFO fashion.
+ * Used for inter-process synchronization, producer-consumer patterns, resource sharing, etc.
  */
 export interface Store<T extends StateData = StateData> {
   /** Unique identifier for this store */
@@ -145,6 +145,17 @@ export interface Store<T extends StateData = StateData> {
 
   /** Processes blocked waiting to put items */
   putRequests: Event<T>[];
+}
+
+/**
+ * TODO:
+ */
+export interface StoreResult<T extends StateData = StateData> {
+  /** TODO: Continuation event for the calling process */
+  step: Event<T>;
+
+  /** TODO: Resume event for the blocked process, if any */
+  resume?: Event<T>;
 }
 
 /** Timestamp for simulation clock */
@@ -264,9 +275,6 @@ export interface ProcessStep<
   I extends StateInput = StateInput,
   O extends StateOutput = StateOutput,
 > {
-  /** Process handler returns the original event; scheduler marks it as finished */
-  updated: Event<I>;
-
   /** Process handler returns the updated state of the process */
   state: ProcessState<I>;
 
@@ -321,6 +329,9 @@ export interface CreateEventOptions<T extends StateData = StateData> {
   /** Optional parent event ID for state inheritance patterns */
   parent?: EventID;
 
+  /** TODO: If `true`, the event will not be scheduled for process execution */
+  waiting?: boolean;
+
   /** Optional event priority for scheduling; lower value yields higher priority (cf. UNIX `nice`) */
   priority?: number;
 
@@ -333,10 +344,10 @@ export interface CreateEventOptions<T extends StateData = StateData> {
 
 /**
  * Object used to create new stores in the simulation.
- * Stores enable (possibly blocking) coordination between processes via get/put operations.
+ * Stores enable (possibly blocking) coordination between processes via `get`/`put` operations.
  * Defaults to blocking operations with capacity for one single item.
- * Capacity determines how many items the store can hold before put operations block.
- * Blocking operations use EventState.Waiting to pause processes until conditions resolve.
+ * Capacity determines how many items the store can hold before `put` operations block.
+ * Blocking operations use `EventState.Waiting` to pause processes until conditions resolve.
  */
 export interface CreateStoreOptions<T extends StateData = StateData> {
   /** Controls whether the store enables synchronous (blocking) or asynchronous coordination */

@@ -29,7 +29,6 @@ Deno.test("basic serialization", async () => {
     steps: {
       start(_sim, event, state) {
         return {
-          updated: event,
           state,
           next: [],
         };

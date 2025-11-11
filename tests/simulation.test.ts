@@ -78,7 +78,6 @@ Deno.test("basic event ordering", async () => {
         processedOrder.push(event.scheduledAt);
 
         return {
-          updated: event,
           state: state,
           next: [],
         };
@@ -120,11 +119,10 @@ Deno.test("scheduling events in the past", () => {
     type: "foo",
     initial: "start",
     steps: {
-      start(sim, event, state) {
+      start(sim, _event, state) {
         const past = createEvent(sim, { scheduledAt: sim.currentTime - 1 });
 
         return {
-          updated: event,
           state: state,
           next: [past],
         };
@@ -162,7 +160,6 @@ Deno.test("event process scheduling", async () => {
         results[sim.currentTime] = event;
 
         return {
-          updated: event,
           state: state,
           next: [],
         };
@@ -261,10 +258,9 @@ Deno.test("events with same time process by priority order (lower number = highe
     type: "test",
     initial: "log",
     steps: {
-      log(_sim, event, state) {
+      log(_sim, _event, state) {
         executionOrder.push(state.data.name as string);
         return {
-          updated: event,
           state,
           next: [],
         };
@@ -320,10 +316,9 @@ Deno.test("priority only affects ordering at same time", async () => {
     type: "test",
     initial: "log",
     steps: {
-      log(sim, event, state) {
+      log(sim, _event, state) {
         executionOrder.push(`${state.data.name}-${sim.currentTime}`);
         return {
-          updated: event,
           state,
           next: [],
         };
@@ -371,10 +366,9 @@ Deno.test("default priority is 0 (highest priority)", async () => {
     type: "test",
     initial: "log",
     steps: {
-      log(_sim, event, state) {
+      log(_sim, _event, state) {
         executionOrder.push(state.data.priority as string);
         return {
-          updated: event,
           state,
           next: [],
         };
@@ -414,10 +408,9 @@ Deno.test("negative priorities work correctly (very high priority)", async () =>
     type: "test",
     initial: "log",
     steps: {
-      log(_sim, event, state) {
+      log(_sim, _event, state) {
         executionOrder.push(state.data.name as string);
         return {
-          updated: event,
           state,
           next: [],
         };
@@ -465,10 +458,9 @@ Deno.test("priority with simple events at same time", async () => {
     type: "test",
     initial: "log",
     steps: {
-      log(_sim, event, state) {
+      log(_sim, _event, state) {
         executionOrder.push(state.data.name as string);
         return {
-          updated: event,
           state,
           next: [],
         };
@@ -523,10 +515,9 @@ Deno.test("priority with different process types", async () => {
     type: "A",
     initial: "log",
     steps: {
-      log(sim, event, state) {
+      log(sim, _event, state) {
         executionOrder.push(`A-${state.data.name}@${sim.currentTime}`);
         return {
-          updated: event,
           state,
           next: [],
         };
@@ -540,10 +531,9 @@ Deno.test("priority with different process types", async () => {
     type: "B",
     initial: "log",
     steps: {
-      log(sim, event, state) {
+      log(sim, _event, state) {
         executionOrder.push(`B-${state.data.name}@${sim.currentTime}`);
         return {
-          updated: event,
           state,
           next: [],
         };

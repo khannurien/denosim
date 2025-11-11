@@ -27,10 +27,9 @@ export function initializeSimulation(): Simulation {
     type: "none",
     initial: "none",
     steps: {
-      none(_sim, event, state) {
+      none(_sim, _event, state) {
         return {
-          updated: { ...event },
-          state: { ...state },
+          state: state,
           next: [],
         };
       },
@@ -156,7 +155,7 @@ function run(current: Simulation): [Simulation, boolean] {
  * and possibly schedules a next one.
  * Advances the simulation time to the current event scheduled time.
  * Updates the state of the process associated with the current event.
- * Updates the event queue with the updated current event.
+ * FIXME: Updates the event queue with the current event marked as `Finished`.
  * Returns an updated copy of the original simulation container.
  */
 function step(sim: Simulation, event: Event): Simulation {
@@ -164,19 +163,25 @@ function step(sim: Simulation, event: Event): Simulation {
   const nextSim = { ...sim, currentTime: event.scheduledAt };
 
   // Handle the event by executing its process, which may yield new events
-  const { updated, state, next } = handleEvent(nextSim, event);
+  const { state, next } = handleEvent(nextSim, event);
 
   // Update the event's process state in the simulation container
   nextSim.state = { ...nextSim.state, [event.id]: { ...state } };
 
   // Update the event instance in the event queue if necessary
   nextSim.events = nextSim.events.map((previous) =>
-    (previous.id === event.id) ? updated : previous
+    (previous.id === event.id) ? {
+      ...previous,
+      status: EventState.Finished,
+      finishedAt: nextSim.currentTime,
+    } : previous
   );
 
   // Schedule the next events yielded by the current process if necessary
   for (const nextEvent of next) {
-    nextSim.events = scheduleEvent(nextSim, nextEvent);
+    nextSim.events = nextEvent.status === EventState.Waiting
+      ? nextSim.events
+      : scheduleEvent(nextSim, nextEvent);
   }
 
   return nextSim;
@@ -201,52 +206,31 @@ function handleEvent(
     ? sim.state[event.parent]
     : undefined;
 
-  // Get current process state in four different cases; respectively:
-  // CASE 1: EVENT REPROCESSING with state persistence (UNIX context switch)
-  // The same event ID is being processed again with its persisted state.
-  // This happens when:
-  // - A process returns itself with a step change (e.g., stack-size.ts recursion)
-  // - Store operations unblock a waiting event (put/get synchronization)
-  // - Any event that needs multiple processing cycles to complete
-  // The event continues from its previous state with any new data merged in.
-  // CASE 2: PROCESS CONTINUATION with step inheritance (UNIX fork)
-  // Child event explicitly continues parent's process instance.
-  // This creates true process continuation where:
-  // - Timeout completions pick up from parent's waiting step
-  // - Child events continue parent's exact execution point
-  // - The same process instance advances through multiple events
-  // Used for temporal patterns (timeouts) and explicit continuations.
-  // CASE 3: NEW PROCESS with data inheritance (UNIX fork/exec)
-  // Child starts a new process instance but inherits parent's data.
-  // This creates related but independent processes:
-  // - Parent spawning worker processes with shared context
-  // - Main process creating sub-processes with initialization data
-  // - Any parent-child relationship where data flows downstream
-  // CASE 4: BRAND NEW PROCESS (UNIX execve)
-  // Completely new process with no parent relationship.
-  // Process state initialized from process definition.
-  // This is the entry point for:
-  // - Initial events scheduled in the simulation
-  // - External triggers starting new workflows
-  // - Root processes with no dependencies
-  const state: ProcessState = event.id in sim.state
-    ? {
-      ...sim.state[event.id],
-      data: {
-        ...sim.state[event.id].data,
-        ...event.process.data,
-      },
-    }
-    : parentState && event.process.inheritStep &&
-        parentState.type === event.process.type
-    ? {
-      type: definition.type,
+  // Get current process state
+  const state: ProcessState =
+    // PROCESS CONTINUATION with state inheritance (UNIX `fork`)
+    // Child event explicitly continues parent's process instance.
+    // This creates true process continuation where:
+    // - Child events continue parent's exact execution point
+    // - The same process instance advances through multiple events
+    // Used for temporal patterns (timeouts), synchronous I/O (synchronization).
+    (
+      parentState && event.process.inheritStep &&
+      parentState.type === event.process.type
+    ) ? {
+      type: parentState.type,
       step: parentState.step,
       data: {
         ...parentState.data,
         ...event.process.data,
       },
     }
+    // NEW PROCESS with data inheritance (UNIX `fork`/`exec`)
+    // Child starts a new process instance but inherits parent's data.
+    // This creates related but independent processes:
+    // - Parent spawning worker processes with shared context
+    // - Main process creating sub-processes with initialization data
+    // - Any parent-child relationship where data flows downstream
     : parentState
     ? {
       type: definition.type,
@@ -256,54 +240,24 @@ function handleEvent(
         ...event.process.data,
       },
     }
+    // BRAND NEW PROCESS (UNIX `execve`)
+    // Completely new process with no parent relationship.
+    // Process state initialized from process definition.
+    // This is the entry point for:
+    // - Initial events scheduled in the simulation
+    // - External triggers starting new workflows
+    // - Root processes with no dependencies
     : {
       type: definition.type,
       step: definition.initial,
       data: { ...event.process.data },
     };
 
-  // Retrieve the process handler according to the state
+  // Retrieve process step handler according to the process state
   const handler = definition.steps[state.step];
 
   // Execute next step of the process
-  const process = handler(sim, event, state);
-
-  // The process has finished when ALL conditions are met:
-  // 1. Step hasn't changed (no progression in this execution)
-  //    - The process didn't advance to a new step
-  // 2. No next events scheduled (no work remaining)
-  //    - The process didn't spawn any child events to continue work
-  // 3. Not currently in Waiting state (not blocked)
-  //    - The process isn't blocked waiting for external resources
-  //
-  // When ALL three conditions are true, the process has truly completed
-  // its work and can be marked as Finished.
-  //
-  // Otherwise, the process continues:
-  // - If step changed → more work in the state machine
-  // - If next events exist → child processes to handle
-  // - If Waiting → blocked until external condition resolves
-  //
-  // This ensures processes only finish when they have:
-  // - Reached a terminal state in their state machine
-  // - Spawned all required child processes
-  // - Resolved all blocking conditions
-  return (
-      process.state.step !== state.step &&
-      process.next.length === 0 &&
-      process.updated.status !== EventState.Waiting
-    )
-    ? {
-      ...process,
-    }
-    : {
-      ...process,
-      updated: {
-        ...process.updated,
-        status: EventState.Finished,
-        finishedAt: sim.currentTime,
-      },
-    };
+  return handler(sim, event, state);
 }
 
 /**
@@ -329,7 +283,7 @@ export function registerProcess<
  * Returns a new event with:
  * - Unique ID
  * - Optional parent event ID (defaults to `undefined`)
- * - Initial event state set to `Fired`
+ * - TODO: Initial event state set to `Waiting` or `Fired`
  * - An optional priority value (the lower the value, the higher the priority; defaults to 0)
  * - Timestamps for when it was created and scheduled
  * - Optional process to run on event handling (defaults to `none`, the dummy process)
@@ -341,7 +295,7 @@ export function createEvent<T extends StateData>(
   return {
     ...options,
     id: crypto.randomUUID(),
-    status: EventState.Fired,
+    status: options.waiting ? EventState.Waiting : EventState.Fired,
     priority: options.priority ?? 0,
     firedAt: sim.currentTime,
     process: options.process ? { ...options.process } : {

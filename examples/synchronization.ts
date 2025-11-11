@@ -21,65 +21,57 @@ if (import.meta.main) {
   }
 
   const store = initializeStore<FooData>(
-    {},
+    {
+      blocking: true,
+    },
   );
 
   sim.stores = registerStore(sim, store);
 
   const prod: ProcessDefinition<{
-    start: [FooData, [FooData] | []];
+    start: [FooData, [FooData, FooData] | [FooData]];
     stop: [FooData, []];
   }> = {
     type: "prod",
     initial: "start",
     steps: {
       start(sim, event, state) {
-        console.log(`[${sim.currentTime}] prod @ start`);
+        console.log(`[${sim.currentTime}] prod @ start -- ${event.id} -- ${event.parent}`);
         console.log(
           `[${sim.currentTime}] prod @ start state = ${state.data.foo}`,
         );
 
-        // If there is a pending get request, it will be popped from the store and returned by `put`.
-        // If there is none, `put` will:
-        // - store the event as a new put request in the store's queue;
-        // - return the event updated with stored data.
-        const request = put(sim, event, store.id, {
+        const { step, resume } = put(sim, event, store.id, {
           ...state.data,
         });
 
-        if (request.id !== event.id) {
-          // It worked
-          console.log(
-            `[${sim.currentTime}] prod put "${state.data.foo}" in store ${store.id}`,
-          );
-        } else {
+        console.log(
+          `[${sim.currentTime}] prod received: step = ${step} | resume = ${resume}`
+        );
+
+        if (step.status === EventState.Waiting) {
           // Delayed
           console.log(
             `[${sim.currentTime}] prod put request for "${state.data.foo}" blocked on store ${store.id}`,
           );
+        } else {
+          // Succeeded
+          console.log(
+            `[${sim.currentTime}] prod put "${state.data.foo}" in store ${store.id}`,
+          );
         }
 
-        const nextEvent = {
-          ...event,
-          scheduledAt: sim.currentTime,
-          status: request.id !== event.id
-            ? EventState.Scheduled
-            : EventState.Waiting,
-        };
-
         return {
-          updated: nextEvent,
           state: { ...state, step: "stop" },
-          next: request.id !== event.id ? [request] : [],
+          next: resume ? [step, resume] : [step],
         };
       },
       stop(sim, event, state) {
         console.log(
-          `[${sim.currentTime}] prod @ stop`,
+          `[${sim.currentTime}] prod @ stop -- ${event.id} -- ${event.parent}`,
         );
 
         return {
-          updated: event,
           state,
           next: [],
         };
@@ -90,7 +82,7 @@ if (import.meta.main) {
   sim.registry = registerProcess(sim, prod);
 
   const cons: ProcessDefinition<{
-    start: [FooData, [FooData] | []];
+    start: [FooData, [FooData, FooData] | [FooData]];
     stop: [FooData, []];
   }> = {
     type: "cons",
@@ -102,44 +94,30 @@ if (import.meta.main) {
           `[${sim.currentTime}] cons @ start state = ${state.data.foo}`,
         );
 
-        const request = get(sim, event, store.id);
+        const { step, resume } = get(sim, event, store.id);
 
-        if (request.id !== event.id) {
-          // It worked
-          const obtained = { ...request.process.data };
-          console.log(
-            `[${sim.currentTime}] cons get "${obtained.foo}" from store ${store.id}`,
-          );
-        } else {
+        console.log(
+          `[${sim.currentTime}] cons received: step = ${step} | resume = ${resume}`
+        );
+
+        if (step.status === EventState.Waiting) {
           // Delayed
           console.log(
             `[${sim.currentTime}] cons get request blocked on store ${store.id}`,
           );
+        } else {
+          // Succeeded
+          console.log(
+            `[${sim.currentTime}] cons got data from store ${store.id}`,
+          );
         }
 
-        const nextEvent = {
-          ...event,
-          scheduledAt: sim.currentTime,
-          status: request.id !== event.id
-            ? EventState.Scheduled
-            : EventState.Waiting,
-        };
-
         return {
-          updated: nextEvent,
-          state: request.id !== event.id
-            ? {
-              ...state,
-              data: request.process.data
-                ? { ...request.process.data }
-                : state.data,
-              step: "stop",
-            }
-            : { ...state, step: "stop" },
-          next: request.id !== event.id ? [request] : [],
+          state: { ...state, data: { ...step.process.data ?? state.data }, step: "stop" },
+          next: resume ? [step, resume] : [step],
         };
       },
-      stop(sim, event, state) {
+      stop(sim, _event, state) {
         console.log(
           `[${sim.currentTime}] cons @ stop`,
         );
@@ -148,7 +126,6 @@ if (import.meta.main) {
         );
 
         return {
-          updated: event,
           state,
           next: [],
         };

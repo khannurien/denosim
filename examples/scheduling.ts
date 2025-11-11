@@ -15,14 +15,15 @@ import {
  * [10] foo from main
  * [20] bar before timeout
  * [30] foo from main
- * [35] callback from bar before timeout
  * [35] bar after timeout
+ * [35] callback from bar before timeout
  * [37] foo from main
  * [40] callback from bar after timeout
+ * [40] callback from the callback from bar after timeout
  * [50] foo from main
  * [60] baz before
- * [70] foo from baz
  * [70] baz after
+ * [70] foo from baz
  * Simulation ended at 70
  */
 
@@ -44,10 +45,9 @@ if (import.meta.main) {
     type: "foo",
     initial: "none",
     steps: {
-      none(sim, event, state) {
+      none(sim, _event, state) {
         console.log(`[${sim.currentTime}] foo from ${state.data["from"]}`);
         return {
-          updated: event,
           state,
           next: [],
         };
@@ -69,7 +69,6 @@ if (import.meta.main) {
         console.log(`[${sim.currentTime}] bar before timeout`);
 
         return {
-          updated: event,
           state: {
             ...state,
             step: "wait",
@@ -83,8 +82,8 @@ if (import.meta.main) {
               parent: event.id,
               scheduledAt: sim.currentTime,
               process: {
-                type: "bar", // Explicit process type
-                inheritStep: true, // Continue from parent's step
+                type: "bar",
+                inheritStep: true, // Continue from parent's state
               },
             }),
           ],
@@ -99,7 +98,6 @@ if (import.meta.main) {
           // Timeout completed
           console.log(`[${sim.currentTime}] bar after timeout`);
           return {
-            updated: event,
             state: {
               ...state,
               step: "stop",
@@ -125,23 +123,21 @@ if (import.meta.main) {
               parent: event.id,
               scheduledAt: targetTime, // Schedule exactly at completion time
               process: {
-                type: "bar", // Explicit process type
-                inheritStep: true, // Continue from parent's step
+                type: "bar",
+                inheritStep: true, // Continue from parent's state
               },
             },
           );
 
           return {
-            updated: event,
             state: { ...state, step: "wait" },
             next: [nextEvent],
           };
         }
       },
-      stop(_sim, event, state) {
+      stop(_sim, _event, state) {
         // Final completion
         return {
-          updated: event,
           state,
           next: [],
         };
@@ -163,7 +159,6 @@ if (import.meta.main) {
         console.log(`[${sim.currentTime}] callback from bar before timeout`);
 
         return {
-          updated: event,
           state: {
             ...state,
             step: "wait",
@@ -177,8 +172,8 @@ if (import.meta.main) {
               parent: event.id,
               scheduledAt: sim.currentTime,
               process: {
-                type: "step1", // Explicit process type
-                inheritStep: true, // Continue from parent's step
+                type: "step1",
+                inheritStep: true, // Continue from parent's state
               },
             }),
           ],
@@ -193,7 +188,6 @@ if (import.meta.main) {
           // Timeout completed
           console.log(`[${sim.currentTime}] callback from bar after timeout`);
           return {
-            updated: event,
             state: {
               ...state,
               step: "stop",
@@ -215,22 +209,20 @@ if (import.meta.main) {
               parent: event.id,
               scheduledAt: targetTime,
               process: {
-                type: "step1", //  Explicit process type
-                inheritStep: true, //  Continue from parent's step
+                type: "step1",
+                inheritStep: true, // Continue from parent's state
               },
             },
           );
 
           return {
-            updated: event,
             state: { ...state, step: "wait" },
             next: [nextEvent],
           };
         }
       },
-      stop(_sim, event, state) {
+      stop(_sim, _event, state) {
         return {
-          updated: event,
           state,
           next: [],
         };
@@ -246,12 +238,11 @@ if (import.meta.main) {
     type: "step2",
     initial: "none",
     steps: {
-      none(sim, event, state) {
+      none(sim, _event, state) {
         console.log(
           `[${sim.currentTime}] callback from the callback from bar after timeout`,
         );
         return {
-          updated: event,
           state,
           next: [],
         };
@@ -273,7 +264,6 @@ if (import.meta.main) {
         console.log(`[${sim.currentTime}] baz before`);
 
         return {
-          updated: event,
           state: {
             ...state,
             step: "wait",
@@ -288,8 +278,8 @@ if (import.meta.main) {
               parent: event.id,
               scheduledAt: sim.currentTime,
               process: {
-                type: "baz", //  Explicit process type
-                inheritStep: true, //  Continue from parent's step
+                type: "baz",
+                inheritStep: true, // Continue from parent's state
               },
             },
           )],
@@ -303,7 +293,6 @@ if (import.meta.main) {
         if (sim.currentTime >= targetTime) {
           console.log(`[${sim.currentTime}] baz after`);
           return {
-            updated: event,
             state: {
               ...state,
               step: "stop",
@@ -330,22 +319,20 @@ if (import.meta.main) {
               parent: event.id,
               scheduledAt: targetTime,
               process: {
-                type: "baz", //  Explicit process type
-                inheritStep: true, //  Continue from parent's step
+                type: "baz",
+                inheritStep: true, // Continue from parent's state
               },
             },
           );
 
           return {
-            updated: event,
             state: { ...state, step: "wait" },
             next: [nextEvent],
           };
         }
       },
-      stop(_sim, event, state) {
+      stop(_sim, _event, state) {
         return {
-          updated: event,
           state,
           next: [],
         };
