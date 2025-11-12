@@ -48,11 +48,7 @@ export function put<T extends StateData = StateData>(
 
   // Blocking store or non-blocking store at capacity: check for pending get request
   if (store.getRequests.length > 0) {
-    console.log("store.getRequests.length > 0");
     const getRequest = store.getRequests.pop()!;
-
-    console.log("data = ", data);
-    console.log("getRequest.process = ", getRequest.process);
 
     // Reschedule the get request with the data attached
     const updatedGet: Event<T> = createEvent(sim, {
@@ -64,8 +60,6 @@ export function put<T extends StateData = StateData>(
         data: { ...data },
       },
     });
-
-    console.log("updatedGet.process = ", updatedGet.process);
 
     const updatedPut: Event<T> = createEvent(sim, {
       parent: event.id,

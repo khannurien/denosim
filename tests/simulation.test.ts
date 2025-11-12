@@ -570,3 +570,18 @@ Deno.test("priority with different process types", async () => {
 
   assertEquals(executionOrder, ["A-default@10", "B-high@10", "A-low@10"]);
 });
+
+Deno.test("process state initialization", async () => {
+});
+
+Deno.test("process state across steps", async () => {
+});
+
+Deno.test("process state inheritance (fork)", async () => {
+});
+
+Deno.test("process state inheritance (exec)", async () => {
+});
+
+Deno.test("process state inheritance (spawn)", async () => {
+});

@@ -139,6 +139,7 @@ function run(current: Simulation): [Simulation, boolean] {
       : b.priority - a.priority;
   });
 
+  // The global event queue is not modified in place
   const event = pending.pop();
 
   if (!event) {
@@ -166,9 +167,9 @@ function step(sim: Simulation, event: Event): Simulation {
   const { state, next } = handleEvent(nextSim, event);
 
   // Update the event's process state in the simulation container
-  nextSim.state = { ...nextSim.state, [event.id]: { ...state } };
+  nextSim.state[event.id] = { ...state };
 
-  // Update the event instance in the event queue if necessary
+  // Update the event instance in the global event queue
   nextSim.events = nextSim.events.map((previous) =>
     (previous.id === event.id)
       ? {
@@ -180,6 +181,8 @@ function step(sim: Simulation, event: Event): Simulation {
   );
 
   // Schedule the next events yielded by the current process if necessary
+  // TODO: ? [...nextSim.events, nextEvent]
+  // Should we leave `Waiting` (intermediary) events "dangling" in the final queue?
   for (const nextEvent of next) {
     nextSim.events = nextEvent.status === EventState.Waiting
       ? nextSim.events
@@ -260,7 +263,7 @@ function handleEvent(
   const handler = definition.steps[state.step];
 
   // Execute next step of the process
-  return handler(sim, event, state);
+  return handler(sim, event, { ...state });
 }
 
 /**
