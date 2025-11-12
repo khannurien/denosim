@@ -1,7 +1,6 @@
-import { assertEquals, assertRejects, assertThrows } from "@std/assert";
+import { assert, assertEquals, assertThrows } from "@std/assert";
 import {
   createEvent,
-  EventState,
   get,
   initializeSimulation,
   initializeStore,
@@ -12,57 +11,121 @@ import {
   runSimulation,
   scheduleEvent,
   StateData,
+  StoreID,
 } from "../mod.ts";
 
 interface FooData extends StateData {
-  "foo": string;
+  foo?: string;
+  store: StoreID;
 }
 
-interface NumberData extends StateData {
-  "value": number;
-}
+const prod: ProcessDefinition<{
+  start: [FooData, [FooData, FooData] | [FooData]];
+  stop: [FooData, []];
+}> = {
+  type: "prod",
+  initial: "start",
+  steps: {
+    start(sim, event, state) {
+      const { step, resume } = put(sim, event, state.data["store"], {
+        ...state.data,
+      });
+
+      return {
+        state: { ...state, step: "stop" },
+        next: resume ? [step, resume] : [step],
+      };
+    },
+    stop(_sim, _event, state) {
+      return {
+        state,
+        next: [],
+      };
+    },
+  },
+};
+
+const cons: ProcessDefinition<{
+  start: [FooData, [FooData, FooData] | [FooData]];
+  stop: [FooData, []];
+}> = {
+  type: "cons",
+  initial: "start",
+  steps: {
+    start(sim, event, state) {
+      const { step, resume } = get(sim, event, state.data["store"]);
+
+      return {
+        state: {
+          ...state,
+          data: { ...step.process.data ?? state.data },
+          step: "stop",
+        },
+        next: resume ? [step, resume] : [step],
+      };
+    },
+    stop(_sim, _event, state) {
+      return {
+        state,
+        next: [],
+      };
+    },
+  },
+};
 
 Deno.test("producer-consumer synchronization with blocking", async () => {
   const sim = initializeSimulation();
 
-  const store = initializeStore(
-    {
-      blocking: true,
-    },
-  );
+  const store = initializeStore({});
 
   sim.stores = registerStore(sim, store);
 
-  const foo: ProcessDefinition<{
-    bar: [FooData, []];
-  }> = {
-    type: "foo",
-    initial: "bar",
-    steps: {
-      bar(sim, event, state) {
-        const { step, resume } = put(sim, event, store.id, {
-          ...state.data,
-        });
-
-        return {
-          state: { ...state, step: "bar" },
-          next: [],
-        };
-      },
-    },
-  };
-
-  sim.registry = registerProcess(sim, foo);
+  sim.registry = registerProcess(sim, prod);
+  sim.registry = registerProcess(sim, cons);
 
   const e1 = createEvent(sim, {
-    scheduledAt: sim.currentTime,
-    process: { type: "foo" },
+    scheduledAt: 0,
+    process: { type: "prod", data: { store: store.id, foo: "bar" } },
+  });
+
+  const e2 = createEvent(sim, {
+    scheduledAt: 5,
+    process: { type: "cons", data: { store: store.id} },
+  })
+
+  const e3 = createEvent(sim, {
+    scheduledAt: 10,
+    process: { type: "cons", data: { store: store.id} },
+  })
+
+  const e4 = createEvent(sim, {
+    scheduledAt: 15,
+    process: { type: "prod", data: { store: store.id, foo: "baz" } },
   });
 
   sim.events = scheduleEvent(sim, e1);
+  sim.events = scheduleEvent(sim, e2);
+  sim.events = scheduleEvent(sim, e3);
+  sim.events = scheduleEvent(sim, e4);
 
   const [states, _stats] = await runSimulation(sim);
   const stop = states[states.length - 1];
+
+  // Consumer has been unblocked by consumer
+  const prodBlocked = stop.events.find((event) => event.id === e1.id);
+  assertEquals(prodBlocked?.finishedAt, 0);
+  const prodUnblocked = stop.events.find((event) => event.parent && event.parent === e1.id);
+  assertEquals(prodUnblocked?.finishedAt, 5);
+
+  // Consumer has been unblocked by producer and has gotten the data
+  const consBlocked = stop.events.find((event) => event.id === e3.id);
+  assertEquals(consBlocked?.finishedAt, 10);
+  const consUnblocked = stop.events.find((event) => event.parent && event.parent === e3.id);
+  assertEquals(consUnblocked?.finishedAt, 15);
+  assertEquals(consUnblocked!.process.data!["foo"], "baz");
+
+  // All processes have reached their final step
+  assert(Object.values(stop.state).every(state => state.step === "stop"));
 });
 
 Deno.test("multiple consumers with single producer", async () => {
@@ -84,12 +147,6 @@ Deno.test("non-blocking store LIFO behavior", () => {
 });
 
 Deno.test("non-blocking store basic put/get operations", () => {
-});
-
-Deno.test("mixed blocking/non-blocking operations with high capacity", async () => {
-});
-
-Deno.test("non-blocking store LIFO behavior", () => {
 });
 
 Deno.test("store initialization defaults", () => {

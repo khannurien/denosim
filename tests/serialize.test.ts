@@ -61,3 +61,12 @@ Deno.test("basic serialization", async () => {
   const restoredHandler = recovered[0].registry["dummy"].steps["start"];
   assert(typeof restoredHandler === "function");
 });
+
+Deno.test("process state serialization", async () => {
+});
+
+Deno.test("process resume across runs", async () => {
+});
+
+Deno.test("process rewind", async () => {
+});
