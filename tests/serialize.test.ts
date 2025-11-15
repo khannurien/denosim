@@ -1,12 +1,9 @@
-import { assert, assertEquals, assertThrows } from "@std/assert";
+import { assert, assertEquals } from "@std/assert";
 import {
   createEvent,
   deserializeSimulation,
-  Event,
-  EventState,
   initializeSimulation,
   ProcessDefinition,
-  ProcessHandler,
   registerProcess,
   runSimulation,
   scheduleEvent,
@@ -27,7 +24,7 @@ Deno.test("basic serialization", async () => {
     type: "dummy",
     initial: "start",
     steps: {
-      start(_sim, event, state) {
+      start(_sim, _event, state) {
         return {
           state,
           next: [],

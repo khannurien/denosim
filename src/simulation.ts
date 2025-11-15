@@ -156,7 +156,7 @@ function run(current: Simulation): [Simulation, boolean] {
  * and possibly schedules a next one.
  * Advances the simulation time to the current event scheduled time.
  * Updates the state of the process associated with the current event.
- * FIXME: Updates the event queue with the current event marked as `Finished`.
+ * Updates the event queue with the current event marked as `Finished`.
  * Returns an updated copy of the original simulation container.
  */
 function step(sim: Simulation, event: Event): Simulation {

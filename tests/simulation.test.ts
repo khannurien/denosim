@@ -572,16 +572,406 @@ Deno.test("priority with different process types", async () => {
 });
 
 Deno.test("process state initialization", async () => {
+  interface FooData extends StateData {
+    foo?: string;
+    bar: number;
+  }
+
+  const sim = initializeSimulation();
+
+  const foo: ProcessDefinition<{
+    foo: [FooData, []];
+  }> = {
+    type: "foo",
+    initial: "foo",
+    steps: {
+      foo(_sim, _event, state) {
+        assert(state.data.foo);
+        assertEquals(state.data.foo, "baz");
+        assertEquals(state.data.bar, 42.1337);
+
+        return {
+          state: { ...state },
+          next: [],
+        };
+      },
+    },
+  };
+
+  sim.registry = registerProcess(sim, foo);
+
+  const e1 = createEvent(sim, {
+    scheduledAt: 0,
+    process: {
+      type: "foo",
+      data: {
+        foo: "baz",
+        bar: 42.1337,
+      },
+    },
+  });
+
+  sim.events = scheduleEvent(sim, e1);
+
+  const [states, _stats] = await runSimulation(sim);
+  const _stop = states[states.length - 1];
 });
 
 Deno.test("process state across steps", async () => {
+  interface FooData extends StateData {
+    foo?: string;
+    bar: number;
+  }
+
+  const sim = initializeSimulation();
+
+  const foobar: ProcessDefinition<{
+    foo: [FooData, [FooData]];
+    bar: [FooData, [FooData]];
+    baz: [FooData, []];
+  }> = {
+    type: "foobar",
+    initial: "foo",
+    steps: {
+      foo(sim, event, state) {
+        const nextEvent: Event<FooData> = createEvent(sim, {
+          parent: event.id,
+          scheduledAt: sim.currentTime + 1,
+          process: {
+            type: "foobar",
+            inheritStep: true,
+          },
+        });
+
+        return {
+          state: { ...state, step: "bar" },
+          next: [nextEvent],
+        };
+      },
+      bar(_sim, event, state) {
+        assert(state.data.foo);
+        assertEquals(state.data.foo, "baz");
+        assertEquals(state.data.bar, 42.1337);
+
+        const nextEvent: Event<FooData> = createEvent(sim, {
+          parent: event.id,
+          scheduledAt: sim.currentTime + 1,
+          process: {
+            type: "foobar",
+            inheritStep: true,
+          },
+        });
+
+        return {
+          state: { ...state, step: "baz", data: { foo: "snafu", bar: -3.14 } },
+          next: [nextEvent],
+        };
+      },
+      baz(_sim, _event, state) {
+        assert(state.data.foo);
+        assertEquals(state.data.foo, "snafu");
+        assertEquals(state.data.bar, -3.14);
+
+        return {
+          state: { ...state },
+          next: [],
+        };
+      },
+    },
+  };
+
+  sim.registry = registerProcess(sim, foobar);
+
+  const e1 = createEvent(sim, {
+    scheduledAt: 0,
+    process: {
+      type: "foobar",
+      data: {
+        foo: "baz",
+        bar: 42.1337,
+      },
+    },
+  });
+
+  sim.events = scheduleEvent(sim, e1);
+
+  const [states, _stats] = await runSimulation(sim);
+  const _stop = states[states.length - 1];
 });
 
 Deno.test("process state inheritance (fork)", async () => {
+  interface WorkerData extends StateData {
+    worker: string;
+    value?: number;
+  }
+
+  const sim = initializeSimulation();
+
+  const results: Record<string, number> = {
+    "main": 0,
+    "worker1": 0,
+    "worker2": 0,
+    "worker3": 0,
+  };
+
+  const foo: ProcessDefinition<{
+    main: [WorkerData, [WorkerData, WorkerData, WorkerData]];
+    thread: [WorkerData, [WorkerData]];
+    stop: [WorkerData, []];
+  }> = {
+    type: "foo",
+    initial: "main",
+    steps: {
+      main(sim, event, state) {
+        const worker1: Event<WorkerData> = createEvent(sim, {
+          parent: event.id,
+          scheduledAt: 10,
+          process: {
+            type: "foo",
+            inheritStep: true,
+            data: {
+              worker: "worker1",
+            },
+          },
+        });
+
+        const worker2: Event<WorkerData> = createEvent(sim, {
+          parent: event.id,
+          scheduledAt: 20,
+          process: {
+            type: "foo",
+            inheritStep: true,
+            data: {
+              worker: "worker2",
+            },
+          },
+        });
+
+        const worker3: Event<WorkerData> = createEvent(sim, {
+          parent: event.id,
+          scheduledAt: 30,
+          process: {
+            type: "foo",
+            inheritStep: true,
+            data: {
+              worker: "worker3",
+            },
+          },
+        });
+
+        return {
+          state: { ...state, step: "thread" },
+          next: [worker1, worker2, worker3],
+        };
+      },
+      thread(sim, event, state) {
+        const newState = state.data.worker === "main"
+          ? { ...state, data: { ...state.data, value: 0 } }
+          : state.data.worker === "worker1"
+          ? { ...state, data: { ...state.data, value: 10 } }
+          : state.data.worker === "worker2"
+          ? { ...state, data: { ...state.data, value: 20 } }
+          : state.data.worker === "worker3"
+          ? { ...state, data: { ...state.data, value: 30 } }
+          : { ...state };
+
+        const nextEvent: Event<WorkerData> = createEvent(sim, {
+          parent: event.id,
+          scheduledAt: sim.currentTime,
+          process: {
+            type: "foo",
+            inheritStep: true,
+          },
+        });
+
+        return {
+          state: { ...newState, step: "stop" },
+          next: [nextEvent],
+        };
+      },
+      stop(_sim, _event, state) {
+        const worker = state.data.worker;
+        const value = state.data.value ?? -1;
+        results[worker] = value;
+
+        return {
+          state: { ...state },
+          next: [],
+        };
+      },
+    },
+  };
+
+  sim.registry = registerProcess(sim, foo);
+
+  const e1 = createEvent(sim, {
+    scheduledAt: 0,
+    process: {
+      type: "foo",
+      data: {
+        worker: "main",
+      },
+    },
+  });
+
+  sim.events = scheduleEvent(sim, e1);
+
+  const [states, _stats] = await runSimulation(sim);
+  const _stop = states[states.length - 1];
+
+  assertEquals(results["main"], 0);
+  assertEquals(results["worker1"], 10);
+  assertEquals(results["worker2"], 20);
+  assertEquals(results["worker3"], 30);
 });
 
 Deno.test("process state inheritance (exec)", async () => {
+  interface FooData extends StateData {
+    foobar: number;
+  }
+
+  const sim = initializeSimulation();
+
+  const foo: ProcessDefinition<{
+    start: [FooData, [FooData, FooData]];
+  }> = {
+    type: "foo",
+    initial: "start",
+    steps: {
+      start(sim, event, state) {
+        const copyState: Event<FooData> = createEvent(sim, {
+          parent: event.id,
+          scheduledAt: 5,
+          process: {
+            type: "bar",
+          },
+        });
+
+        const overwriteState: Event<FooData> = createEvent(sim, {
+          parent: event.id,
+          scheduledAt: 10,
+          process: {
+            type: "bar",
+            data: {
+              foobar: -3.14,
+            },
+          },
+        });
+
+        return {
+          state: {
+            ...state,
+            step: "start",
+            data: { ...state.data, foobar: 42.1337 },
+          },
+          next: [copyState, overwriteState],
+        };
+      },
+    },
+  };
+
+  const bar: ProcessDefinition<{
+    start: [FooData, []];
+  }> = {
+    type: "bar",
+    initial: "start",
+    steps: {
+      start(sim, _event, state) {
+        if (sim.currentTime === 5) {
+          assert(state.data.foobar === 42.1337);
+        } else if (sim.currentTime === 10) {
+          assert(state.data.foobar === -3.14);
+        }
+
+        return {
+          state: { ...state },
+          next: [],
+        };
+      },
+    },
+  };
+
+  sim.registry = registerProcess(sim, foo);
+  sim.registry = registerProcess(sim, bar);
+
+  const e1 = createEvent(sim, {
+    scheduledAt: 0,
+    process: {
+      type: "foo",
+    },
+  });
+
+  sim.events = scheduleEvent(sim, e1);
+
+  const [states, _stats] = await runSimulation(sim);
+  const _stop = states[states.length - 1];
 });
 
 Deno.test("process state inheritance (spawn)", async () => {
+  interface FooData extends StateData {
+    foobar: number;
+  }
+
+  const sim = initializeSimulation();
+
+  const foo: ProcessDefinition<{
+    start: [FooData, [FooData]];
+  }> = {
+    type: "foo",
+    initial: "start",
+    steps: {
+      start(sim, _event, state) {
+        const copyState: Event<FooData> = createEvent(sim, {
+          scheduledAt: 5,
+          process: {
+            type: "bar",
+            data: {
+              foobar: -3.14,
+            },
+          },
+        });
+
+        return {
+          state: {
+            ...state,
+            step: "start",
+            data: { ...state.data, foobar: 42.1337 },
+          },
+          next: [copyState],
+        };
+      },
+    },
+  };
+
+  const bar: ProcessDefinition<{
+    start: [FooData, []];
+  }> = {
+    type: "bar",
+    initial: "start",
+    steps: {
+      start(_sim, _event, state) {
+        assert(state.data.foobar === -3.14);
+
+        return {
+          state: { ...state },
+          next: [],
+        };
+      },
+    },
+  };
+
+  sim.registry = registerProcess(sim, foo);
+  sim.registry = registerProcess(sim, bar);
+
+  const e1 = createEvent(sim, {
+    scheduledAt: 0,
+    process: {
+      type: "foo",
+    },
+  });
+
+  sim.events = scheduleEvent(sim, e1);
+
+  const [states, _stats] = await runSimulation(sim);
+  const _stop = states[states.length - 1];
 });

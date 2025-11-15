@@ -73,6 +73,9 @@ const cons: ProcessDefinition<{
   },
 };
 
+Deno.test.beforeEach(() => {
+});
+
 Deno.test("producer-consumer synchronization with blocking", async () => {
   const sim = initializeSimulation();
 
