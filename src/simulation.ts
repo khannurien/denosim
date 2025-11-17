@@ -12,6 +12,7 @@ import {
   StateData,
   StepStateMap,
 } from "./model.ts";
+import { dumpToDisk, shouldDump } from "./memory.ts";
 
 /**
  * Initializes a new simulation instance with:
@@ -44,6 +45,17 @@ export function initializeSimulation(): Simulation {
     },
     state: {},
     stores: {},
+    dump: {
+      config: {
+        interval: 10,
+        directory: "dumps",
+        keep: 10,
+      },
+      state: {
+        count: 0,
+        last: 0,
+      },
+    },
   };
 
   return sim;
@@ -65,12 +77,19 @@ export async function runSimulation(
   sim: Simulation,
   options?: RunSimulationOptions,
 ): Promise<[Simulation[], SimulationStats]> {
+  await Deno.mkdir(sim.dump.config.directory, { recursive: true });
+
   const start = performance.now();
 
   const states: Simulation[] = [{ ...sim }];
 
   while (true) {
-    const current = states[states.length - 1];
+    const latest = states[states.length - 1];
+    const doDump = shouldDump(latest);
+
+    const current = doDump ? await dumpToDisk(states) : latest;
+    if (doDump) states.splice(0, states.length, current);
+
     const [next, continuation] = run(current);
     states.push(next);
 

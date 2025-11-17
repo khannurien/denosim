@@ -38,6 +38,28 @@ export interface Simulation<R extends ProcessRegistry = ProcessRegistry> {
 
   /** Current state of all stores in the simulation, used for process synchronization */
   stores: Record<StoreID, Store>;
+
+  /** TODO: */
+  dump: { config: DumpConfig; state: DumpState };
+}
+
+interface DumpConfig {
+  /** TODO: */
+  directory: string;
+
+  /** TODO: Events between dumps */
+  interval: number;
+
+  /** TODO: Size of the working set of events kept in memory */
+  keep: number;
+}
+
+interface DumpState {
+  /** TODO: */
+  count: number;
+
+  /** TODO: */
+  last: number;
 }
 
 /**
