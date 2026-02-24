@@ -3,6 +3,7 @@ import {
   Event,
   EventState,
   ProcessDefinition,
+  ProcessRegistry,
   ProcessState,
   ProcessStep,
   ProcessType,
@@ -331,7 +332,7 @@ function handleEvent(
  * Returns the updated process registry.
  */
 export function registerProcess<
-  R extends Record<string, ProcessDefinition<StepStateMap>>,
+  R extends ProcessRegistry,
   S extends StepStateMap,
   K extends ProcessType,
 >(

@@ -5,7 +5,10 @@
  * - A process definition registry for all processes available in the simulation
  * - The current state of all running processes
  */
-export interface Simulation<R extends ProcessRegistry = ProcessRegistry> {
+export interface Simulation<
+  R extends ProcessRegistry = ProcessRegistry,
+  S extends StoreRegistry = StoreRegistry,
+> {
   /**
    * The current virtual time in the simulation.
    * Represents the timestamp up to which the simulation has processed.
@@ -37,7 +40,7 @@ export interface Simulation<R extends ProcessRegistry = ProcessRegistry> {
   state: Record<EventID, ProcessState>;
 
   /** Current state of all stores in the simulation, used for process synchronization */
-  stores: Record<StoreID, Store>;
+  stores: StoreDefinitions<S>;
 
   /**
    * Configuration and count for automatic simulation dumps.
@@ -140,9 +143,12 @@ export interface Event<T extends StateData = StateData> {
  * Stores are used through `get` and `put` primitives that work in a LIFO fashion.
  * Used for inter-process synchronization, producer-consumer patterns, resource sharing, etc.
  */
-export interface Store<T extends StateData = StateData> {
+export interface Store<
+  T extends StateData = StateData,
+  K extends StoreID = StoreID,
+> {
   /** Unique identifier for this store */
-  id: StoreID;
+  id: K;
 
   /** Maximum items the store can hold before `put` operations block. Defaults to `1`. */
   capacity: number;
@@ -198,6 +204,14 @@ export type StepType = string;
 /** Represents any data that can be stored in the simulation state */
 export type StateData = Record<string, unknown>;
 
+/** Maps store IDs to their payload state data types */
+export type StoreRegistry = Record<StoreID, StateData>;
+
+/** Dynamically maps store IDs to their corresponding store definitions */
+export type StoreDefinitions<R extends StoreRegistry> = {
+  [K in keyof R]: Store<R[K], Extract<K, StoreID>>;
+};
+
 /**
  * Used to specify and narrow the type of input state data for a process.
  * This is the type of the state data that is passed to the process step handler.
@@ -224,7 +238,10 @@ export type StepsDefinition<T extends StepStateMap> = {
  * Map process types to their definitions.
  * Used for process lookup and execution in the simulation.
  */
-type ProcessRegistry = Record<ProcessType, ProcessDefinition<StepStateMap>>;
+export type ProcessRegistry = Record<
+  ProcessType,
+  ProcessDefinition<StepStateMap>
+>;
 
 /**
  * Defines a process with a unique type and its state machine behavior.
@@ -375,6 +392,9 @@ export interface CreateEventOptions<T extends StateData = StateData> {
  * Blocking operations use `EventState.Waiting` to pause processes until conditions resolve.
  */
 export interface CreateStoreOptions<T extends StateData = StateData> {
+  /** Optional store ID for deterministic typing/registration */
+  id?: StoreID;
+
   /** Controls whether the store enables synchronous (blocking) or asynchronous coordination */
   blocking?: boolean;
 

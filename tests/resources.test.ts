@@ -79,7 +79,7 @@ Deno.test.beforeEach(() => {
 Deno.test("producer-consumer synchronization with blocking", async () => {
   const sim = initializeSimulation();
 
-  const store = initializeStore({});
+  const store = initializeStore<FooData>({});
 
   sim.stores = registerStore(sim, store);
 
@@ -153,6 +153,58 @@ Deno.test("non-blocking store LIFO behavior", () => {
 });
 
 Deno.test("non-blocking store basic put/get operations", () => {
+});
+
+Deno.test("blocked put resumes get with preserved payload", () => {
+  const sim = initializeSimulation();
+  const store = initializeStore<FooData>({ blocking: true });
+  sim.stores = registerStore(sim, store);
+
+  const producer = createEvent(sim, {
+    scheduledAt: 0,
+    process: { type: "none", data: { store: store.id, foo: "bar" } },
+  });
+
+  const blockedPut = put(sim, producer, store.id, {
+    store: store.id,
+    foo: "bar",
+  });
+  assertEquals(blockedPut.resume, undefined);
+
+  const consumer = createEvent<FooData>(sim, {
+    scheduledAt: 1,
+    process: { type: "none", data: { store: store.id } },
+  });
+  const resumedGet = get(sim, consumer, store.id);
+
+  assertEquals(resumedGet.step.process.data?.["foo"], "bar");
+  assert(resumedGet.resume);
+});
+
+Deno.test("buffered put returns payload on later get", () => {
+  const sim = initializeSimulation();
+  const store = initializeStore<FooData>({ blocking: false, capacity: 2 });
+  sim.stores = registerStore(sim, store);
+
+  const producer = createEvent(sim, {
+    scheduledAt: 0,
+    process: { type: "none", data: { store: store.id, foo: "baz" } },
+  });
+
+  const bufferedPut = put(sim, producer, store.id, {
+    store: store.id,
+    foo: "baz",
+  });
+  assertEquals(bufferedPut.resume, undefined);
+
+  const consumer = createEvent<FooData>(sim, {
+    scheduledAt: 1,
+    process: { type: "none", data: { store: store.id } },
+  });
+  const bufferedGet = get(sim, consumer, store.id);
+
+  assertEquals(bufferedGet.step.process.data?.["foo"], "baz");
+  assertEquals(bufferedGet.resume, undefined);
 });
 
 Deno.test("store initialization defaults", () => {

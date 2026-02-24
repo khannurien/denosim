@@ -35,7 +35,8 @@ function makeSim(
     stores: stores as Simulation["stores"],
     registry: {},
     dump: dump ?? {
-      config: { interval: 2, directory: "dumps" }, count: 0,
+      config: { interval: 2, directory: "dumps" },
+      count: 0,
     },
   };
 }
