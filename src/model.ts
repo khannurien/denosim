@@ -159,6 +159,9 @@ export interface Store<
    */
   blocking: boolean;
 
+  /** Optional discipline for managing the order of events in the store's queues. Defaults to LIFO. */
+  discipline: QueueDiscipline;
+
   /** Items currently stored by non-blocking `put` operations and awaiting consumption */
   buffer: Event<T>[];
 
@@ -384,20 +387,30 @@ export interface CreateEventOptions<T extends StateData = StateData> {
   process?: ProcessCall<T>;
 }
 
+/** Discipline for managing the order of events in a store's queues */
+export enum QueueDiscipline {
+  FIFO = "FIFO",
+  LIFO = "LIFO",
+}
+
 /**
  * Object used to create new stores in the simulation.
  * Stores enable (possibly blocking) coordination between processes via `get`/`put` operations.
  * Defaults to blocking operations with capacity for one single item.
  * Capacity determines how many items the store can hold before `put` operations block.
  * Blocking operations use `EventState.Waiting` to pause processes until conditions resolve.
+ * Stores default to LIFO discipline for their queues, meaning the most recently added event will be the first to be processed when conditions allow.
  */
-export interface CreateStoreOptions<T extends StateData = StateData> {
+export interface CreateStoreOptions {
   /** Optional store ID for deterministic typing/registration */
   id?: StoreID;
+
+  /** Maximum items the store can hold before `put` operations block */
+  capacity?: number;
 
   /** Controls whether the store enables synchronous (blocking) or asynchronous coordination */
   blocking?: boolean;
 
-  /** Maximum items the store can hold before `put` operations block */
-  capacity?: number;
+  /** Discipline for managing the order of events in the store's queues */
+  discipline?: QueueDiscipline;
 }

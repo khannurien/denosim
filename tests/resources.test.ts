@@ -1,11 +1,13 @@
 import { assert, assertEquals, assertThrows } from "@std/assert";
 import {
   createEvent,
+  EventState,
   get,
   initializeSimulation,
   initializeStore,
   ProcessDefinition,
   put,
+  QueueDiscipline,
   registerProcess,
   registerStore,
   runSimulation,
@@ -149,10 +151,151 @@ Deno.test("blocking store with unlimited capacity behavior", async () => {
 Deno.test("non-blocking store with capacity 0 (immediate rejection)", async () => {
 });
 
-Deno.test("non-blocking store LIFO behavior", () => {
+Deno.test("non-blocking store basic put/get operations", () => {
 });
 
-Deno.test("non-blocking store basic put/get operations", () => {
+Deno.test("non-blocking store LIFO behavior", () => {
+  const sim = initializeSimulation();
+  const store = initializeStore<FooData>({
+    blocking: false,
+    capacity: 2,
+    discipline: QueueDiscipline.LIFO,
+  });
+  sim.stores = registerStore(sim, store);
+
+  const producerA = createEvent<FooData>(sim, {
+    scheduledAt: 0,
+    process: { type: "none", data: { store: store.id, foo: "A" } },
+  });
+  const producerB = createEvent<FooData>(sim, {
+    scheduledAt: 0,
+    process: { type: "none", data: { store: store.id, foo: "B" } },
+  });
+
+  put(sim, producerA, store.id, { store: store.id, foo: "A" });
+  put(sim, producerB, store.id, { store: store.id, foo: "B" });
+
+  const consumer1 = createEvent<FooData>(sim, {
+    scheduledAt: 1,
+    process: { type: "none", data: { store: store.id } },
+  });
+  const consumer2 = createEvent<FooData>(sim, {
+    scheduledAt: 2,
+    process: { type: "none", data: { store: store.id } },
+  });
+
+  const first = get(sim, consumer1, store.id);
+  const second = get(sim, consumer2, store.id);
+
+  assertEquals(first.step.process.data?.["foo"], "B");
+  assertEquals(second.step.process.data?.["foo"], "A");
+});
+
+Deno.test("non-blocking store FIFO behavior", () => {
+  const sim = initializeSimulation();
+  const store = initializeStore<FooData>({
+    blocking: false,
+    capacity: 2,
+    discipline: QueueDiscipline.FIFO,
+  });
+  sim.stores = registerStore(sim, store);
+
+  const producerA = createEvent<FooData>(sim, {
+    scheduledAt: 0,
+    process: { type: "none", data: { store: store.id, foo: "A" } },
+  });
+  const producerB = createEvent<FooData>(sim, {
+    scheduledAt: 0,
+    process: { type: "none", data: { store: store.id, foo: "B" } },
+  });
+
+  put(sim, producerA, store.id, { store: store.id, foo: "A" });
+  put(sim, producerB, store.id, { store: store.id, foo: "B" });
+
+  const consumer1 = createEvent<FooData>(sim, {
+    scheduledAt: 1,
+    process: { type: "none", data: { store: store.id } },
+  });
+  const consumer2 = createEvent<FooData>(sim, {
+    scheduledAt: 2,
+    process: { type: "none", data: { store: store.id } },
+  });
+
+  const first = get(sim, consumer1, store.id);
+  const second = get(sim, consumer2, store.id);
+
+  assertEquals(first.step.process.data?.["foo"], "A");
+  assertEquals(second.step.process.data?.["foo"], "B");
+});
+
+Deno.test("blocked gets resume in LIFO order", () => {
+  const sim = initializeSimulation();
+  const store = initializeStore<FooData>({
+    blocking: true,
+    discipline: QueueDiscipline.LIFO,
+  });
+  sim.stores = registerStore(sim, store);
+
+  const consumerA = createEvent<FooData>(sim, {
+    scheduledAt: 0,
+    process: { type: "none", data: { store: store.id } },
+  });
+  const consumerB = createEvent<FooData>(sim, {
+    scheduledAt: 0,
+    process: { type: "none", data: { store: store.id } },
+  });
+
+  const waitA = get(sim, consumerA, store.id);
+  const waitB = get(sim, consumerB, store.id);
+  assertEquals(waitA.step.status, EventState.Waiting);
+  assertEquals(waitB.step.status, EventState.Waiting);
+
+  const producer = createEvent<FooData>(sim, {
+    scheduledAt: 1,
+    process: { type: "none", data: { store: store.id, foo: "payload" } },
+  });
+  const result = put(sim, producer, store.id, {
+    store: store.id,
+    foo: "payload",
+  });
+
+  assert(result.resume);
+  assertEquals(result.resume.parent, consumerB.id);
+});
+
+Deno.test("blocked gets resume in FIFO order", () => {
+  const sim = initializeSimulation();
+  const store = initializeStore<FooData>({
+    blocking: true,
+    discipline: QueueDiscipline.FIFO,
+  });
+  sim.stores = registerStore(sim, store);
+
+  const consumerA = createEvent<FooData>(sim, {
+    scheduledAt: 0,
+    process: { type: "none", data: { store: store.id } },
+  });
+  const consumerB = createEvent<FooData>(sim, {
+    scheduledAt: 0,
+    process: { type: "none", data: { store: store.id } },
+  });
+
+  const waitA = get(sim, consumerA, store.id);
+  const waitB = get(sim, consumerB, store.id);
+  assertEquals(waitA.step.status, EventState.Waiting);
+  assertEquals(waitB.step.status, EventState.Waiting);
+
+  const producer = createEvent<FooData>(sim, {
+    scheduledAt: 1,
+    process: { type: "none", data: { store: store.id, foo: "payload" } },
+  });
+  const result = put(sim, producer, store.id, {
+    store: store.id,
+    foo: "payload",
+  });
+
+  assert(result.resume);
+  assertEquals(result.resume.parent, consumerA.id);
 });
 
 Deno.test("blocked put resumes get with preserved payload", () => {
