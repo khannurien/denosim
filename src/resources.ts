@@ -2,6 +2,7 @@ import {
   CreateStoreOptions,
   Event,
   ProcessRegistry,
+  QueueDiscipline,
   Simulation,
   StateData,
   Store,
@@ -22,13 +23,14 @@ export function initializeStore<
   T extends StateData = StateData,
   K extends StoreID = StoreID,
 >(
-  options: CreateStoreOptions<T> & { id?: K },
+  options: CreateStoreOptions,
 ): Store<T, K> {
   return {
     ...options,
     id: (options.id ?? crypto.randomUUID()) as K,
-    blocking: options.blocking ?? true,
     capacity: options.capacity ?? 1,
+    blocking: options.blocking ?? true,
+    discipline: options.discipline ?? QueueDiscipline.LIFO,
     buffer: [],
     getRequests: [],
     putRequests: [],
@@ -48,6 +50,36 @@ export function registerStore<
     ...sim.stores,
     [store.id]: { ...store },
   } as StoreDefinitions<S & Record<K, T>>;
+}
+
+/**
+ * Helper function to enqueue an event, returning the updated queue with the new event included.
+ * Returns [existing events..., new event]
+ */
+function queuePut<T extends StateData = StateData>(
+  queue: Event<T>[],
+  item: Event<T>,
+): Event<T>[] {
+  return [...queue, item];
+}
+
+/**
+ * Helper function to retrieve the next event from a queue based on the specified discipline, along with the updated queue with that event removed.
+ * FIFO: [next event, remaining events...]
+ * LIFO: [remaining events..., next event]
+ */
+function queueGet<T extends StateData = StateData>(
+  discipline: QueueDiscipline,
+  queue: Event<T>[],
+): [Event<T>, Event<T>[]] {
+  switch (discipline) {
+    case QueueDiscipline.FIFO:
+      return [queue[0], queue.slice(1)];
+    case QueueDiscipline.LIFO:
+      return [queue[queue.length - 1], queue.slice(0, -1)];
+    default:
+      throw new Error(`Unsupported queue discipline: ${discipline}`);
+  }
 }
 
 export function put<
@@ -72,12 +104,15 @@ export function put<
 
   // Blocking store or non-blocking store at capacity: check for pending get request
   if (store.getRequests.length > 0) {
-    const getRequest = store.getRequests[store.getRequests.length - 1]!;
+    const [getRequest, remaining] = queueGet(
+      store.discipline,
+      store.getRequests,
+    );
     sim.stores = {
       ...sim.stores,
       [store.id]: {
         ...store,
-        getRequests: store.getRequests.slice(0, -1),
+        getRequests: remaining,
       },
     };
 
@@ -104,7 +139,7 @@ export function put<
     return { step: updatedPut, resume: updatedGet };
   }
 
-  // // Blocking store or non-blocking store without pending get request: block put
+  // Blocking store or non-blocking store without pending get request: block put
   if (
     store.blocking || (!store.blocking && store.buffer.length >= store.capacity)
   ) {
@@ -119,11 +154,13 @@ export function put<
       },
     });
 
-    const updatedStore = {
-      ...store,
-      putRequests: [...store.putRequests, updatedPut],
+    sim.stores = {
+      ...sim.stores,
+      [store.id]: {
+        ...store,
+        putRequests: queuePut(store.putRequests, updatedPut),
+      },
     };
-    sim.stores = { ...sim.stores, [store.id]: updatedStore };
 
     return { step: updatedPut };
   }
@@ -139,12 +176,13 @@ export function put<
     },
   });
 
-  const updatedStore = {
-    ...store,
-    buffer: [...store.buffer, updatedPut],
+  sim.stores = {
+    ...sim.stores,
+    [store.id]: {
+      ...store,
+      buffer: queuePut(store.buffer, updatedPut),
+    },
   };
-
-  sim.stores = { ...sim.stores, [store.id]: updatedStore };
 
   return { step: updatedPut };
 }
@@ -170,12 +208,15 @@ export function get<
 
   // Check for pending put request (blocked producers)
   if (store.putRequests.length > 0) {
-    const putRequest = store.putRequests[store.putRequests.length - 1]!;
+    const [putRequest, remaining] = queueGet(
+      store.discipline,
+      store.putRequests,
+    );
     sim.stores = {
       ...sim.stores,
       [store.id]: {
         ...store,
-        putRequests: store.putRequests.slice(0, -1),
+        putRequests: remaining,
       },
     };
 
@@ -213,12 +254,12 @@ export function get<
   // Non-blocking store: check buffer (completed puts)
   if (!store.blocking && store.buffer.length > 0) {
     // Get data from buffer
-    const buffered = store.buffer[store.buffer.length - 1]!;
+    const [buffered, remaining] = queueGet(store.discipline, store.buffer);
     sim.stores = {
       ...sim.stores,
       [store.id]: {
         ...store,
-        buffer: store.buffer.slice(0, -1),
+        buffer: remaining,
       },
     };
 
@@ -252,12 +293,13 @@ export function get<
     process: { ...event.process, inheritStep: true },
   });
 
-  const updatedStore = {
-    ...store,
-    getRequests: [...store.getRequests, updatedGet],
+  sim.stores = {
+    ...sim.stores,
+    [store.id]: {
+      ...store,
+      getRequests: queuePut(store.getRequests, updatedGet),
+    },
   };
-
-  sim.stores = { ...sim.stores, [store.id]: updatedStore };
 
   return { step: updatedGet };
 }
