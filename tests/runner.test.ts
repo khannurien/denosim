@@ -1,0 +1,106 @@
+import { assert, assertEquals } from "@std/assert";
+import { DeltaEncodedSimulation } from "../src/memory.ts";
+import { Event, ProcessState, Simulation } from "../src/model.ts";
+import { dumpToDisk, resolveRunContext, shouldDump } from "../src/runner.ts";
+
+function makeSim(
+  time = 0,
+  events: Event[] = [],
+  state: Record<string, ProcessState> = {},
+  stores: Record<string, unknown> = {},
+): Simulation {
+  return {
+    currentTime: time,
+    events,
+    state,
+    stores: stores as Simulation["stores"],
+    registry: {},
+  };
+}
+
+Deno.test("shouldDump depends on local delta window only", () => {
+  const sim = makeSim(0);
+  const deltaEncoded: DeltaEncodedSimulation = {
+    base: sim,
+    deltas: [{ t: 1, e: [], s: [], st: [] }],
+    current: {
+      ...sim,
+      currentTime: 1,
+    },
+  };
+
+  assertEquals(shouldDump(deltaEncoded, 2), false);
+  deltaEncoded.deltas.push({ t: 2, e: [], s: [], st: [] });
+  assertEquals(shouldDump(deltaEncoded, 2), true);
+});
+
+Deno.test("dumpToDisk writes a checkpoint and resets local dump cursor", async () => {
+  const dir = "run-dumps-test";
+  await Deno.remove(dir, { recursive: true }).catch(() => {});
+
+  const sim = makeSim(0, [], {}, {});
+  const deltaEncoded: DeltaEncodedSimulation = {
+    base: sim,
+    deltas: [{ t: 1, e: [], s: [], st: [] }],
+    current: { ...sim, currentTime: 1 },
+  };
+
+  const runContext = await resolveRunContext({ runDirectory: dir });
+  await dumpToDisk(deltaEncoded, runContext);
+  const stat = await Deno.stat(`${dir}/dumps/0-t1.json`);
+  assert(stat.isFile);
+
+  await Deno.remove(dir, { recursive: true });
+});
+
+Deno.test("resolveRunContext reuses existing manifest dump state", async () => {
+  const dir = "run-resume-test";
+  await Deno.remove(dir, { recursive: true }).catch(() => {});
+  await Deno.mkdir(dir, { recursive: true });
+
+  const now = new Date().toISOString();
+  const manifest = {
+    runId: "resume-1",
+    createdAt: now,
+    updatedAt: now,
+    runRoot: dir,
+    dump: {
+      directory: `${dir}/custom-dumps`,
+      interval: 7,
+      count: 42,
+      lastFile: "41-t99.json",
+    },
+    metadata: { source: "test" },
+  };
+  await Deno.writeTextFile(
+    `${dir}/run.json`,
+    JSON.stringify(manifest, null, 2),
+  );
+
+  const context = await resolveRunContext({ runDirectory: dir });
+  assertEquals(context.dumpDirectory, `${dir}/custom-dumps`);
+  assertEquals(context.manifest.dump.interval, 7);
+  assertEquals(context.manifest.dump.count, 42);
+  assertEquals(context.manifest.dump.lastFile, "41-t99.json");
+  assertEquals(context.manifest.metadata?.source, "test");
+
+  await Deno.remove(dir, { recursive: true });
+});
+
+Deno.test("resolveRunContext tolerates invalid run.json and recreates defaults", async () => {
+  const dir = "run-invalid-manifest-test";
+  await Deno.remove(dir, { recursive: true }).catch(() => {});
+  await Deno.mkdir(dir, { recursive: true });
+  await Deno.writeTextFile(`${dir}/run.json`, "{ not valid json");
+
+  const context = await resolveRunContext({
+    runDirectory: dir,
+    dumpInterval: 3,
+  });
+  assertEquals(context.runRoot, dir);
+  assertEquals(context.dumpDirectory, `${dir}/dumps`);
+  assertEquals(context.manifest.dump.interval, 3);
+  assertEquals(context.manifest.dump.count, 0);
+
+  await Deno.remove(dir, { recursive: true });
+});

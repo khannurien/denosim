@@ -954,3 +954,21 @@ Deno.test("process state inheritance (spawn)", async () => {
 
   const [_stop, _stats] = await runSimulation(sim);
 });
+
+Deno.test("simulation rate > 0 executes throttled path", async () => {
+  const sim = initializeSimulation();
+  const event = createEvent(sim, { scheduledAt: 0 });
+  sim.events = scheduleEvent(sim, event);
+
+  const [stop] = await runSimulation(sim, { rate: 1_000_000 });
+  assertEquals(stop.events[0].status, EventState.Finished);
+});
+
+Deno.test("simulation negative rate falls back to zero-delay branch", async () => {
+  const sim = initializeSimulation();
+  const event = createEvent(sim, { scheduledAt: 0 });
+  sim.events = scheduleEvent(sim, event);
+
+  const [stop] = await runSimulation(sim, { rate: -1 });
+  assertEquals(stop.events[0].status, EventState.Finished);
+});

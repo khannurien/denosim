@@ -1,6 +1,16 @@
 import { DeltaEncodedSimulation, reconstructFromDeltas } from "./memory.ts";
 import { Simulation } from "./model.ts";
 
+const ARROW_FUNCTION_PATTERN = /^(\([^)]*\)|[A-Za-z_$][\w$]*)\s*=>/;
+
+function isFunctionSource(source: string): boolean {
+  return source.trim().indexOf("function ") === 0;
+}
+
+function isArrowFunctionSource(source: string): boolean {
+  return ARROW_FUNCTION_PATTERN.test(source.trim());
+}
+
 /**
  * Inspired by true events:
  * https://oprearocks.medium.com/serializing-object-methods-using-es6-template-strings-and-eval-c77c894651f0
@@ -8,8 +18,9 @@ import { Simulation } from "./model.ts";
 function replacer(_key: string, value: unknown): unknown {
   if (typeof value === "function") {
     const functionString = value.toString();
-    // Handle shorthand syntax
-    return functionString.indexOf("function ") === 0
+    // Handle shorthand syntax while preserving arrow function source.
+    return isFunctionSource(functionString) ||
+        isArrowFunctionSource(functionString)
       ? functionString
       : `function ${functionString}`;
   }
@@ -18,8 +29,13 @@ function replacer(_key: string, value: unknown): unknown {
 }
 
 function reviver(_key: string, value: unknown): unknown {
-  return typeof value === "string" && value.indexOf("function ") === 0
-    ? eval(`(${value})`)
+  if (typeof value !== "string") {
+    return value;
+  }
+
+  const source = value.trim();
+  return isFunctionSource(source) || isArrowFunctionSource(source)
+    ? eval(`(${source})`)
     : value;
 }
 

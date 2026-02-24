@@ -192,3 +192,39 @@ Deno.test("process rewind", async () => {
   assertEquals(finishedCount(rewound.current), finishedCount(encoded.current));
   assertEquals(maxCount(rewound.current), maxCount(encoded.current));
 });
+
+Deno.test("serialize handles arrow-function handlers", async () => {
+  const sim = initializeSimulation();
+
+  interface ArrowData extends StateData {
+    value: number;
+  }
+
+  const arrow: ProcessDefinition<{
+    start: [ArrowData, []];
+  }> = {
+    type: "arrow",
+    initial: "start",
+    steps: {
+      start: (_sim, _event, state) => ({
+        state,
+        next: [],
+      }),
+    },
+  };
+
+  sim.registry = registerProcess(sim, arrow);
+  const event = createEvent(sim, {
+    scheduledAt: 0,
+    process: {
+      type: "arrow",
+      data: { value: 1 },
+    },
+  });
+  sim.events = scheduleEvent(sim, event);
+
+  const [encoded] = await runSimulationWithDeltas(sim);
+  const recovered = deserializeSimulation(serializeSimulation(encoded));
+  const restoredHandler = recovered[0].registry["arrow"].steps["start"];
+  assert(typeof restoredHandler === "function");
+});
