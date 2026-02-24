@@ -12,7 +12,12 @@ import {
   StateData,
   StepStateMap,
 } from "./model.ts";
-import { dumpToDisk, shouldDump } from "./memory.ts";
+import {
+  createDelta,
+  DeltaEncodedSimulation,
+  dumpToDisk,
+  shouldDump,
+} from "./memory.ts";
 
 /**
  * Initializes a new simulation instance with:
@@ -47,14 +52,10 @@ export function initializeSimulation(): Simulation {
     stores: {},
     dump: {
       config: {
-        interval: 10,
+        interval: 1000,
         directory: "dumps",
-        keep: 10,
       },
-      state: {
-        count: 0,
-        last: 0,
-      },
+      count: 0,
     },
   };
 
@@ -76,33 +77,56 @@ export function initializeSimulation(): Simulation {
 export async function runSimulation(
   sim: Simulation,
   options?: RunSimulationOptions,
-): Promise<[Simulation[], SimulationStats]> {
+): Promise<[Simulation, SimulationStats]> {
+  const [finished, stats] = await runSimulationWithDeltas(sim, options);
+
+  return [finished.current, stats];
+}
+
+/**
+ * Runs the simulation and exposes the delta/checkpoint representation.
+ * This is intended for persistence, replay, and memory management tooling.
+ */
+export async function runSimulationWithDeltas(
+  sim: Simulation,
+  options?: RunSimulationOptions,
+): Promise<[DeltaEncodedSimulation, SimulationStats]> {
   await Deno.mkdir(sim.dump.config.directory, { recursive: true });
 
   const start = performance.now();
 
-  const states: Simulation[] = [{ ...sim }];
+  const finished: DeltaEncodedSimulation = {
+    base: { ...sim },
+    deltas: [],
+    current: { ...sim },
+  };
 
   while (true) {
-    const latest = states[states.length - 1];
-    const doDump = shouldDump(latest);
+    const [next, continuation] = run(finished.current);
+    if (!continuation) break;
 
-    const current = doDump ? await dumpToDisk(states) : latest;
-    if (doDump) states.splice(0, states.length, current);
+    // Memory management: store deltas and dump to disk if necessary
+    finished.deltas.push(createDelta(finished.current, next));
+    finished.current = next;
 
-    const [next, continuation] = run(current);
-    states.push(next);
+    const doDump = shouldDump(finished);
+    const current = doDump ? await dumpToDisk(finished) : next;
+    if (doDump) {
+      finished.base = current;
+      finished.deltas = [];
+      finished.current = current;
+    }
 
-    if (!continuation || (options && shouldTerminate(next, options))) break;
+    if (options && shouldTerminate(current, options)) break;
     if (options?.rate) await delay(options.rate);
   }
 
   const end = performance.now();
 
   return [
-    states,
+    finished,
     {
-      end: states[states.length - 1].currentTime,
+      end: finished.current.currentTime,
       duration: end - start,
     },
   ];
@@ -180,7 +204,23 @@ function run(current: Simulation): [Simulation, boolean] {
  */
 function step(sim: Simulation, event: Event): Simulation {
   // Advance simulation time to this event's scheduled time
-  const nextSim = { ...sim, currentTime: event.scheduledAt };
+  const nextSim: Simulation = {
+    ...sim,
+    currentTime: event.scheduledAt,
+    events: [...sim.events],
+    state: { ...sim.state },
+    stores: Object.fromEntries(
+      Object.entries(sim.stores).map(([id, store]) => [
+        id,
+        {
+          ...store,
+          buffer: [...store.buffer],
+          getRequests: [...store.getRequests],
+          putRequests: [...store.putRequests],
+        },
+      ]),
+    ),
+  };
 
   // Handle the event by executing its process, which may yield new events
   const { state, next } = handleEvent(nextSim, event);
@@ -308,7 +348,7 @@ export function registerProcess<
  * Returns a new event with:
  * - Unique ID
  * - Optional parent event ID (defaults to `undefined`)
- * - TODO: Initial event state set to `Waiting` or `Fired`
+ * - Initial event state set to `Waiting` or `Fired`
  * - An optional priority value (the lower the value, the higher the priority; defaults to 0)
  * - Timestamps for when it was created and scheduled
  * - Optional process to run on event handling (defaults to `none`, the dummy process)

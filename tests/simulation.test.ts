@@ -20,9 +20,7 @@ Deno.test("basic event scheduling", async () => {
   sim.events = scheduleEvent(sim, e1);
   assertEquals(sim.events.length, 1);
 
-  const [states, _stats] = await runSimulation(sim);
-  assert(states.length > 0);
-  const stop = states[states.length - 1];
+  const [stop, _stats] = await runSimulation(sim);
 
   assertEquals(stop.events.length, 1);
   assertEquals(stop.events[0].finishedAt, 10);
@@ -35,9 +33,7 @@ Deno.test("zero-duration events", async () => {
   const e1 = createEvent(sim, { scheduledAt: sim.currentTime });
   sim.events = scheduleEvent(sim, e1);
 
-  const [states, _stats] = await runSimulation(sim);
-  assert(states.length > 0);
-  const stop = states[states.length - 1];
+  const [stop, _stats] = await runSimulation(sim);
 
   assertEquals(stop.events[0].finishedAt, 0);
 });
@@ -55,9 +51,7 @@ Deno.test("basic out of order scheduling", async () => {
   sim.events = scheduleEvent(sim, e1);
   assertEquals(sim.events.length, 3);
 
-  const [states, _stats] = await runSimulation(sim);
-  assert(states.length > 0);
-  const stop = states[states.length - 1];
+  const [stop, _stats] = await runSimulation(sim);
 
   assertEquals(stop.events.length, 3);
   assert(stop.events.every((event) => event.status == EventState.Finished));
@@ -101,16 +95,14 @@ Deno.test("basic event ordering", async () => {
   sim.events = scheduleEvent(sim, e5);
   sim.events = scheduleEvent(sim, e6);
 
-  const [states, _stats] = await runSimulation(sim);
-  assert(states.length > 0);
-  const stop = states[states.length - 1];
+  const [stop, _stats] = await runSimulation(sim);
 
   assertEquals(stop.events.length, 6);
   assertEquals(processedOrder, [0, 2, 5, 10, 15, 50]);
   assert(stop.events.every((event) => event.status == EventState.Finished));
 });
 
-Deno.test("scheduling events in the past", () => {
+Deno.test("scheduling events in the past", async () => {
   const sim = initializeSimulation();
 
   const foo: ProcessDefinition<{
@@ -140,8 +132,8 @@ Deno.test("scheduling events in the past", () => {
   });
   sim.events = scheduleEvent(sim, e2);
 
-  assertRejects(async () => {
-    const [_states, _stats] = await runSimulation(sim);
+  await assertRejects(async () => {
+    const [_stop, _stats] = await runSimulation(sim);
   });
 });
 
@@ -177,9 +169,7 @@ Deno.test("event process scheduling", async () => {
   sim.events = scheduleEvent(sim, e3);
   assertEquals(sim.events.length, 3);
 
-  const [states, _stats] = await runSimulation(sim);
-  assert(states.length > 0);
-  const stop = states[states.length - 1];
+  const [stop, _stats] = await runSimulation(sim);
 
   assertEquals(results[10].id, e1.id);
   assertEquals(results[20].id, e2.id);
@@ -198,12 +188,9 @@ Deno.test("simulation until time condition", async () => {
   sim.events = scheduleEvent(sim, e2);
   sim.events = scheduleEvent(sim, e3);
 
-  const [states, stats] = await runSimulation(sim, { untilTime: 20 });
+  const [stop, stats] = await runSimulation(sim, { untilTime: 20 });
 
   assertEquals(stats.end, 20);
-
-  assert(states.length > 0);
-  const stop = states[states.length - 1];
   assertEquals(
     stop.events.find((event) => event.id === e1.id)?.status,
     EventState.Finished,
@@ -228,12 +215,9 @@ Deno.test("simulation until event condition", async () => {
   sim.events = scheduleEvent(sim, e2);
   sim.events = scheduleEvent(sim, e3);
 
-  const [states, stats] = await runSimulation(sim, { untilEvent: e2 });
+  const [stop, stats] = await runSimulation(sim, { untilEvent: e2 });
 
   assertEquals(stats.end, 20);
-
-  assert(states.length > 0);
-  const stop = states[states.length - 1];
   assertEquals(
     stop.events.find((event) => event.id === e1.id)?.status,
     EventState.Finished,
@@ -613,8 +597,7 @@ Deno.test("process state initialization", async () => {
 
   sim.events = scheduleEvent(sim, e1);
 
-  const [states, _stats] = await runSimulation(sim);
-  const _stop = states[states.length - 1];
+  const [_stop, _stats] = await runSimulation(sim);
 });
 
 Deno.test("process state across steps", async () => {
@@ -695,8 +678,7 @@ Deno.test("process state across steps", async () => {
 
   sim.events = scheduleEvent(sim, e1);
 
-  const [states, _stats] = await runSimulation(sim);
-  const _stop = states[states.length - 1];
+  const [_stop, _stats] = await runSimulation(sim);
 });
 
 Deno.test("process state inheritance (fork)", async () => {
@@ -816,8 +798,7 @@ Deno.test("process state inheritance (fork)", async () => {
 
   sim.events = scheduleEvent(sim, e1);
 
-  const [states, _stats] = await runSimulation(sim);
-  const _stop = states[states.length - 1];
+  const [_stop, _stats] = await runSimulation(sim);
 
   assertEquals(results["main"], 0);
   assertEquals(results["worker1"], 10);
@@ -903,8 +884,7 @@ Deno.test("process state inheritance (exec)", async () => {
 
   sim.events = scheduleEvent(sim, e1);
 
-  const [states, _stats] = await runSimulation(sim);
-  const _stop = states[states.length - 1];
+  const [_stop, _stats] = await runSimulation(sim);
 });
 
 Deno.test("process state inheritance (spawn)", async () => {
@@ -972,6 +952,5 @@ Deno.test("process state inheritance (spawn)", async () => {
 
   sim.events = scheduleEvent(sim, e1);
 
-  const [states, _stats] = await runSimulation(sim);
-  const _stop = states[states.length - 1];
+  const [_stop, _stats] = await runSimulation(sim);
 });

@@ -48,7 +48,14 @@ export function put<T extends StateData = StateData>(
 
   // Blocking store or non-blocking store at capacity: check for pending get request
   if (store.getRequests.length > 0) {
-    const getRequest = store.getRequests.pop()!;
+    const getRequest = store.getRequests[store.getRequests.length - 1]!;
+    sim.stores = {
+      ...sim.stores,
+      [store.id]: {
+        ...store,
+        getRequests: store.getRequests.slice(0, -1),
+      },
+    };
 
     // Reschedule the get request with the data attached
     const updatedGet: Event<T> = createEvent(sim, {
@@ -133,7 +140,14 @@ export function get<T extends StateData = StateData>(
 
   // Check for pending put request (blocked producers)
   if (store.putRequests.length > 0) {
-    const putRequest = store.putRequests.pop()!;
+    const putRequest = store.putRequests[store.putRequests.length - 1]!;
+    sim.stores = {
+      ...sim.stores,
+      [store.id]: {
+        ...store,
+        putRequests: store.putRequests.slice(0, -1),
+      },
+    };
 
     const updatedPut: Event<T> = createEvent(sim, {
       parent: putRequest.parent,
@@ -158,7 +172,14 @@ export function get<T extends StateData = StateData>(
   // Non-blocking store: check buffer (completed puts)
   if (!store.blocking && store.buffer.length > 0) {
     // Get data from buffer
-    const buffered = store.buffer.pop()!;
+    const buffered = store.buffer[store.buffer.length - 1]!;
+    sim.stores = {
+      ...sim.stores,
+      [store.id]: {
+        ...store,
+        buffer: store.buffer.slice(0, -1),
+      },
+    };
 
     // Return get request with the obtained data
     // FIXME: Explicit cast

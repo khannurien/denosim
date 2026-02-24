@@ -179,8 +179,7 @@ if (import.meta.main) {
   });
   sim.events = scheduleEvent(sim, e4);
 
-  const [states, stats] = await runSimulation(sim);
-  const stop = states[states.length - 1];
+  const [stop, stats] = await runSimulation(sim);
 
   console.log(stop.events);
 

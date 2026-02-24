@@ -93,13 +93,13 @@ Deno.test("producer-consumer synchronization with blocking", async () => {
 
   const e2 = createEvent(sim, {
     scheduledAt: 5,
-    process: { type: "cons", data: { store: store.id} },
-  })
+    process: { type: "cons", data: { store: store.id } },
+  });
 
   const e3 = createEvent(sim, {
     scheduledAt: 10,
-    process: { type: "cons", data: { store: store.id} },
-  })
+    process: { type: "cons", data: { store: store.id } },
+  });
 
   const e4 = createEvent(sim, {
     scheduledAt: 15,
@@ -111,24 +111,27 @@ Deno.test("producer-consumer synchronization with blocking", async () => {
   sim.events = scheduleEvent(sim, e3);
   sim.events = scheduleEvent(sim, e4);
 
-  const [states, _stats] = await runSimulation(sim);
-  const stop = states[states.length - 1];
+  const [stop, _stats] = await runSimulation(sim);
 
   // Consumer has been unblocked by consumer
   const prodBlocked = stop.events.find((event) => event.id === e1.id);
   assertEquals(prodBlocked?.finishedAt, 0);
-  const prodUnblocked = stop.events.find((event) => event.parent && event.parent === e1.id);
+  const prodUnblocked = stop.events.find((event) =>
+    event.parent && event.parent === e1.id
+  );
   assertEquals(prodUnblocked?.finishedAt, 5);
 
   // Consumer has been unblocked by producer and has gotten the data
   const consBlocked = stop.events.find((event) => event.id === e3.id);
   assertEquals(consBlocked?.finishedAt, 10);
-  const consUnblocked = stop.events.find((event) => event.parent && event.parent === e3.id);
+  const consUnblocked = stop.events.find((event) =>
+    event.parent && event.parent === e3.id
+  );
   assertEquals(consUnblocked?.finishedAt, 15);
   assertEquals(consUnblocked!.process.data!["foo"], "baz");
 
   // All processes have reached their final step
-  assert(Object.values(stop.state).every(state => state.step === "stop"));
+  assert(Object.values(stop.state).every((state) => state.step === "stop"));
 });
 
 Deno.test("multiple consumers with single producer", async () => {

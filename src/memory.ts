@@ -10,66 +10,50 @@ import {
 import { serializeSimulation } from "./serialize.ts";
 
 /**
- * TODO:
+ * Determine if it's time to dump the current simulation state based on the configured interval and the number of deltas accumulated since the last dump.
  */
 export function shouldDump(
-  sim: Simulation,
+  deltaEncoded: DeltaEncodedSimulation,
 ): boolean {
-  return sim.events.length - sim.dump.state.last >= sim.dump.config.interval;
+  return deltaEncoded.deltas.length >=
+    deltaEncoded.current.dump.config.interval;
 }
 
 /**
- * TODO:
+ * Dump the current simulation state to disk and return an updated simulation with incremented dump count.
+ * Files are written to the configured directory with a sequential naming pattern (e.g., dump-0.json, dump-1.json, etc.).
  */
 export async function dumpToDisk(
-  states: Simulation[],
+  deltaEncoded: DeltaEncodedSimulation,
 ): Promise<Simulation> {
-  const sim = states[states.length - 1];
-
   const dumpPath =
-    `${sim.dump.config.directory}/full-dump-${sim.dump.state.count}.json`;
+    `${deltaEncoded.current.dump.config.directory}/dump-${deltaEncoded.current.dump.count}.json`;
 
-  // TODO: Persist all current simulation history
-  const serialized = serializeSimulation(states);
+  // Persist all current simulation history
+  const serialized = serializeSimulation(deltaEncoded);
+  // FIXME: Do not await, write asynchronously
   await Deno.writeTextFile(dumpPath, serialized);
 
   console.log(
-    `[${sim.currentTime} Dumped ${sim.events.length} events to ${dumpPath}`,
+    `[${deltaEncoded.current.currentTime}] Dumped ${deltaEncoded.deltas.length} simulation steps to ${dumpPath}`,
   );
 
-  const recentEvents = sim.events.slice(-sim.dump.config.keep);
-  const recentEventIds = new Set(recentEvents.map((e) => e.id));
-  const recentState = Object.fromEntries(
-    Object.entries(sim.state).filter(([id]) => recentEventIds.has(id)),
-  );
-
-  const dumpedSim: Simulation = {
-    ...sim,
-    events: recentEvents,
-    state: recentState,
-    stores: sim.stores,
+  return {
+    ...deltaEncoded.current,
     dump: {
-      config: sim.dump.config,
-      state: {
-        count: sim.dump.state.count + 1,
-        last: recentEvents.length,
-      },
+      config: deltaEncoded.current.dump.config,
+      count: deltaEncoded.current.dump.count + 1,
     },
   };
-
-  return dumpedSim;
 }
 
 /** Delta operations for events */
 type EventDeltaOp =
   | { op: "add"; event: Event }
-  | { op: "update"; id: EventID; event: Event }
-  | { op: "remove"; id: EventID };
+  | { op: "update"; id: EventID; event: Event };
 
 /** Delta operations for state */
-type StateDeltaOp =
-  | { op: "set"; key: EventID; value: ProcessState }
-  | { op: "delete"; key: EventID };
+type StateDeltaOp = { op: "set"; key: EventID; value: ProcessState };
 
 /** Delta operations for stores */
 type StoreDeltaOp =
@@ -82,49 +66,53 @@ export interface SimulationDelta {
   t: Timestamp;
 
   /** Event operations (if any changes) */
-  e?: EventDeltaOp[];
+  e: EventDeltaOp[];
 
   /** State operations (if any changes) */
-  s?: StateDeltaOp[];
+  s: StateDeltaOp[];
 
   /** Store operations (if any changes) */
-  st?: StoreDeltaOp[];
+  st: StoreDeltaOp[];
 }
 
 /** Full simulation state with delta encoding support */
 export interface DeltaEncodedSimulation {
-  /** Base snapshot - full state at reference point */
+  /** Base snapshot -- full state at reference point */
   base: Simulation;
+
   /** Sequence of deltas from base to current state */
   deltas: SimulationDelta[];
+
+  /** Current simulation state (can be reconstructed from base + deltas) */
+  current: Simulation;
 }
 
-// Add these utility functions
-
-export function createDelta(prev: Simulation, current: Simulation): SimulationDelta {
-  const delta: SimulationDelta = { t: current.currentTime };
-
-  // Diff events
-  const eventOps = diffEvents(prev.events, current.events);
-  if (eventOps.length > 0) delta.e = eventOps;
-
-  // Diff state
-  const stateOps = diffState(prev.state, current.state);
-  if (stateOps.length > 0) delta.s = stateOps;
-
-  // Diff stores
-  const storeOps = diffStores(prev.stores, current.stores);
-  if (storeOps.length > 0) delta.st = storeOps;
-
-  return delta;
+/**
+ * Use a diffing algorithm to compare two simulation states and generate a compact delta representation that captures only the changes between them.
+ * This allows efficiently storing and transmitting simulation history by avoiding redundant data.
+ */
+export function createDelta(
+  prev: Simulation,
+  current: Simulation,
+): SimulationDelta {
+  return {
+    t: current.currentTime,
+    e: diffEvents(prev.events, current.events),
+    s: diffState(prev.state, current.state),
+    st: diffStores(prev.stores, current.stores),
+  };
 }
 
+/**
+ * Algorithm to compute the difference between two arrays of events, identifying added and modified events based on their unique IDs.
+ * This allows generating a list of operations that can be applied to transform the previous event list into the current one, capturing only the necessary changes.
+ */
 function diffEvents(prev: Event[], current: Event[]): EventDeltaOp[] {
   const ops: EventDeltaOp[] = [];
   const prevMap = new Map(prev.map((e) => [e.id, e]));
-  const currentMap = new Map(current.map((e) => [e.id, e]));
 
   // Find new events
+  // TODO: current[previous.length] -> current.length - 1
   current.forEach((event) => {
     if (!prevMap.has(event.id)) {
       ops.push({ op: "add", event });
@@ -139,16 +127,13 @@ function diffEvents(prev: Event[], current: Event[]): EventDeltaOp[] {
     }
   });
 
-  // Find removed events
-  prev.forEach((event) => {
-    if (!currentMap.has(event.id)) {
-      ops.push({ op: "remove", id: event.id });
-    }
-  });
-
   return ops;
 }
 
+/**
+ * Algorithm to compute the difference between two state objects, identifying modified or new process state based on their keys and values.
+ * This allows generating a list of operations that can be applied to update the previous state to match the current one, capturing only the necessary changes.
+ */
 function diffState(
   prev: Record<EventID, ProcessState>,
   current: Record<EventID, ProcessState>,
@@ -164,16 +149,13 @@ function diffState(
     }
   });
 
-  // Removed state
-  Object.keys(prev).forEach((key) => {
-    if (!current[key]) {
-      ops.push({ op: "delete", key });
-    }
-  });
-
   return ops;
 }
 
+/**
+ * Algorithm to compute the difference between two store objects, identifying modified, new, or deleted stores based on their keys and values.
+ * This allows generating a list of operations that can be applied to update the previous stores to match the current ones, capturing only the necessary changes while also handling deletions.
+ */
 function diffStores(
   prev: Record<StoreID, Store>,
   current: Record<StoreID, Store>,
@@ -199,7 +181,14 @@ function diffStores(
   return ops;
 }
 
-export function applyDelta(base: Simulation, delta: SimulationDelta): Simulation {
+/**
+ * Apply a given delta to a base simulation state to produce an updated simulation state that reflects the changes captured in the delta.
+ * This involves processing event operations (additions and updates), state operations (modifications), and store operations (additions, modifications, and deletions) to reconstruct the current simulation state from the base state and the provided delta.
+ */
+export function applyDelta(
+  base: Simulation,
+  delta: SimulationDelta,
+): Simulation {
   const result: Simulation = {
     ...base,
     currentTime: delta.t,
@@ -223,9 +212,6 @@ export function applyDelta(base: Simulation, delta: SimulationDelta): Simulation
           }
           break;
         }
-        case "remove":
-          result.events = result.events.filter((e) => e.id !== op.id);
-          break;
       }
     });
   }
@@ -236,9 +222,6 @@ export function applyDelta(base: Simulation, delta: SimulationDelta): Simulation
       switch (op.op) {
         case "set":
           result.state[op.key] = op.value;
-          break;
-        case "delete":
-          delete result.state[op.key];
           break;
       }
     });
@@ -261,9 +244,34 @@ export function applyDelta(base: Simulation, delta: SimulationDelta): Simulation
   return result;
 }
 
-export function reconstructFromDeltas(base: Simulation, deltas: SimulationDelta[]): Simulation[] {
+/**
+ * Given a sequence of simulation states, create a delta-encoded representation that captures the initial state as a base and the subsequent states as a series of deltas representing the changes from one state to the next.
+ * This allows for efficient storage and reconstruction of the simulation history by only recording the differences between states rather than the full state at each step.
+ */
+export function createDeltaEncodedSimulation(
+  states: Simulation[],
+): DeltaEncodedSimulation {
+  const base = states[0];
+  const deltas: SimulationDelta[] = [];
+
+  for (let i = 1; i < states.length; i++) {
+    deltas.push(createDelta(states[i - 1], states[i]));
+  }
+
+  const deltaEncoded = { base, deltas, current: states[states.length - 1] };
+
+  return deltaEncoded;
+}
+
+/**
+ * Given a base simulation state and a sequence of deltas, reconstruct the full sequence of simulation states by applying each delta in order to the base state.
+ */
+export function reconstructFromDeltas(
+  base: Simulation,
+  deltas: SimulationDelta[],
+): Simulation[] {
   const states: Simulation[] = [base];
-  
+
   for (let i = 0; i < deltas.length; i++) {
     // Use the previous state in the reconstructed array
     const state = states[i];
@@ -273,6 +281,6 @@ export function reconstructFromDeltas(base: Simulation, deltas: SimulationDelta[
 
     states.push(current);
   }
-  
+
   return states;
 }

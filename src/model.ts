@@ -39,27 +39,21 @@ export interface Simulation<R extends ProcessRegistry = ProcessRegistry> {
   /** Current state of all stores in the simulation, used for process synchronization */
   stores: Record<StoreID, Store>;
 
-  /** TODO: */
-  dump: { config: DumpConfig; state: DumpState };
+  /**
+   * Configuration and count for automatic simulation dumps.
+   * Used to periodically save simulation state to disk.
+   */
+  dump: { config: DumpConfig; count: number };
 }
 
-interface DumpConfig {
-  /** TODO: */
+export interface DumpConfig {
+  /**
+   * Directory where simulation dumps will be saved. Must be configured before running the simulation to enable dumping.
+   */
   directory: string;
 
-  /** TODO: Events between dumps */
+  /** Working set of deltas between dumps */
   interval: number;
-
-  /** TODO: Size of the working set of events kept in memory */
-  keep: number;
-}
-
-interface DumpState {
-  /** TODO: */
-  count: number;
-
-  /** TODO: */
-  last: number;
 }
 
 /**
@@ -170,13 +164,19 @@ export interface Store<T extends StateData = StateData> {
 }
 
 /**
- * TODO:
+ * Returned by `get` and `put` store operations to indicate the outcome in terms of continuation and possible resume events.
  */
 export interface StoreResult<T extends StateData = StateData> {
-  /** TODO: Continuation event for the calling process */
+  /** Continuation event for the calling process.
+   * Must be scheduled by the process handler of the calling event.
+   */
   step: Event<T>;
 
-  /** TODO: Resume event for the blocked process, if any */
+  /** Resume event for the blocked process, if any.
+   * Used to resume a process that was blocked by a store operation when the conditions for resumption are met.
+   * This is relevant for blocking stores where processes can be paused until certain conditions are satisfied (e.g., an item is put into the store or space becomes available).
+   * In non-blocking scenarios, this may be `undefined` since the process can continue immediately without waiting for store conditions.
+   */
   resume?: Event<T>;
 }
 
@@ -220,7 +220,10 @@ export type StepsDefinition<T extends StepStateMap> = {
   [K in keyof T]: ProcessHandler<T[K][0], T[K][1]>;
 };
 
-/** TODO: Not sure if that is useful... */
+/**
+ * Map process types to their definitions.
+ * Used for process lookup and execution in the simulation.
+ */
 type ProcessRegistry = Record<ProcessType, ProcessDefinition<StepStateMap>>;
 
 /**
@@ -351,7 +354,7 @@ export interface CreateEventOptions<T extends StateData = StateData> {
   /** Optional parent event ID for state inheritance patterns */
   parent?: EventID;
 
-  /** TODO: If `true`, the event will not be scheduled for process execution */
+  /** If `true`, the event will not be scheduled for process execution */
   waiting?: boolean;
 
   /** Optional event priority for scheduling; lower value yields higher priority (cf. UNIX `nice`) */
