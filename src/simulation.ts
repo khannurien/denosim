@@ -3,6 +3,7 @@ import {
   Event,
   EventState,
   ProcessDefinition,
+  ProcessRegistry,
   ProcessState,
   ProcessStep,
   ProcessType,
@@ -12,6 +13,12 @@ import {
   StateData,
   StepStateMap,
 } from "./model.ts";
+import {
+  createDelta,
+  DeltaEncodedSimulation,
+  dumpToDisk,
+  shouldDump,
+} from "./memory.ts";
 
 /**
  * Initializes a new simulation instance with:
@@ -44,6 +51,13 @@ export function initializeSimulation(): Simulation {
     },
     state: {},
     stores: {},
+    dump: {
+      config: {
+        interval: 1000,
+        directory: "dumps",
+      },
+      count: 0,
+    },
   };
 
   return sim;
@@ -64,26 +78,56 @@ export function initializeSimulation(): Simulation {
 export async function runSimulation(
   sim: Simulation,
   options?: RunSimulationOptions,
-): Promise<[Simulation[], SimulationStats]> {
+): Promise<[Simulation, SimulationStats]> {
+  const [finished, stats] = await runSimulationWithDeltas(sim, options);
+
+  return [finished.current, stats];
+}
+
+/**
+ * Runs the simulation and exposes the delta/checkpoint representation.
+ * This is intended for persistence, replay, and memory management tooling.
+ */
+export async function runSimulationWithDeltas(
+  sim: Simulation,
+  options?: RunSimulationOptions,
+): Promise<[DeltaEncodedSimulation, SimulationStats]> {
+  await Deno.mkdir(sim.dump.config.directory, { recursive: true });
+
   const start = performance.now();
 
-  const states: Simulation[] = [{ ...sim }];
+  const finished: DeltaEncodedSimulation = {
+    base: { ...sim },
+    deltas: [],
+    current: { ...sim },
+  };
 
   while (true) {
-    const current = states[states.length - 1];
-    const [next, continuation] = run(current);
-    states.push(next);
+    const [next, continuation] = run(finished.current);
+    if (!continuation) break;
 
-    if (!continuation || (options && shouldTerminate(next, options))) break;
+    // Memory management: store deltas and dump to disk if necessary
+    finished.deltas.push(createDelta(finished.current, next));
+    finished.current = next;
+
+    const doDump = shouldDump(finished);
+    const current = doDump ? await dumpToDisk(finished) : next;
+    if (doDump) {
+      finished.base = current;
+      finished.deltas = [];
+      finished.current = current;
+    }
+
+    if (options && shouldTerminate(current, options)) break;
     if (options?.rate) await delay(options.rate);
   }
 
   const end = performance.now();
 
   return [
-    states,
+    finished,
     {
-      end: states[states.length - 1].currentTime,
+      end: finished.current.currentTime,
       duration: end - start,
     },
   ];
@@ -161,7 +205,23 @@ function run(current: Simulation): [Simulation, boolean] {
  */
 function step(sim: Simulation, event: Event): Simulation {
   // Advance simulation time to this event's scheduled time
-  const nextSim = { ...sim, currentTime: event.scheduledAt };
+  const nextSim: Simulation = {
+    ...sim,
+    currentTime: event.scheduledAt,
+    events: [...sim.events],
+    state: { ...sim.state },
+    stores: Object.fromEntries(
+      Object.entries(sim.stores).map(([id, store]) => [
+        id,
+        {
+          ...store,
+          buffer: [...store.buffer],
+          getRequests: [...store.getRequests],
+          putRequests: [...store.putRequests],
+        },
+      ]),
+    ),
+  };
 
   // Handle the event by executing its process, which may yield new events
   const { state, next } = handleEvent(nextSim, event);
@@ -272,7 +332,7 @@ function handleEvent(
  * Returns the updated process registry.
  */
 export function registerProcess<
-  R extends Record<string, ProcessDefinition<StepStateMap>>,
+  R extends ProcessRegistry,
   S extends StepStateMap,
   K extends ProcessType,
 >(
@@ -289,7 +349,7 @@ export function registerProcess<
  * Returns a new event with:
  * - Unique ID
  * - Optional parent event ID (defaults to `undefined`)
- * - TODO: Initial event state set to `Waiting` or `Fired`
+ * - Initial event state set to `Waiting` or `Fired`
  * - An optional priority value (the lower the value, the higher the priority; defaults to 0)
  * - Timestamps for when it was created and scheduled
  * - Optional process to run on event handling (defaults to `none`, the dummy process)

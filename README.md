@@ -51,10 +51,12 @@ Install Deno; see [the guide](https://docs.deno.com/runtime/getting_started/inst
 
 ## Usage
 
-Run the example:
+Run the examples:
 
 ```sh
-deno run examples/scheduling.ts
+deno task example_scheduling
+deno task example_synchronization
+deno task example_stack_size
 ```
 
 ## Development
@@ -62,5 +64,5 @@ deno run examples/scheduling.ts
 Run tests:
 
 ```sh
-deno test
+deno task test
 ```

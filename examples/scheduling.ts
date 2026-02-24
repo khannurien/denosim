@@ -372,8 +372,7 @@ if (import.meta.main) {
   const e6 = createEvent(sim, { scheduledAt: 60, process: { type: "baz" } });
   sim.events = scheduleEvent(sim, e6);
 
-  const [states, stats] = await runSimulation(sim);
-  const stop = states[states.length - 1];
+  const [stop, stats] = await runSimulation(sim);
 
   console.log(`Simulation ended at ${stop.currentTime}`);
   console.log(`Simulation took: ${stats.duration} ms`);

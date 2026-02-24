@@ -1,20 +1,32 @@
 import {
   CreateStoreOptions,
   Event,
+  ProcessRegistry,
   Simulation,
   StateData,
   Store,
+  StoreDefinitions,
   StoreID,
+  StoreRegistry,
   StoreResult,
 } from "./model.ts";
 import { createEvent } from "./simulation.ts";
 
-export function initializeStore<T extends StateData = StateData>(
-  options: CreateStoreOptions<T>,
-): Store<T> {
+function hasStorePayload<T extends StateData>(
+  payload: StateData | undefined,
+): payload is T {
+  return payload !== undefined;
+}
+
+export function initializeStore<
+  T extends StateData = StateData,
+  K extends StoreID = StoreID,
+>(
+  options: CreateStoreOptions<T> & { id?: K },
+): Store<T, K> {
   return {
     ...options,
-    id: crypto.randomUUID(),
+    id: (options.id ?? crypto.randomUUID()) as K,
     blocking: options.blocking ?? true,
     capacity: options.capacity ?? 1,
     buffer: [],
@@ -23,22 +35,34 @@ export function initializeStore<T extends StateData = StateData>(
   };
 }
 
-export function registerStore<T extends StateData = StateData>(
-  sim: Simulation,
-  store: Store<T>,
-): Record<StoreID, Store> {
-  return { ...sim.stores, [store.id]: { ...store } };
+export function registerStore<
+  R extends ProcessRegistry,
+  S extends StoreRegistry,
+  T extends StateData = StateData,
+  K extends StoreID = StoreID,
+>(
+  sim: Simulation<R, S>,
+  store: Store<T, K>,
+): StoreDefinitions<S & Record<K, T>> {
+  return {
+    ...sim.stores,
+    [store.id]: { ...store },
+  } as StoreDefinitions<S & Record<K, T>>;
 }
 
-export function put<T extends StateData = StateData>(
-  sim: Simulation,
+export function put<
+  R extends ProcessRegistry,
+  S extends StoreRegistry,
+  K extends keyof S & StoreID = keyof S & StoreID,
+  T extends S[K] = S[K],
+>(
+  sim: Simulation<R, S>,
   event: Event<T>,
-  id: StoreID,
+  id: K,
   data: T,
 ): StoreResult<T> {
   // Retrieve store
-  // FIXME: Explicit cast. Need a mapped type?
-  const store = sim.stores[id] as Store<T>;
+  const store = sim.stores[id];
   if (!store) {
     throw RangeError(
       `Store not found: ${id}` +
@@ -48,10 +72,17 @@ export function put<T extends StateData = StateData>(
 
   // Blocking store or non-blocking store at capacity: check for pending get request
   if (store.getRequests.length > 0) {
-    const getRequest = store.getRequests.pop()!;
+    const getRequest = store.getRequests[store.getRequests.length - 1]!;
+    sim.stores = {
+      ...sim.stores,
+      [store.id]: {
+        ...store,
+        getRequests: store.getRequests.slice(0, -1),
+      },
+    };
 
     // Reschedule the get request with the data attached
-    const updatedGet: Event<T> = createEvent(sim, {
+    const updatedGet: Event<T> = createEvent<T>(sim, {
       parent: getRequest.parent,
       scheduledAt: sim.currentTime,
       process: {
@@ -84,6 +115,7 @@ export function put<T extends StateData = StateData>(
       process: {
         ...event.process,
         inheritStep: true,
+        data: { ...data },
       },
     });
 
@@ -103,6 +135,7 @@ export function put<T extends StateData = StateData>(
     process: {
       ...event.process,
       inheritStep: true,
+      data: { ...data },
     },
   });
 
@@ -116,14 +149,18 @@ export function put<T extends StateData = StateData>(
   return { step: updatedPut };
 }
 
-export function get<T extends StateData = StateData>(
-  sim: Simulation,
+export function get<
+  R extends ProcessRegistry,
+  S extends StoreRegistry,
+  K extends keyof S & StoreID = keyof S & StoreID,
+  T extends S[K] = S[K],
+>(
+  sim: Simulation<R, S>,
   event: Event<T>,
-  id: StoreID,
+  id: K,
 ): StoreResult<T> {
   // Retrieve store
-  // FIXME: Explicit cast. Need a mapped type?
-  const store = sim.stores[id] as Store<T>;
+  const store = sim.stores[id];
   if (!store) {
     throw RangeError(
       `Store not found: ${id}` +
@@ -133,24 +170,42 @@ export function get<T extends StateData = StateData>(
 
   // Check for pending put request (blocked producers)
   if (store.putRequests.length > 0) {
-    const putRequest = store.putRequests.pop()!;
+    const putRequest = store.putRequests[store.putRequests.length - 1]!;
+    sim.stores = {
+      ...sim.stores,
+      [store.id]: {
+        ...store,
+        putRequests: store.putRequests.slice(0, -1),
+      },
+    };
 
-    const updatedPut: Event<T> = createEvent(sim, {
+    const payload = putRequest.process.data;
+    if (!hasStorePayload<T>(payload)) {
+      throw TypeError(
+        `Store payload is missing for resumed put request: ${id} ` +
+          `(scheduled at: ${event.scheduledAt}; current time: ${sim.currentTime})`,
+      );
+    }
+
+    const updatedPut: Event<T> = createEvent<T>(sim, {
       parent: putRequest.parent,
       scheduledAt: sim.currentTime,
-      process: { ...putRequest.process, inheritStep: true },
+      process: {
+        ...putRequest.process,
+        inheritStep: true,
+        data: { ...payload },
+      },
     });
 
-    // FIXME: Explicit cast
-    const updatedGet = createEvent(sim, {
+    const updatedGet = createEvent<T>(sim, {
       parent: event.id,
       scheduledAt: sim.currentTime,
       process: {
         ...event.process,
         inheritStep: true,
-        data: { ...updatedPut.process.data },
+        data: { ...payload },
       },
-    }) as Event<T>;
+    });
 
     return { step: updatedGet, resume: updatedPut };
   }
@@ -158,19 +213,33 @@ export function get<T extends StateData = StateData>(
   // Non-blocking store: check buffer (completed puts)
   if (!store.blocking && store.buffer.length > 0) {
     // Get data from buffer
-    const buffered = store.buffer.pop()!;
+    const buffered = store.buffer[store.buffer.length - 1]!;
+    sim.stores = {
+      ...sim.stores,
+      [store.id]: {
+        ...store,
+        buffer: store.buffer.slice(0, -1),
+      },
+    };
 
     // Return get request with the obtained data
-    // FIXME: Explicit cast
-    const updatedGet = createEvent(sim, {
+    const payload = buffered.process.data;
+    if (!hasStorePayload<T>(payload)) {
+      throw TypeError(
+        `Store payload is missing for buffered item: ${id} ` +
+          `(scheduled at: ${event.scheduledAt}; current time: ${sim.currentTime})`,
+      );
+    }
+
+    const updatedGet = createEvent<T>(sim, {
       parent: event.id,
       scheduledAt: sim.currentTime,
       process: {
         ...event.process,
         inheritStep: true,
-        data: { ...buffered.process.data },
+        data: { ...payload },
       },
-    }) as Event<T>;
+    });
 
     return { step: updatedGet };
   }

@@ -74,14 +74,13 @@ if (import.meta.main) {
       type: "foo",
       data: {
         count: 0,
-        stop: 10000,
+        stop: 3000,
       },
     },
   });
   sim.events = scheduleEvent(sim, e1);
 
-  const [states, stats] = await runSimulation(sim);
-  const stop = states[states.length - 1];
+  const [stop, stats] = await runSimulation(sim);
 
   console.log(`Simulation ended at ${stop.currentTime}`);
   console.log(`Simulation took: ${stats.duration} ms`);

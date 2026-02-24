@@ -5,7 +5,10 @@
  * - A process definition registry for all processes available in the simulation
  * - The current state of all running processes
  */
-export interface Simulation<R extends ProcessRegistry = ProcessRegistry> {
+export interface Simulation<
+  R extends ProcessRegistry = ProcessRegistry,
+  S extends StoreRegistry = StoreRegistry,
+> {
   /**
    * The current virtual time in the simulation.
    * Represents the timestamp up to which the simulation has processed.
@@ -37,7 +40,23 @@ export interface Simulation<R extends ProcessRegistry = ProcessRegistry> {
   state: Record<EventID, ProcessState>;
 
   /** Current state of all stores in the simulation, used for process synchronization */
-  stores: Record<StoreID, Store>;
+  stores: StoreDefinitions<S>;
+
+  /**
+   * Configuration and count for automatic simulation dumps.
+   * Used to periodically save simulation state to disk.
+   */
+  dump: { config: DumpConfig; count: number };
+}
+
+export interface DumpConfig {
+  /**
+   * Directory where simulation dumps will be saved. Must be configured before running the simulation to enable dumping.
+   */
+  directory: string;
+
+  /** Working set of deltas between dumps */
+  interval: number;
 }
 
 /**
@@ -124,9 +143,12 @@ export interface Event<T extends StateData = StateData> {
  * Stores are used through `get` and `put` primitives that work in a LIFO fashion.
  * Used for inter-process synchronization, producer-consumer patterns, resource sharing, etc.
  */
-export interface Store<T extends StateData = StateData> {
+export interface Store<
+  T extends StateData = StateData,
+  K extends StoreID = StoreID,
+> {
   /** Unique identifier for this store */
-  id: StoreID;
+  id: K;
 
   /** Maximum items the store can hold before `put` operations block. Defaults to `1`. */
   capacity: number;
@@ -148,13 +170,19 @@ export interface Store<T extends StateData = StateData> {
 }
 
 /**
- * TODO:
+ * Returned by `get` and `put` store operations to indicate the outcome in terms of continuation and possible resume events.
  */
 export interface StoreResult<T extends StateData = StateData> {
-  /** TODO: Continuation event for the calling process */
+  /** Continuation event for the calling process.
+   * Must be scheduled by the process handler of the calling event.
+   */
   step: Event<T>;
 
-  /** TODO: Resume event for the blocked process, if any */
+  /** Resume event for the blocked process, if any.
+   * Used to resume a process that was blocked by a store operation when the conditions for resumption are met.
+   * This is relevant for blocking stores where processes can be paused until certain conditions are satisfied (e.g., an item is put into the store or space becomes available).
+   * In non-blocking scenarios, this may be `undefined` since the process can continue immediately without waiting for store conditions.
+   */
   resume?: Event<T>;
 }
 
@@ -175,6 +203,14 @@ export type StepType = string;
 
 /** Represents any data that can be stored in the simulation state */
 export type StateData = Record<string, unknown>;
+
+/** Maps store IDs to their payload state data types */
+export type StoreRegistry = Record<StoreID, StateData>;
+
+/** Dynamically maps store IDs to their corresponding store definitions */
+export type StoreDefinitions<R extends StoreRegistry> = {
+  [K in keyof R]: Store<R[K], Extract<K, StoreID>>;
+};
 
 /**
  * Used to specify and narrow the type of input state data for a process.
@@ -198,8 +234,14 @@ export type StepsDefinition<T extends StepStateMap> = {
   [K in keyof T]: ProcessHandler<T[K][0], T[K][1]>;
 };
 
-/** TODO: Not sure if that is useful... */
-type ProcessRegistry = Record<ProcessType, ProcessDefinition<StepStateMap>>;
+/**
+ * Map process types to their definitions.
+ * Used for process lookup and execution in the simulation.
+ */
+export type ProcessRegistry = Record<
+  ProcessType,
+  ProcessDefinition<StepStateMap>
+>;
 
 /**
  * Defines a process with a unique type and its state machine behavior.
@@ -329,7 +371,7 @@ export interface CreateEventOptions<T extends StateData = StateData> {
   /** Optional parent event ID for state inheritance patterns */
   parent?: EventID;
 
-  /** TODO: If `true`, the event will not be scheduled for process execution */
+  /** If `true`, the event will not be scheduled for process execution */
   waiting?: boolean;
 
   /** Optional event priority for scheduling; lower value yields higher priority (cf. UNIX `nice`) */
@@ -350,6 +392,9 @@ export interface CreateEventOptions<T extends StateData = StateData> {
  * Blocking operations use `EventState.Waiting` to pause processes until conditions resolve.
  */
 export interface CreateStoreOptions<T extends StateData = StateData> {
+  /** Optional store ID for deterministic typing/registration */
+  id?: StoreID;
+
   /** Controls whether the store enables synchronous (blocking) or asynchronous coordination */
   blocking?: boolean;
 
