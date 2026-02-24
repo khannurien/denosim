@@ -1,17 +1,15 @@
 import { assert, assertEquals } from "@std/assert";
 import {
+  applyDelta,
   createDelta,
   createDeltaEncodedSimulation,
-  DeltaEncodedSimulation,
-  dumpToDisk,
   reconstructFromDeltas,
-  shouldDump,
 } from "../src/memory.ts";
 import {
-  DumpConfig,
   Event,
   EventState,
   ProcessState,
+  QueueDiscipline,
   Simulation,
 } from "../src/model.ts";
 import {
@@ -26,7 +24,6 @@ function makeSim(
   events: Event[] = [],
   state: Record<string, ProcessState> = {},
   stores: Record<string, unknown> = {},
-  dump: { config: DumpConfig; count: number } | undefined = undefined,
 ): Simulation {
   return {
     currentTime: time,
@@ -34,10 +31,6 @@ function makeSim(
     state,
     stores: stores as Simulation["stores"],
     registry: {},
-    dump: dump ?? {
-      config: { interval: 2, directory: "dumps" },
-      count: 0,
-    },
   };
 }
 
@@ -126,47 +119,49 @@ Deno.test("delta encoding roundtrip reconstructs final state", () => {
   assertEquals(recovered[2], sim2);
 });
 
-Deno.test("shouldDump depends on local delta window only", () => {
-  const sim = makeSim(0);
-  const deltaEncoded: DeltaEncodedSimulation = {
-    base: sim,
-    deltas: [{ t: 1, e: [], s: [], st: [] }],
-    current: {
-      ...sim,
-      currentTime: 1,
-      dump: {
-        config: { interval: 2, directory: "dumps" },
-        count: 4,
+Deno.test("applyDelta applies store set/delete operations", () => {
+  const base = makeSim(
+    0,
+    [],
+    {},
+    {
+      s1: {
+        id: "s1",
+        capacity: 1,
+        blocking: true,
+        discipline: QueueDiscipline.LIFO,
+        buffer: [],
+        getRequests: [],
+        putRequests: [],
       },
     },
-  };
+  );
 
-  assertEquals(shouldDump(deltaEncoded), false);
-  deltaEncoded.deltas.push({ t: 2, e: [], s: [], st: [] });
-  assertEquals(shouldDump(deltaEncoded), true);
-});
-
-Deno.test("dumpToDisk writes a checkpoint and resets local dump cursor", async () => {
-  const dir = "dumps-test";
-  await Deno.remove(dir, { recursive: true }).catch(() => {});
-  await Deno.mkdir(dir, { recursive: true });
-
-  const sim = makeSim(0, [], {}, {}, {
-    config: { interval: 1, directory: dir },
-    count: 0,
+  const result = applyDelta(base, {
+    t: 1,
+    e: [],
+    s: [],
+    st: [
+      {
+        op: "set",
+        key: "s2",
+        value: {
+          id: "s2",
+          capacity: 2,
+          blocking: false,
+          discipline: QueueDiscipline.FIFO,
+          buffer: [],
+          getRequests: [],
+          putRequests: [],
+        },
+      },
+      { op: "delete", key: "s1" },
+    ],
   });
-  const deltaEncoded: DeltaEncodedSimulation = {
-    base: sim,
-    deltas: [{ t: 1, e: [], s: [], st: [] }],
-    current: { ...sim, currentTime: 1 },
-  };
 
-  const updated = await dumpToDisk(deltaEncoded);
-  const stat = await Deno.stat(`${dir}/dump-0.json`);
-  assert(stat.isFile);
-  assertEquals(updated.dump.count, 1);
-
-  await Deno.remove(dir, { recursive: true });
+  assertEquals(result.currentTime, 1);
+  assertEquals(result.stores["s1"], undefined);
+  assert(result.stores["s2"]);
 });
 
 Deno.test("runSimulation records only real steps and dumps every interval window", async () => {
@@ -174,15 +169,16 @@ Deno.test("runSimulation records only real steps and dumps every interval window
   await Deno.remove(dir, { recursive: true }).catch(() => {});
 
   const sim = initializeSimulation();
-  sim.dump.config.directory = dir;
-  sim.dump.config.interval = 2;
 
   for (const t of [0, 1, 2, 3, 4]) {
     const event = createEvent(sim, { scheduledAt: t });
     sim.events = scheduleEvent(sim, event);
   }
 
-  const [encoded] = await runSimulationWithDeltas(sim);
+  const [encoded] = await runSimulationWithDeltas(sim, {
+    runDirectory: dir,
+    dumpInterval: 2,
+  });
 
   assertEquals(encoded.current.events.length, 5);
   assert(
@@ -190,11 +186,10 @@ Deno.test("runSimulation records only real steps and dumps every interval window
       event.status === EventState.Finished
     ),
   );
-  assertEquals(encoded.current.dump.count, 2);
   assertEquals(encoded.deltas.length, 1);
 
-  const dump0 = await Deno.stat(`${dir}/dump-0.json`);
-  const dump1 = await Deno.stat(`${dir}/dump-1.json`);
+  const dump0 = await Deno.stat(`${dir}/dumps/0-t1.json`);
+  const dump1 = await Deno.stat(`${dir}/dumps/1-t3.json`);
   assert(dump0.isFile);
   assert(dump1.isFile);
 
@@ -206,13 +201,14 @@ Deno.test("runSimulation keeps base immutable and reconstructs current from delt
   await Deno.remove(dir, { recursive: true }).catch(() => {});
 
   const sim = initializeSimulation();
-  sim.dump.config.directory = dir;
-  sim.dump.config.interval = 100;
 
   const event = createEvent(sim, { scheduledAt: 0 });
   sim.events = scheduleEvent(sim, event);
 
-  const [encoded] = await runSimulationWithDeltas(sim);
+  const [encoded] = await runSimulationWithDeltas(sim, {
+    runDirectory: dir,
+    dumpInterval: 100,
+  });
 
   assertEquals(encoded.base.events.length, 1);
   assertEquals(encoded.base.events[0].status, EventState.Scheduled);

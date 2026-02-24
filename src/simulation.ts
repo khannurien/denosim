@@ -13,12 +13,8 @@ import {
   StateData,
   StepStateMap,
 } from "./model.ts";
-import {
-  createDelta,
-  DeltaEncodedSimulation,
-  dumpToDisk,
-  shouldDump,
-} from "./memory.ts";
+import { createDelta, DeltaEncodedSimulation } from "./memory.ts";
+import { dumpToDisk, resolveRunContext, shouldDump } from "./runner.ts";
 
 /**
  * Initializes a new simulation instance with:
@@ -51,13 +47,6 @@ export function initializeSimulation(): Simulation {
     },
     state: {},
     stores: {},
-    dump: {
-      config: {
-        interval: 1000,
-        directory: "dumps",
-      },
-      count: 0,
-    },
   };
 
   return sim;
@@ -76,12 +65,12 @@ export function initializeSimulation(): Simulation {
  * Returns all the instances along with statistics about the simulation run.
  */
 export async function runSimulation(
-  sim: Simulation,
+  init: Simulation,
   options?: RunSimulationOptions,
 ): Promise<[Simulation, SimulationStats]> {
-  const [finished, stats] = await runSimulationWithDeltas(sim, options);
+  const [sim, stats] = await runSimulationWithDeltas(init, options);
 
-  return [finished.current, stats];
+  return [sim.current, stats];
 }
 
 /**
@@ -89,45 +78,44 @@ export async function runSimulation(
  * This is intended for persistence, replay, and memory management tooling.
  */
 export async function runSimulationWithDeltas(
-  sim: Simulation,
+  init: Simulation,
   options?: RunSimulationOptions,
 ): Promise<[DeltaEncodedSimulation, SimulationStats]> {
-  await Deno.mkdir(sim.dump.config.directory, { recursive: true });
+  const runContext = await resolveRunContext(options);
+  const dumpInterval = runContext.manifest.dump.interval;
 
   const start = performance.now();
 
-  const finished: DeltaEncodedSimulation = {
-    base: { ...sim },
+  const sim: DeltaEncodedSimulation = {
+    base: { ...init },
     deltas: [],
-    current: { ...sim },
+    current: { ...init },
   };
 
   while (true) {
-    const [next, continuation] = run(finished.current);
+    const [next, continuation] = run(sim.current);
     if (!continuation) break;
 
     // Memory management: store deltas and dump to disk if necessary
-    finished.deltas.push(createDelta(finished.current, next));
-    finished.current = next;
+    sim.deltas.push(createDelta(sim.current, next));
+    sim.current = next;
 
-    const doDump = shouldDump(finished);
-    const current = doDump ? await dumpToDisk(finished) : next;
-    if (doDump) {
-      finished.base = current;
-      finished.deltas = [];
-      finished.current = current;
+    if (shouldDump(sim, dumpInterval)) {
+      await dumpToDisk(sim, runContext);
+      sim.base = next;
+      sim.deltas = [];
     }
 
-    if (options && shouldTerminate(current, options)) break;
+    if (options && shouldTerminate(next, options)) break;
     if (options?.rate) await delay(options.rate);
   }
 
   const end = performance.now();
 
   return [
-    finished,
+    sim,
     {
-      end: finished.current.currentTime,
+      end: sim.current.currentTime,
       duration: end - start,
     },
   ];

@@ -41,22 +41,6 @@ export interface Simulation<
 
   /** Current state of all stores in the simulation, used for process synchronization */
   stores: StoreDefinitions<S>;
-
-  /**
-   * Configuration and count for automatic simulation dumps.
-   * Used to periodically save simulation state to disk.
-   */
-  dump: { config: DumpConfig; count: number };
-}
-
-export interface DumpConfig {
-  /**
-   * Directory where simulation dumps will be saved. Must be configured before running the simulation to enable dumping.
-   */
-  directory: string;
-
-  /** Working set of deltas between dumps */
-  interval: number;
 }
 
 /**
@@ -360,6 +344,21 @@ export interface RunSimulationOptions<T extends StateData = StateData> {
 
   /** Stop simulation when this specific event finishes */
   untilEvent?: Event<T>;
+
+  /** Optional run identifier. Defaults to a random UUID. */
+  runId?: string;
+
+  /**
+   * Explicit run directory path. If omitted, defaults to `$runs/run-${runId}`.
+   * If `run.json` exists in this directory, it is merged as run defaults.
+   */
+  runDirectory?: string;
+
+  /** Overrides the simulation dump interval for this run. */
+  dumpInterval?: number;
+
+  /** Optional metadata merged into `run.json` for this run. */
+  runMetadata?: Record<string, unknown>;
 }
 
 /**

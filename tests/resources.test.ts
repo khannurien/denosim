@@ -137,21 +137,169 @@ Deno.test("producer-consumer synchronization with blocking", async () => {
 });
 
 Deno.test("multiple consumers with single producer", async () => {
+  const sim = initializeSimulation();
+  const store = initializeStore<FooData>({
+    blocking: true,
+    discipline: QueueDiscipline.FIFO,
+  });
+  sim.stores = registerStore(sim, store);
+
+  const consumerA = createEvent<FooData>(sim, {
+    scheduledAt: 0,
+    process: { type: "none", data: { store: store.id } },
+  });
+  const consumerB = createEvent<FooData>(sim, {
+    scheduledAt: 0,
+    process: { type: "none", data: { store: store.id } },
+  });
+
+  const waitA = get(sim, consumerA, store.id);
+  const waitB = get(sim, consumerB, store.id);
+  assertEquals(waitA.step.status, EventState.Waiting);
+  assertEquals(waitB.step.status, EventState.Waiting);
+  assertEquals(sim.stores[store.id].getRequests.length, 2);
+
+  const producer = createEvent<FooData>(sim, {
+    scheduledAt: 1,
+    process: { type: "none", data: { store: store.id, foo: "x" } },
+  });
+  const putResult = put(sim, producer, store.id, { store: store.id, foo: "x" });
+
+  assert(putResult.resume);
+  assertEquals(putResult.resume.parent, consumerA.id);
+  assertEquals(sim.stores[store.id].getRequests.length, 1);
 });
 
 Deno.test("multiple producers with delayed consumers", async () => {
+  const sim = initializeSimulation();
+  const store = initializeStore<FooData>({
+    blocking: true,
+    discipline: QueueDiscipline.FIFO,
+  });
+  sim.stores = registerStore(sim, store);
+
+  const producerA = createEvent<FooData>(sim, {
+    scheduledAt: 0,
+    process: { type: "none", data: { store: store.id, foo: "A" } },
+  });
+  const producerB = createEvent<FooData>(sim, {
+    scheduledAt: 0,
+    process: { type: "none", data: { store: store.id, foo: "B" } },
+  });
+
+  const blockedA = put(sim, producerA, store.id, { store: store.id, foo: "A" });
+  const blockedB = put(sim, producerB, store.id, { store: store.id, foo: "B" });
+  assertEquals(blockedA.step.status, EventState.Waiting);
+  assertEquals(blockedB.step.status, EventState.Waiting);
+  assertEquals(sim.stores[store.id].putRequests.length, 2);
+
+  const consumer = createEvent<FooData>(sim, {
+    scheduledAt: 1,
+    process: { type: "none", data: { store: store.id } },
+  });
+  const getResult = get(sim, consumer, store.id);
+
+  assert(getResult.resume);
+  assertEquals(getResult.step.process.data?.["foo"], "A");
+  assertEquals(getResult.resume.process.data?.["foo"], "A");
+  assertEquals(sim.stores[store.id].putRequests.length, 1);
 });
 
 Deno.test("non-blocking store with capacity > 1", async () => {
+  const sim = initializeSimulation();
+  const store = initializeStore<FooData>({
+    blocking: false,
+    capacity: 2,
+  });
+  sim.stores = registerStore(sim, store);
+
+  const a = createEvent<FooData>(sim, {
+    scheduledAt: 0,
+    process: { type: "none", data: { store: store.id, foo: "A" } },
+  });
+  const b = createEvent<FooData>(sim, {
+    scheduledAt: 0,
+    process: { type: "none", data: { store: store.id, foo: "B" } },
+  });
+  const c = createEvent<FooData>(sim, {
+    scheduledAt: 0,
+    process: { type: "none", data: { store: store.id, foo: "C" } },
+  });
+
+  const r1 = put(sim, a, store.id, { store: store.id, foo: "A" });
+  const r2 = put(sim, b, store.id, { store: store.id, foo: "B" });
+  const r3 = put(sim, c, store.id, { store: store.id, foo: "C" });
+
+  assertEquals(r1.step.status, EventState.Fired);
+  assertEquals(r2.step.status, EventState.Fired);
+  assertEquals(r3.step.status, EventState.Waiting);
+  assertEquals(sim.stores[store.id].buffer.length, 2);
+  assertEquals(sim.stores[store.id].putRequests.length, 1);
 });
 
 Deno.test("blocking store with unlimited capacity behavior", async () => {
+  const sim = initializeSimulation();
+  const store = initializeStore<FooData>({
+    blocking: true,
+    capacity: Number.POSITIVE_INFINITY,
+  });
+  sim.stores = registerStore(sim, store);
+
+  const producer = createEvent<FooData>(sim, {
+    scheduledAt: 0,
+    process: { type: "none", data: { store: store.id, foo: "A" } },
+  });
+  const result = put(sim, producer, store.id, { store: store.id, foo: "A" });
+
+  assertEquals(result.step.status, EventState.Waiting);
+  assertEquals(sim.stores[store.id].putRequests.length, 1);
+  assertEquals(sim.stores[store.id].buffer.length, 0);
 });
 
 Deno.test("non-blocking store with capacity 0 (immediate rejection)", async () => {
+  const sim = initializeSimulation();
+  const store = initializeStore<FooData>({
+    blocking: false,
+    capacity: 0,
+  });
+  sim.stores = registerStore(sim, store);
+
+  const producer = createEvent<FooData>(sim, {
+    scheduledAt: 0,
+    process: { type: "none", data: { store: store.id, foo: "A" } },
+  });
+  const result = put(sim, producer, store.id, { store: store.id, foo: "A" });
+
+  assertEquals(result.step.status, EventState.Waiting);
+  assertEquals(sim.stores[store.id].putRequests.length, 1);
+  assertEquals(sim.stores[store.id].buffer.length, 0);
 });
 
 Deno.test("non-blocking store basic put/get operations", () => {
+  const sim = initializeSimulation();
+  const store = initializeStore<FooData>({
+    blocking: false,
+    capacity: 1,
+  });
+  sim.stores = registerStore(sim, store);
+
+  const producer = createEvent<FooData>(sim, {
+    scheduledAt: 0,
+    process: { type: "none", data: { store: store.id, foo: "A" } },
+  });
+  const putResult = put(sim, producer, store.id, {
+    store: store.id,
+    foo: "A",
+  });
+  assertEquals(putResult.step.status, EventState.Fired);
+
+  const consumer = createEvent<FooData>(sim, {
+    scheduledAt: 1,
+    process: { type: "none", data: { store: store.id } },
+  });
+  const getResult = get(sim, consumer, store.id);
+  assertEquals(getResult.step.process.data?.["foo"], "A");
+  assertEquals(sim.stores[store.id].buffer.length, 0);
 });
 
 Deno.test("non-blocking store LIFO behavior", () => {
@@ -383,5 +531,82 @@ Deno.test("error handling for non-existent store", () => {
   assertThrows(
     () => put(sim, event, "another-fake-store", { test: "data" }),
     RangeError,
+  );
+});
+
+Deno.test("get throws when resumed blocked put has no payload", () => {
+  const sim = initializeSimulation();
+  const store = initializeStore<FooData>({ blocking: true });
+  sim.stores = registerStore(sim, store);
+
+  const missingPayloadPut = createEvent<FooData>(sim, {
+    scheduledAt: 0,
+    waiting: true,
+    process: { type: "none" },
+  });
+  sim.stores[store.id].putRequests = [missingPayloadPut];
+
+  const consumer = createEvent<FooData>(sim, {
+    scheduledAt: 1,
+    process: { type: "none", data: { store: store.id } },
+  });
+
+  assertThrows(
+    () => get(sim, consumer, store.id),
+    TypeError,
+    "Store payload is missing for resumed put request",
+  );
+});
+
+Deno.test("get throws when buffered item has no payload", () => {
+  const sim = initializeSimulation();
+  const store = initializeStore<FooData>({
+    blocking: false,
+    capacity: 2,
+  });
+  sim.stores = registerStore(sim, store);
+
+  const missingPayloadBuffered = createEvent<FooData>(sim, {
+    scheduledAt: 0,
+    process: { type: "none" },
+  });
+  sim.stores[store.id].buffer = [missingPayloadBuffered];
+
+  const consumer = createEvent<FooData>(sim, {
+    scheduledAt: 1,
+    process: { type: "none", data: { store: store.id } },
+  });
+
+  assertThrows(
+    () => get(sim, consumer, store.id),
+    TypeError,
+    "Store payload is missing for buffered item",
+  );
+});
+
+Deno.test("unsupported queue discipline throws", () => {
+  const sim = initializeSimulation();
+  const store = initializeStore<FooData>({
+    blocking: true,
+    discipline: "BROKEN" as QueueDiscipline,
+  });
+  sim.stores = registerStore(sim, store);
+
+  const waiter = createEvent<FooData>(sim, {
+    scheduledAt: 0,
+    waiting: true,
+    process: { type: "none", data: { store: store.id } },
+  });
+  sim.stores[store.id].getRequests = [waiter];
+
+  const producer = createEvent<FooData>(sim, {
+    scheduledAt: 1,
+    process: { type: "none", data: { store: store.id, foo: "x" } },
+  });
+
+  assertThrows(
+    () => put(sim, producer, store.id, { store: store.id, foo: "x" }),
+    Error,
+    "Unsupported queue discipline",
   );
 });

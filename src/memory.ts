@@ -7,45 +7,6 @@ import {
   StoreID,
   Timestamp,
 } from "./model.ts";
-import { serializeSimulation } from "./serialize.ts";
-
-/**
- * Determine if it's time to dump the current simulation state based on the configured interval and the number of deltas accumulated since the last dump.
- */
-export function shouldDump(
-  deltaEncoded: DeltaEncodedSimulation,
-): boolean {
-  return deltaEncoded.deltas.length >=
-    deltaEncoded.current.dump.config.interval;
-}
-
-/**
- * Dump the current simulation state to disk and return an updated simulation with incremented dump count.
- * Files are written to the configured directory with a sequential naming pattern (e.g., dump-0.json, dump-1.json, etc.).
- */
-export async function dumpToDisk(
-  deltaEncoded: DeltaEncodedSimulation,
-): Promise<Simulation> {
-  const dumpPath =
-    `${deltaEncoded.current.dump.config.directory}/dump-${deltaEncoded.current.dump.count}.json`;
-
-  // Persist all current simulation history
-  const serialized = serializeSimulation(deltaEncoded);
-  // FIXME: Do not await, write asynchronously
-  await Deno.writeTextFile(dumpPath, serialized);
-
-  console.log(
-    `[${deltaEncoded.current.currentTime}] Dumped ${deltaEncoded.deltas.length} simulation steps to ${dumpPath}`,
-  );
-
-  return {
-    ...deltaEncoded.current,
-    dump: {
-      config: deltaEncoded.current.dump.config,
-      count: deltaEncoded.current.dump.count + 1,
-    },
-  };
-}
 
 /** Delta operations for events */
 type EventDeltaOp =
@@ -195,7 +156,6 @@ export function applyDelta(
     events: [...base.events],
     state: { ...base.state },
     stores: { ...base.stores },
-    dump: { ...base.dump },
   };
 
   // Apply event operations
