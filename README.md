@@ -33,17 +33,20 @@ Planned features:
 **Concurrency / composition model**
 
 - Child processes are spawned by emitting new events; parent–child relationships are tracked via parent on events;
-- Two spawn styles supported: inheritance (`fork`-like -- child inherits parent data and step) and fresh (`exec`-like -- clean state from process definition);
-- Blocking is modeled by a `Waiting` state and by conditional event emission (timeouts, explicit continuations).
+- Three spawn styles supported: `fork`-like continuation (child keeps parent process type and current progress/state); `exec`-like inheritance (child inherits parent data but starts at the process initial step) and `execve`-like spawn (clean state from process definition and explicitly provided input data);
+- Blocking is modeled by a `Waiting` event state and by resumption through newly emitted continuation events when conditions are satisfied.
 
 **Continuations & temporal patterns**
 
-- Supports explicit continuations and timeouts: processes can yield future events as continuations or schedule timed events to model delays.
+- Process logic is continuation-driven: each step returns the next event(s) that carry execution forward;
+- A process step does not "loop": state-machine progress happens only through emitted next event(s), including revisiting the same step in a later transition;
+- "Sleeping" is modeled by returning a continuation scheduled in the future.
 
 **Messaging / data flow**
 
 - Data flows via process data and step inheritance flags;
-- Events contain a `ProcessCall` that can carry initialization data for process state; child processes can merge inherited state.
+- Events contain a `ProcessCall` that can carry initialization data for process state; child processes can merge inherited state;
+- This lets workflows evolve over multiple events (*e.g.*, arrive -> wait -> handle -> done) while carrying context forward.
 
 ## Setup
 

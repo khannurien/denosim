@@ -1,12 +1,14 @@
 import {
   Event,
   EventID,
+  EventState,
   ProcessState,
   Simulation,
   Store,
   StoreID,
   Timestamp,
 } from "./model.ts";
+import { deserializeSimulation } from "./serialize.ts";
 
 /** Delta operations for events */
 type EventDeltaOp =
@@ -212,11 +214,9 @@ export function createDeltaEncodedSimulation(
   states: Simulation[],
 ): DeltaEncodedSimulation {
   const base = states[0];
-  const deltas: SimulationDelta[] = [];
-
-  for (let i = 1; i < states.length; i++) {
-    deltas.push(createDelta(states[i - 1], states[i]));
-  }
+  const deltas = states.slice(1).map((state, index) =>
+    createDelta(states[index], state)
+  );
 
   const deltaEncoded = { base, deltas, current: states[states.length - 1] };
 
@@ -230,17 +230,95 @@ export function reconstructFromDeltas(
   base: Simulation,
   deltas: SimulationDelta[],
 ): Simulation[] {
-  const states: Simulation[] = [base];
+  return deltas.reduce<Simulation[]>((states, delta) => {
+    const previous = states[states.length - 1];
+    const current = applyDelta(previous, delta);
+    return [...states, current];
+  }, [base]);
+}
 
-  for (let i = 0; i < deltas.length; i++) {
-    // Use the previous state in the reconstructed array
-    const state = states[i];
-    const delta = deltas[i];
+/**
+ * Prunes finished and unreachable working data after a checkpoint to reduce memory usage mid-run.
+ * Full replay remains available through persisted checkpoint files.
+ */
+export function pruneWorkingState(sim: Simulation): Simulation {
+  const events = sim.events.filter((event) =>
+    event.status !== EventState.Finished
+  );
+  const referencedState = new Set<string>();
 
-    const current = applyDelta(state, delta);
-
-    states.push(current);
+  for (const event of events) {
+    if (event.parent) referencedState.add(event.parent);
   }
 
-  return states;
+  for (const store of Object.values(sim.stores)) {
+    for (const request of store.getRequests) {
+      if (request.parent) referencedState.add(request.parent);
+    }
+    for (const request of store.putRequests) {
+      if (request.parent) referencedState.add(request.parent);
+    }
+  }
+
+  return {
+    ...sim,
+    events,
+    state: Object.fromEntries(
+      Object.entries(sim.state).filter(([id]) => referencedState.has(id)),
+    ),
+  };
+}
+
+/**
+ * Reconstructs a full current state from checkpoint files and an in-memory tail.
+ * This restores replay-complete state for run outputs while allowing in-run pruning.
+ */
+export async function reconstructFullCurrent(
+  checkpoints: string[],
+  tail: Simulation,
+): Promise<Simulation> {
+  const snapshots = await Promise.all(
+    checkpoints.map(async (checkpoint) => {
+      const states = deserializeSimulation(await Deno.readTextFile(checkpoint));
+      return states[states.length - 1];
+    }),
+  );
+
+  if (snapshots.length === 0) {
+    return tail;
+  }
+
+  const [first, ...rest] = snapshots;
+  const full = rest.reduce(
+    (acc, current) => mergeReplayState(acc, current),
+    first,
+  );
+
+  return mergeReplayState(full, tail);
+}
+
+function mergeReplayState(
+  previous: Simulation,
+  current: Simulation,
+): Simulation {
+  const eventsById = previous.events.reduce<Record<string, Event>>(
+    (acc, event) => {
+      acc[event.id] = event;
+      return acc;
+    },
+    {},
+  );
+
+  for (const event of current.events) {
+    eventsById[event.id] = event;
+  }
+
+  return {
+    ...current,
+    events: Object.values(eventsById),
+    state: {
+      ...previous.state,
+      ...current.state,
+    },
+  };
 }

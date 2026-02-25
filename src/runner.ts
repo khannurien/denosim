@@ -1,6 +1,5 @@
 import { DeltaEncodedSimulation } from "./memory.ts";
 import { RunSimulationOptions } from "./model.ts";
-import { serializeSimulation } from "./serialize.ts";
 
 interface RunDumpMetadata {
   directory: string;
@@ -33,6 +32,11 @@ export interface RunContext {
   manifestPath: string;
 
   /** In-memory representation of the run manifest, used for tracking run metadata and dump state. */
+  manifest: RunManifest;
+}
+
+export interface DumpWriteResult {
+  path: string;
   manifest: RunManifest;
 }
 
@@ -71,22 +75,33 @@ export function shouldDump(
  * This allows for easy identification of dump files and their corresponding simulation times.
  */
 export async function dumpToDisk(
-  deltaEncoded: DeltaEncodedSimulation,
+  serialized: string,
+  currentTime: number,
   runContext: RunContext,
-): Promise<void> {
-  const fileName =
-    `${runContext.manifest.dump.count}-t${deltaEncoded.current.currentTime}.json`;
+): Promise<DumpWriteResult> {
+  const manifest = runContext.manifest;
+  const fileName = `${manifest.dump.count}-t${currentTime}.json`;
   const dumpPath = `${runContext.dumpDirectory}/${fileName}`;
 
-  // Persist all current simulation history
-  const serialized = serializeSimulation(deltaEncoded);
   // FIXME: Do not await, write asynchronously
   await Deno.writeTextFile(dumpPath, serialized);
 
-  runContext.manifest.dump.count += 1;
-  runContext.manifest.dump.lastFile = fileName;
+  const nextManifest: RunManifest = {
+    ...manifest,
+    dump: {
+      ...manifest.dump,
+      count: manifest.dump.count + 1,
+      lastFile: fileName,
+    },
+  };
+  runContext.manifest = nextManifest;
 
   await persistRunManifest(runContext);
+
+  return {
+    path: dumpPath,
+    manifest: nextManifest,
+  };
 }
 
 /**

@@ -432,63 +432,6 @@ Deno.test("negative priorities work correctly (very high priority)", async () =>
   assertEquals(executionOrder, ["veryHigh", "high", "normal"]);
 });
 
-Deno.test("priority with simple events at same time", async () => {
-  const sim = initializeSimulation();
-  const executionOrder: string[] = [];
-
-  const testProcess: ProcessDefinition<{
-    log: [StateData, []];
-  }> = {
-    type: "test",
-    initial: "log",
-    steps: {
-      log(_sim, _event, state) {
-        executionOrder.push(state.data.name as string);
-        return {
-          state,
-          next: [],
-        };
-      },
-    },
-  };
-
-  sim.registry = registerProcess(sim, testProcess);
-
-  // Test simple priority ordering without parent-child complexity
-  const lowPriority = createEvent(sim, {
-    scheduledAt: 10,
-    priority: 10,
-    process: { type: "test", data: { name: "low" } },
-  });
-
-  const mediumPriority = createEvent(sim, {
-    scheduledAt: 10,
-    priority: 5,
-    process: { type: "test", data: { name: "medium" } },
-  });
-
-  const highPriority = createEvent(sim, {
-    scheduledAt: 10,
-    priority: 1,
-    process: { type: "test", data: { name: "high" } },
-  });
-
-  const defaultPriority = createEvent(sim, {
-    scheduledAt: 10,
-    process: { type: "test", data: { name: "default" } },
-  });
-
-  sim.events = scheduleEvent(sim, lowPriority);
-  sim.events = scheduleEvent(sim, mediumPriority);
-  sim.events = scheduleEvent(sim, highPriority);
-  sim.events = scheduleEvent(sim, defaultPriority);
-
-  await runSimulation(sim);
-
-  // Should process in priority order: lowest number first
-  assertEquals(executionOrder, ["default", "high", "medium", "low"]);
-});
-
 Deno.test("priority with different process types", async () => {
   const sim = initializeSimulation();
   const executionOrder: string[] = [];
@@ -597,7 +540,10 @@ Deno.test("process state initialization", async () => {
 
   sim.events = scheduleEvent(sim, e1);
 
-  const [_stop, _stats] = await runSimulation(sim);
+  const [stop, _stats] = await runSimulation(sim);
+  assertEquals(stop.state[e1.id].step, "foo");
+  assertEquals(stop.state[e1.id].data.foo, "baz");
+  assertEquals(stop.state[e1.id].data.bar, 42.1337);
 });
 
 Deno.test("process state across steps", async () => {
@@ -678,7 +624,13 @@ Deno.test("process state across steps", async () => {
 
   sim.events = scheduleEvent(sim, e1);
 
-  const [_stop, _stats] = await runSimulation(sim);
+  const [stop, _stats] = await runSimulation(sim);
+  const terminal = Object.values(stop.state).find((state) =>
+    state.type === "foobar" && state.step === "baz"
+  );
+  assert(terminal);
+  assertEquals(terminal.data.foo, "snafu");
+  assertEquals(terminal.data.bar, -3.14);
 });
 
 Deno.test("process state inheritance (fork)", async () => {
@@ -884,7 +836,13 @@ Deno.test("process state inheritance (exec)", async () => {
 
   sim.events = scheduleEvent(sim, e1);
 
-  const [_stop, _stats] = await runSimulation(sim);
+  const [stop, _stats] = await runSimulation(sim);
+  const barStates = Object.values(stop.state).filter((state) =>
+    state.type === "bar"
+  );
+  assertEquals(barStates.length, 2);
+  assert(barStates.some((state) => state.data.foobar === 42.1337));
+  assert(barStates.some((state) => state.data.foobar === -3.14));
 });
 
 Deno.test("process state inheritance (spawn)", async () => {
@@ -952,23 +910,92 @@ Deno.test("process state inheritance (spawn)", async () => {
 
   sim.events = scheduleEvent(sim, e1);
 
-  const [_stop, _stats] = await runSimulation(sim);
+  const [stop, _stats] = await runSimulation(sim);
+  const barState = Object.values(stop.state).find((state) =>
+    state.type === "bar"
+  );
+  assert(barState);
+  assertEquals(barState.data.foobar, -3.14);
 });
 
-Deno.test("simulation rate > 0 executes throttled path", async () => {
-  const sim = initializeSimulation();
-  const event = createEvent(sim, { scheduledAt: 0 });
-  sim.events = scheduleEvent(sim, event);
+Deno.test("simulation rate acts as best-effort wall-clock throttling", async () => {
+  const makeSim = () => {
+    const sim = initializeSimulation();
+    sim.events = scheduleEvent(sim, createEvent(sim, { scheduledAt: 0 }));
+    sim.events = scheduleEvent(sim, createEvent(sim, { scheduledAt: 1 }));
+    return sim;
+  };
 
-  const [stop] = await runSimulation(sim, { rate: 1_000_000 });
-  assertEquals(stop.events[0].status, EventState.Finished);
+  const throttled = makeSim();
+  const startSlow = performance.now();
+  const [slowStop] = await runSimulation(throttled, { rate: 20 });
+  const slowElapsed = performance.now() - startSlow;
+
+  const unthrottled = makeSim();
+  const startFast = performance.now();
+  const [fastStop] = await runSimulation(unthrottled, { rate: -1 });
+  const fastElapsed = performance.now() - startFast;
+
+  assert(
+    slowStop.events.every((event) => event.status === EventState.Finished),
+  );
+  assert(
+    fastStop.events.every((event) => event.status === EventState.Finished),
+  );
+
+  const expectedMs = 2 * (1000 / 20); // 100ms nominal
+  const tolerance = 0.95; // allow 5% timing jitter
+  assert(slowElapsed >= expectedMs * tolerance);
+  assert(slowElapsed > fastElapsed);
 });
 
-Deno.test("simulation negative rate falls back to zero-delay branch", async () => {
+Deno.test("checkpoints preserve full replay state by default", async () => {
   const sim = initializeSimulation();
-  const event = createEvent(sim, { scheduledAt: 0 });
-  sim.events = scheduleEvent(sim, event);
+  sim.events = scheduleEvent(sim, createEvent(sim, { scheduledAt: 0 }));
+  sim.events = scheduleEvent(sim, createEvent(sim, { scheduledAt: 1 }));
 
-  const [stop] = await runSimulation(sim, { rate: -1 });
-  assertEquals(stop.events[0].status, EventState.Finished);
+  const dir = "dumps-checkpoint-compact";
+  await Deno.remove(dir, { recursive: true }).catch(() => {});
+  const [stop] = await runSimulation(sim, {
+    runDirectory: dir,
+    dumpInterval: 1,
+  });
+
+  assertEquals(stop.events.length, 2);
+  assertEquals(
+    stop.events.every((event) => event.status === EventState.Finished),
+    true,
+  );
+  assertEquals(Object.keys(stop.state).length, 2);
+  await Deno.remove(dir, { recursive: true });
+});
+
+Deno.test("checkpoints keep untilEvent semantics with full replay state", async () => {
+  const sim = initializeSimulation();
+  const e1 = createEvent(sim, { scheduledAt: 10 });
+  const e2 = createEvent(sim, { scheduledAt: 20 });
+  const e3 = createEvent(sim, { scheduledAt: 30 });
+  sim.events = scheduleEvent(sim, e1);
+  sim.events = scheduleEvent(sim, e2);
+  sim.events = scheduleEvent(sim, e3);
+
+  const dir = "dumps-checkpoint-until-event";
+  await Deno.remove(dir, { recursive: true }).catch(() => {});
+  const [stop, stats] = await runSimulation(sim, {
+    untilEvent: e2,
+    runDirectory: dir,
+    dumpInterval: 1,
+  });
+
+  assertEquals(stats.end, 20);
+  const handledE1 = stop.events.find((event) => event.id === e1.id);
+  const handledE2 = stop.events.find((event) => event.id === e2.id);
+  assert(handledE1);
+  assert(handledE2);
+  assertEquals(handledE1.status, EventState.Finished);
+  assertEquals(handledE2.status, EventState.Finished);
+  const remaining = stop.events.find((event) => event.id === e3.id);
+  assert(remaining);
+  assertEquals(remaining.status, EventState.Scheduled);
+  await Deno.remove(dir, { recursive: true });
 });

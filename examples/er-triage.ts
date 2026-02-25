@@ -23,7 +23,7 @@ import { randomIntegerBetween, randomSeeded } from "@std/random";
  * - Deterministic run with post-run correctness invariants
  */
 
-const SIM_TIME = 1000;
+const SIM_TIME = 5000;
 const URGENT_DOCTORS = 2;
 const GENERAL_DOCTORS = 1;
 

@@ -2,6 +2,7 @@ import { assert, assertEquals } from "@std/assert";
 import { DeltaEncodedSimulation } from "../src/memory.ts";
 import { Event, ProcessState, Simulation } from "../src/model.ts";
 import { dumpToDisk, resolveRunContext, shouldDump } from "../src/runner.ts";
+import { serializeSimulation } from "../src/serialize.ts";
 
 function makeSim(
   time = 0,
@@ -34,7 +35,7 @@ Deno.test("shouldDump depends on local delta window only", () => {
   assertEquals(shouldDump(deltaEncoded, 2), true);
 });
 
-Deno.test("dumpToDisk writes a checkpoint and resets local dump cursor", async () => {
+Deno.test("dumpToDisk writes a checkpoint file", async () => {
   const dir = "run-dumps-test";
   await Deno.remove(dir, { recursive: true }).catch(() => {});
 
@@ -46,9 +47,14 @@ Deno.test("dumpToDisk writes a checkpoint and resets local dump cursor", async (
   };
 
   const runContext = await resolveRunContext({ runDirectory: dir });
-  await dumpToDisk(deltaEncoded, runContext);
+  await dumpToDisk(serializeSimulation(deltaEncoded), 1, runContext);
   const stat = await Deno.stat(`${dir}/dumps/0-t1.json`);
   assert(stat.isFile);
+
+  const raw = JSON.parse(await Deno.readTextFile(`${dir}/dumps/0-t1.json`));
+  assertEquals(raw.deltas.length, 1);
+  assertEquals(raw.base.currentTime, 0);
+  assertEquals(raw.current.currentTime, 1);
 
   await Deno.remove(dir, { recursive: true });
 });

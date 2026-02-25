@@ -13,8 +13,14 @@ import {
   StateData,
   StepStateMap,
 } from "./model.ts";
-import { createDelta, DeltaEncodedSimulation } from "./memory.ts";
+import {
+  createDelta,
+  DeltaEncodedSimulation,
+  pruneWorkingState,
+  reconstructFullCurrent,
+} from "./memory.ts";
 import { dumpToDisk, resolveRunContext, shouldDump } from "./runner.ts";
+import { serializeSimulation } from "./serialize.ts";
 
 /**
  * Initializes a new simulation instance with:
@@ -91,6 +97,7 @@ export async function runSimulationWithDeltas(
     deltas: [],
     current: { ...init },
   };
+  const checkpoints: string[] = [];
 
   while (true) {
     const [next, continuation] = run(sim.current);
@@ -101,9 +108,16 @@ export async function runSimulationWithDeltas(
     sim.current = next;
 
     if (shouldDump(sim, dumpInterval)) {
-      await dumpToDisk(sim, runContext);
-      sim.base = next;
+      const checkpoint = await dumpToDisk(
+        serializeSimulation(sim),
+        sim.current.currentTime,
+        runContext,
+      );
+      checkpoints.push(checkpoint.path);
+      const compacted = pruneWorkingState(next);
+      sim.base = compacted;
       sim.deltas = [];
+      sim.current = compacted;
     }
 
     if (options && shouldTerminate(next, options)) break;
@@ -111,6 +125,13 @@ export async function runSimulationWithDeltas(
   }
 
   const end = performance.now();
+  if (checkpoints.length > 0) {
+    const current = await reconstructFullCurrent(checkpoints, sim.current);
+    // Keep returned delta representation self-consistent.
+    sim.base = current;
+    sim.deltas = [];
+    sim.current = current;
+  }
 
   return [
     sim,
@@ -230,7 +251,7 @@ function step(sim: Simulation, event: Event): Simulation {
 
   // Schedule the next events yielded by the current process if necessary
   // TODO: ? [...nextSim.events, nextEvent]
-  // Should we leave `Waiting` (intermediary) events "dangling" in the final queue?
+  // Should we leave `Waiting` (intermediate) events "dangling" in the final queue?
   for (const nextEvent of next) {
     nextSim.events = nextEvent.status === EventState.Waiting
       ? nextSim.events

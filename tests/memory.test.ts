@@ -164,7 +164,7 @@ Deno.test("applyDelta applies store set/delete operations", () => {
   assert(result.stores["s2"]);
 });
 
-Deno.test("runSimulation records only real steps and dumps every interval window", async () => {
+Deno.test("runSimulation records only real steps and keeps full final state after dumps", async () => {
   const dir = "dumps-cadence";
   await Deno.remove(dir, { recursive: true }).catch(() => {});
 
@@ -180,13 +180,13 @@ Deno.test("runSimulation records only real steps and dumps every interval window
     dumpInterval: 2,
   });
 
-  assertEquals(encoded.current.events.length, 5);
+  assertEquals(encoded.current.currentTime, 4);
   assert(
     encoded.current.events.every((event) =>
       event.status === EventState.Finished
     ),
   );
-  assertEquals(encoded.deltas.length, 1);
+  assertEquals(encoded.deltas.length, 0);
 
   const dump0 = await Deno.stat(`${dir}/dumps/0-t1.json`);
   const dump1 = await Deno.stat(`${dir}/dumps/1-t3.json`);

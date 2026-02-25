@@ -75,9 +75,6 @@ const cons: ProcessDefinition<{
   },
 };
 
-Deno.test.beforeEach(() => {
-});
-
 Deno.test("producer-consumer synchronization with blocking", async () => {
   const sim = initializeSimulation();
 
@@ -136,7 +133,7 @@ Deno.test("producer-consumer synchronization with blocking", async () => {
   assert(Object.values(stop.state).every((state) => state.step === "stop"));
 });
 
-Deno.test("multiple consumers with single producer", async () => {
+Deno.test("multiple consumers with single producer", () => {
   const sim = initializeSimulation();
   const store = initializeStore<FooData>({
     blocking: true,
@@ -170,7 +167,7 @@ Deno.test("multiple consumers with single producer", async () => {
   assertEquals(sim.stores[store.id].getRequests.length, 1);
 });
 
-Deno.test("multiple producers with delayed consumers", async () => {
+Deno.test("multiple producers with delayed consumers", () => {
   const sim = initializeSimulation();
   const store = initializeStore<FooData>({
     blocking: true,
@@ -205,7 +202,7 @@ Deno.test("multiple producers with delayed consumers", async () => {
   assertEquals(sim.stores[store.id].putRequests.length, 1);
 });
 
-Deno.test("non-blocking store with capacity > 1", async () => {
+Deno.test("non-blocking store with capacity > 1", () => {
   const sim = initializeSimulation();
   const store = initializeStore<FooData>({
     blocking: false,
@@ -237,7 +234,7 @@ Deno.test("non-blocking store with capacity > 1", async () => {
   assertEquals(sim.stores[store.id].putRequests.length, 1);
 });
 
-Deno.test("blocking store with unlimited capacity behavior", async () => {
+Deno.test("blocking store with unlimited capacity behavior", () => {
   const sim = initializeSimulation();
   const store = initializeStore<FooData>({
     blocking: true,
@@ -256,7 +253,7 @@ Deno.test("blocking store with unlimited capacity behavior", async () => {
   assertEquals(sim.stores[store.id].buffer.length, 0);
 });
 
-Deno.test("non-blocking store with capacity 0 (immediate rejection)", async () => {
+Deno.test("non-blocking store with capacity 0 (immediate rejection)", () => {
   const sim = initializeSimulation();
   const store = initializeStore<FooData>({
     blocking: false,
