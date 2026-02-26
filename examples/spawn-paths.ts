@@ -35,7 +35,7 @@ const driver: ProcessDefinition<{
       const nextShared = 42;
 
       // 1) CONTINUATION (fork-like): same process type + inheritStep=true
-      const continuation: Event<DriverData> = createEvent<DriverData>(sim, {
+      const continuation: Event<DriverData> = createEvent({
         parent: event.id,
         scheduledAt: 1,
         process: {
@@ -46,7 +46,7 @@ const driver: ProcessDefinition<{
       });
 
       // 2) NEW PROCESS WITH PARENT DATA (exec-like): parent linked, fresh initial step
-      const inheritedSpawn: Event<WorkerData> = createEvent(sim, {
+      const inheritedSpawn: Event<WorkerData> = createEvent({
         parent: event.id,
         scheduledAt: 2,
         process: {
@@ -56,7 +56,7 @@ const driver: ProcessDefinition<{
       });
 
       // 3) BRAND NEW PROCESS (execve-like): no parent, only explicit input data
-      const freshSpawn: Event<WorkerData> = createEvent(sim, {
+      const freshSpawn: Event<WorkerData> = createEvent({
         scheduledAt: 3,
         process: {
           type: "worker",
@@ -102,14 +102,14 @@ if (import.meta.main) {
   sim.registry = registerProcess(sim, driver);
   sim.registry = registerProcess(sim, worker);
 
-  const root = createEvent(sim, {
+  const root = createEvent({
     scheduledAt: 0,
     process: {
       type: "driver",
       data: { shared: 7 },
     },
   });
-  sim.events = scheduleEvent(sim, root);
+  sim.timeline = scheduleEvent(sim, root);
 
   await runSimulation(sim);
 

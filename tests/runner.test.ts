@@ -1,18 +1,31 @@
 import { assert, assertEquals } from "@std/assert";
 import { DeltaEncodedSimulation } from "../src/memory.ts";
-import { Event, ProcessState, Simulation } from "../src/model.ts";
+import {
+  Event,
+  EventID,
+  EventState,
+  ProcessState,
+  Simulation,
+} from "../src/model.ts";
 import { dumpToDisk, resolveRunContext, shouldDump } from "../src/runner.ts";
 import { serializeSimulation } from "../src/serialize.ts";
+import { EventTransition } from "../mod.ts";
 
 function makeSim(
   time = 0,
-  events: Event[] = [],
+  events: Record<string, Event> = {},
+  status: Record<EventID, EventState> = {},
+  transitions: EventTransition[] = [],
   state: Record<string, ProcessState> = {},
   stores: Record<string, unknown> = {},
 ): Simulation {
   return {
     currentTime: time,
-    events,
+    timeline: {
+      events,
+      status,
+      transitions,
+    },
     state,
     stores: stores as Simulation["stores"],
     registry: {},
@@ -23,7 +36,7 @@ Deno.test("shouldDump depends on local delta window only", () => {
   const sim = makeSim(0);
   const deltaEncoded: DeltaEncodedSimulation = {
     base: sim,
-    deltas: [{ t: 1, e: [], s: [], st: [] }],
+    deltas: [{ c: 1, e: [], es: [], et: [], s: [], st: [] }],
     current: {
       ...sim,
       currentTime: 1,
@@ -31,7 +44,7 @@ Deno.test("shouldDump depends on local delta window only", () => {
   };
 
   assertEquals(shouldDump(deltaEncoded, 2), false);
-  deltaEncoded.deltas.push({ t: 2, e: [], s: [], st: [] });
+  deltaEncoded.deltas.push({ c: 2, e: [], es: [], et: [], s: [], st: [] });
   assertEquals(shouldDump(deltaEncoded, 2), true);
 });
 
@@ -39,10 +52,10 @@ Deno.test("dumpToDisk writes a checkpoint file", async () => {
   const dir = "run-dumps-test";
   await Deno.remove(dir, { recursive: true }).catch(() => {});
 
-  const sim = makeSim(0, [], {}, {});
+  const sim = makeSim(0, {}, {}, [], {}, {});
   const deltaEncoded: DeltaEncodedSimulation = {
     base: sim,
-    deltas: [{ t: 1, e: [], s: [], st: [] }],
+    deltas: [{ c: 1, e: [], es: [], et: [], s: [], st: [] }],
     current: { ...sim, currentTime: 1 },
   };
 

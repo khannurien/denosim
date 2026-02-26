@@ -117,7 +117,7 @@ export function put<
     };
 
     // Reschedule the get request with the data attached
-    const updatedGet: Event<T> = createEvent<T>(sim, {
+    const updatedGet: Event<T> = createEvent({
       parent: getRequest.parent,
       scheduledAt: sim.currentTime,
       process: {
@@ -127,7 +127,7 @@ export function put<
       },
     });
 
-    const updatedPut: Event<T> = createEvent(sim, {
+    const updatedPut: Event<T> = createEvent({
       parent: event.id,
       scheduledAt: sim.currentTime,
       process: {
@@ -143,7 +143,7 @@ export function put<
   if (
     store.blocking || (!store.blocking && store.buffer.length >= store.capacity)
   ) {
-    const updatedPut: Event<T> = createEvent(sim, {
+    const updatedPut: Event<T> = createEvent({
       parent: event.id,
       waiting: true,
       scheduledAt: sim.currentTime,
@@ -166,7 +166,7 @@ export function put<
   }
 
   // Non-blocking store with capacity available: use buffer
-  const updatedPut: Event<T> = createEvent(sim, {
+  const updatedPut: Event<T> = createEvent({
     parent: event.id,
     scheduledAt: sim.currentTime,
     process: {
@@ -228,7 +228,7 @@ export function get<
       );
     }
 
-    const updatedPut: Event<T> = createEvent<T>(sim, {
+    const updatedPut: Event<T> = createEvent({
       parent: putRequest.parent,
       scheduledAt: sim.currentTime,
       process: {
@@ -238,7 +238,7 @@ export function get<
       },
     });
 
-    const updatedGet = createEvent<T>(sim, {
+    const updatedGet = createEvent({
       parent: event.id,
       scheduledAt: sim.currentTime,
       process: {
@@ -272,7 +272,7 @@ export function get<
       );
     }
 
-    const updatedGet = createEvent<T>(sim, {
+    const updatedGet = createEvent({
       parent: event.id,
       scheduledAt: sim.currentTime,
       process: {
@@ -286,7 +286,7 @@ export function get<
   }
 
   // No data available: wait in queue
-  const updatedGet = createEvent(sim, {
+  const updatedGet = createEvent({
     parent: event.id,
     scheduledAt: sim.currentTime,
     waiting: true,

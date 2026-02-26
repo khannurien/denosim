@@ -1,6 +1,5 @@
 import {
   createEvent,
-  EventState,
   get,
   initializeSimulation,
   initializeStore,
@@ -20,11 +19,7 @@ if (import.meta.main) {
     "foo": string;
   }
 
-  const store = initializeStore<FooData>(
-    {
-      blocking: true,
-    },
-  );
+  const store = initializeStore<FooData>({});
 
   sim.stores = registerStore(sim, store);
 
@@ -51,7 +46,7 @@ if (import.meta.main) {
           `[${sim.currentTime}] prod received: step = ${step} | resume = ${resume}`,
         );
 
-        if (step.status === EventState.Waiting) {
+        if (step.waiting) {
           // Delayed
           console.log(
             `[${sim.currentTime}] prod put request for "${state.data.foo}" blocked on store ${store.id}`,
@@ -102,7 +97,7 @@ if (import.meta.main) {
           `[${sim.currentTime}] cons received: step = ${step} | resume = ${resume}`,
         );
 
-        if (step.status === EventState.Waiting) {
+        if (step.waiting) {
           // Delayed
           console.log(
             `[${sim.currentTime}] cons get request blocked on store ${store.id}`,
@@ -141,7 +136,7 @@ if (import.meta.main) {
 
   sim.registry = registerProcess(sim, cons);
 
-  const e1 = createEvent(sim, {
+  const e1 = createEvent({
     scheduledAt: 0,
     process: {
       type: "prod",
@@ -150,25 +145,25 @@ if (import.meta.main) {
       },
     },
   });
-  sim.events = scheduleEvent(sim, e1);
+  sim.timeline = scheduleEvent(sim, e1);
 
-  const e2 = createEvent(sim, {
+  const e2 = createEvent({
     scheduledAt: 1,
     process: {
       type: "cons",
     },
   });
-  sim.events = scheduleEvent(sim, e2);
+  sim.timeline = scheduleEvent(sim, e2);
 
-  const e3 = createEvent(sim, {
+  const e3 = createEvent({
     scheduledAt: 5,
     process: {
       type: "cons",
     },
   });
-  sim.events = scheduleEvent(sim, e3);
+  sim.timeline = scheduleEvent(sim, e3);
 
-  const e4 = createEvent(sim, {
+  const e4 = createEvent({
     scheduledAt: 10,
     process: {
       type: "prod",
@@ -177,11 +172,11 @@ if (import.meta.main) {
       },
     },
   });
-  sim.events = scheduleEvent(sim, e4);
+  sim.timeline = scheduleEvent(sim, e4);
 
   const [stop, stats] = await runSimulation(sim);
 
-  console.log(stop.events);
+  console.log(stop.timeline);
 
   console.log(`Simulation ended at ${stop.currentTime}`);
   console.log(`Simulation took: ${stats.duration} ms`);

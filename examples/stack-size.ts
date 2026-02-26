@@ -31,7 +31,7 @@ if (import.meta.main) {
           }; got count = ${state.data["count"]}`,
         );
 
-        const nextEvent: Event<FooData> = createEvent(sim, {
+        const nextEvent: Event<FooData> = createEvent({
           parent: event.id,
           scheduledAt: sim.currentTime < state.data["stop"]
             ? sim.currentTime + 1
@@ -68,7 +68,7 @@ if (import.meta.main) {
 
   sim.registry = registerProcess(sim, foo);
 
-  const e1 = createEvent(sim, {
+  const e1 = createEvent({
     scheduledAt: 0,
     process: {
       type: "foo",
@@ -78,7 +78,7 @@ if (import.meta.main) {
       },
     },
   });
-  sim.events = scheduleEvent(sim, e1);
+  sim.timeline = scheduleEvent(sim, e1);
 
   const [stop, stats] = await runSimulation(sim);
 

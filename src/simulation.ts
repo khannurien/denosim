@@ -12,6 +12,7 @@ import {
   SimulationStats,
   StateData,
   StepStateMap,
+  Timeline,
 } from "./model.ts";
 import {
   createDelta,
@@ -47,7 +48,11 @@ export function initializeSimulation(): Simulation {
 
   const sim = {
     currentTime: 0,
-    events: [],
+    timeline: {
+      events: {},
+      status: {},
+      transitions: [],
+    },
     registry: {
       "none": emptyProcess,
     },
@@ -93,9 +98,13 @@ export async function runSimulationWithDeltas(
   const start = performance.now();
 
   const sim: DeltaEncodedSimulation = {
-    base: { ...init },
+    base: {
+      ...init,
+    },
     deltas: [],
-    current: { ...init },
+    current: {
+      ...init,
+    },
   };
   const checkpoints: string[] = [];
 
@@ -169,8 +178,7 @@ function shouldTerminate(
 
   const untilEvent = options.untilEvent;
   const eventMet = untilEvent !== undefined &&
-    sim.events.find((event) => event.id === untilEvent.id)?.status ===
-      EventState.Finished;
+    sim.timeline.status[untilEvent.id] === EventState.Finished;
 
   return timeMet || eventMet;
 }
@@ -183,9 +191,9 @@ function shouldTerminate(
 function run(current: Simulation): [Simulation, boolean] {
   // Get all scheduled events that haven't been processed yet,
   // sorted in descending order so we can efficiently pop the earliest event
-  const pending = current.events.filter((event) =>
+  const pending = Object.values(current.timeline.events).filter((event) =>
     (event.scheduledAt >= current.currentTime) &&
-    (event.status === EventState.Scheduled)
+    (current.timeline.status[event.id] === EventState.Scheduled)
   ).sort((a, b) => {
     return a.scheduledAt !== b.scheduledAt
       ? b.scheduledAt - a.scheduledAt
@@ -217,7 +225,11 @@ function step(sim: Simulation, event: Event): Simulation {
   const nextSim: Simulation = {
     ...sim,
     currentTime: event.scheduledAt,
-    events: [...sim.events],
+    timeline: {
+      events: { ...sim.timeline.events },
+      status: { ...sim.timeline.status },
+      transitions: [...sim.timeline.transitions],
+    },
     state: { ...sim.state },
     stores: Object.fromEntries(
       Object.entries(sim.stores).map(([id, store]) => [
@@ -238,24 +250,21 @@ function step(sim: Simulation, event: Event): Simulation {
   // Update the event's process state in the simulation container
   nextSim.state[event.id] = { ...state };
 
-  // Update the event instance in the global event queue
-  nextSim.events = nextSim.events.map((previous) =>
-    (previous.id === event.id)
-      ? {
-        ...previous,
-        status: EventState.Finished,
-        finishedAt: nextSim.currentTime,
-      }
-      : previous
-  );
+  // Append a lifecycle transition
+  nextSim.timeline.status[event.id] = EventState.Finished;
+  nextSim.timeline.transitions = [
+    ...nextSim.timeline.transitions,
+    {
+      id: event.id,
+      state: EventState.Finished,
+      at: nextSim.currentTime,
+    },
+  ];
 
   // Schedule the next events yielded by the current process if necessary
-  // TODO: ? [...nextSim.events, nextEvent]
-  // Should we leave `Waiting` (intermediate) events "dangling" in the final queue?
+  // `Waiting` events are not automatically scheduled. This allows processes to yield events that are triggered by external conditions or other processes, rather than automatically handled at their scheduled time.
   for (const nextEvent of next) {
-    nextSim.events = nextEvent.status === EventState.Waiting
-      ? nextSim.events
-      : scheduleEvent(nextSim, nextEvent);
+    nextSim.timeline = scheduleEvent(nextSim, nextEvent);
   }
 
   return nextSim;
@@ -358,21 +367,20 @@ export function registerProcess<
  * Returns a new event with:
  * - Unique ID
  * - Optional parent event ID (defaults to `undefined`)
- * - Initial event state set to `Waiting` or `Fired`
+ * - Initial event status optionally set to `Waiting`
  * - An optional priority value (the lower the value, the higher the priority; defaults to 0)
- * - Timestamps for when it was created and scheduled
+ * - Scheduled timestamp
  * - Optional process to run on event handling (defaults to `none`, the dummy process)
  */
 export function createEvent<T extends StateData>(
-  sim: Simulation,
   options: CreateEventOptions<T>,
 ): Event<T> {
   return {
-    ...options,
     id: crypto.randomUUID(),
-    status: options.waiting ? EventState.Waiting : EventState.Fired,
+    parent: options.parent,
+    waiting: options.waiting,
     priority: options.priority ?? 0,
-    firedAt: sim.currentTime,
+    scheduledAt: options.scheduledAt,
     process: options.process ? { ...options.process } : {
       type: "none",
     },
@@ -382,12 +390,12 @@ export function createEvent<T extends StateData>(
 /**
  * Schedules an event for future processing in the simulation.
  * Validates that the event isn't scheduled in the past.
- * Returns updated events array with the new scheduled event.
+ * FIXME: Returns updated events array with the new scheduled event.
  */
 export function scheduleEvent<T extends StateData>(
   sim: Simulation,
   event: Event<T>,
-): Event[] {
+): Timeline {
   if (event.scheduledAt < sim.currentTime) {
     throw RangeError(
       `Event scheduled at a point in time in the past: ${event.id} ` +
@@ -395,8 +403,12 @@ export function scheduleEvent<T extends StateData>(
     );
   }
 
-  return [
-    ...sim.events,
-    { ...event, status: EventState.Scheduled },
-  ];
+  return {
+    ...sim.timeline,
+    events: { ...sim.timeline.events, [event.id]: { ...event } },
+    status: {
+      ...sim.timeline.status,
+      [event.id]: event.waiting ? EventState.Waiting : EventState.Scheduled,
+    },
+  };
 }

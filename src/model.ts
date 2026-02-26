@@ -17,13 +17,9 @@ export interface Simulation<
   currentTime: Timestamp;
 
   /**
-   * Queue of all events in the system.
-   * Includes:
-   * - Newly scheduled but not yet processed events
-   * - Partially processed events, which have related process execution state
-   * - Completed events (for historical tracking)
+   * TODO:
    */
-  events: Event[];
+  timeline: Timeline;
 
   /**
    * Registry of all process definitions available in the simulation.
@@ -44,16 +40,31 @@ export interface Simulation<
 }
 
 /**
+ * TODO:
+ */
+export interface Timeline {
+  /**
+   * Event definitions keyed by event ID.
+   */
+  events: Record<EventID, Event>;
+
+  /**
+   * TODO:
+   */
+  status: Record<EventID, EventState>;
+
+  /**
+   * Append-only lifecycle log for event state transitions.
+   * This is the source of truth for event progression.
+   */
+  transitions: EventTransition[];
+}
+
+/**
  * Lifecycle states for events within the simulation.
  * Events progress through states with possible blocking at Waiting.
  */
 export enum EventState {
-  /**
-   * Initial state when event is first created.
-   * Indicates the event has been instantiated but not yet scheduled.
-   */
-  Fired = "Fired",
-
   /**
    * Event has been scheduled for future processing.
    * Will be executed when simulation time reaches `scheduledAt`.
@@ -74,10 +85,22 @@ export enum EventState {
   Finished = "Finished",
 }
 
+/** Append-only event lifecycle transition entry */
+export interface EventTransition {
+  /** Event identifier affected by this transition */
+  id: EventID;
+
+  /** Lifecycle state reached by the event */
+  state: EventState;
+
+  /** Simulation timestamp when the transition occurred */
+  at: Timestamp;
+}
+
 /**
  * Represents a discrete event in the simulation system.
  * Events can be tied to processes, which define their behavior.
- * Events are immutable - state changes are tied to new event instances.
+ * Event definitions are immutable; lifecycle progression is represented through `EventTransition` entries.
  * Events can have parent-child relationships in the context of their process.
  */
 export interface Event<T extends StateData = StateData> {
@@ -87,8 +110,10 @@ export interface Event<T extends StateData = StateData> {
   /** Optional parent event ID; defines a graph of events across processes */
   parent?: EventID;
 
-  /** Current lifecycle state of the event */
-  status: EventState;
+  /**
+   * TODO:
+   */
+  waiting?: boolean;
 
   /**
    * Optional event priority for scheduling; lower value yields higher priority (cf. UNIX `nice`).
@@ -97,22 +122,10 @@ export interface Event<T extends StateData = StateData> {
   priority: number;
 
   /**
-   * When the event was initially created.
-   * Represents the simulation time when `createEvent()` was called.
-   */
-  firedAt: Timestamp;
-
-  /**
    * When the event should be processed.
    * Simulation time will jump directly to this value when processed.
    */
   scheduledAt: Timestamp;
-
-  /**
-   * When the event completed processing.
-   * Only populated when `status` is `EventState.Finished`.
-   */
-  finishedAt?: Timestamp;
 
   /**
    * Type of process to execute when event is handled.

@@ -2,6 +2,7 @@ import {
   Event,
   EventID,
   EventState,
+  EventTransition,
   ProcessState,
   Simulation,
   Store,
@@ -11,25 +12,33 @@ import {
 import { deserializeSimulation } from "./serialize.ts";
 
 /** Delta operations for events */
-type EventDeltaOp =
-  | { op: "add"; event: Event }
-  | { op: "update"; id: EventID; event: Event };
+type EventDeltaOp = { op: "set"; key: EventID; event: Event };
+
+/** Delta operations for status */
+type StatusDeltaOp = { op: "set"; key: EventID; status: EventState };
+
+/** Delta operations for transitions */
+type TransitionDeltaOp = { op: "add"; transition: EventTransition };
 
 /** Delta operations for state */
 type StateDeltaOp = { op: "set"; key: EventID; value: ProcessState };
 
 /** Delta operations for stores */
-type StoreDeltaOp =
-  | { op: "set"; key: StoreID; value: Store }
-  | { op: "delete"; key: StoreID };
+type StoreDeltaOp = { op: "set"; key: StoreID; value: Store };
 
 /** Compact delta representation between simulation states */
 export interface SimulationDelta {
   /** Current time */
-  t: Timestamp;
+  c: Timestamp;
 
   /** Event operations (if any changes) */
   e: EventDeltaOp[];
+
+  /** Event status (if any changes) */
+  es: StatusDeltaOp[];
+
+  /** Transition operations (if any changes) */
+  et: TransitionDeltaOp[];
 
   /** State operations (if any changes) */
   s: StateDeltaOp[];
@@ -59,38 +68,64 @@ export function createDelta(
   current: Simulation,
 ): SimulationDelta {
   return {
-    t: current.currentTime,
-    e: diffEvents(prev.events, current.events),
+    c: current.currentTime,
+    e: diffEvents(prev.timeline.events, current.timeline.events),
+    es: diffStatus(prev.timeline.status, current.timeline.status),
+    et: diffTransitions(
+      prev.timeline.transitions,
+      current.timeline.transitions,
+    ),
     s: diffState(prev.state, current.state),
     st: diffStores(prev.stores, current.stores),
   };
 }
 
 /**
- * Algorithm to compute the difference between two arrays of events, identifying added and modified events based on their unique IDs.
- * This allows generating a list of operations that can be applied to transform the previous event list into the current one, capturing only the necessary changes.
+ * Algorithm to compute the difference between two event maps, identifying added and modified events based on their unique IDs.
  */
-function diffEvents(prev: Event[], current: Event[]): EventDeltaOp[] {
+function diffEvents(
+  prev: Record<EventID, Event>,
+  current: Record<EventID, Event>,
+): EventDeltaOp[] {
   const ops: EventDeltaOp[] = [];
-  const prevMap = new Map(prev.map((e) => [e.id, e]));
-
-  // Find new events
-  // TODO: current[previous.length] -> current.length - 1
-  current.forEach((event) => {
-    if (!prevMap.has(event.id)) {
-      ops.push({ op: "add", event });
+  for (const [id, event] of Object.entries(current)) {
+    const prevEvent = prev[id];
+    if (!prevEvent) {
+      ops.push({ op: "set", key: id, event });
     }
-  });
-
-  // Find modified events
-  current.forEach((event) => {
-    const prevEvent = prevMap.get(event.id);
-    if (prevEvent && JSON.stringify(prevEvent) !== JSON.stringify(event)) {
-      ops.push({ op: "update", id: event.id, event });
-    }
-  });
+  }
 
   return ops;
+}
+
+function diffStatus(
+  prev: Record<EventID, EventState>,
+  current: Record<EventID, EventState>,
+): StatusDeltaOp[] {
+  const ops: StatusDeltaOp[] = [];
+  for (const [id, status] of Object.entries(current)) {
+    const prevStatus = prev[id];
+    if (prevStatus !== status) {
+      ops.push({ op: "set", key: id, status });
+    }
+  }
+
+  return ops;
+}
+
+/**
+ * Algorithm to compute the difference between two transition lists, identifying added transitions based on their ID, state and timestamp.
+ */
+function diffTransitions(
+  prev: EventTransition[],
+  current: EventTransition[],
+): TransitionDeltaOp[] {
+  if (current.length <= prev.length) return [];
+
+  return current.slice(prev.length).map((transition) => ({
+    op: "add",
+    transition,
+  }));
 }
 
 /**
@@ -134,13 +169,6 @@ function diffStores(
     }
   });
 
-  // Removed stores
-  Object.keys(prev).forEach((key) => {
-    if (!current[key]) {
-      ops.push({ op: "delete", key });
-    }
-  });
-
   return ops;
 }
 
@@ -154,8 +182,12 @@ export function applyDelta(
 ): Simulation {
   const result: Simulation = {
     ...base,
-    currentTime: delta.t,
-    events: [...base.events],
+    currentTime: delta.c,
+    timeline: {
+      events: { ...base.timeline.events },
+      status: { ...base.timeline.status },
+      transitions: [...base.timeline.transitions],
+    },
     state: { ...base.state },
     stores: { ...base.stores },
   };
@@ -164,16 +196,29 @@ export function applyDelta(
   if (delta.e) {
     delta.e.forEach((op) => {
       switch (op.op) {
+        case "set":
+          result.timeline.events[op.key] = op.event;
+          break;
+      }
+    });
+  }
+
+  if (delta.es) {
+    delta.es.forEach((op) => {
+      switch (op.op) {
+        case "set":
+          result.timeline.status[op.key] = op.status;
+          break;
+      }
+    });
+  }
+
+  if (delta.et) {
+    delta.et.forEach((op) => {
+      switch (op.op) {
         case "add":
-          result.events.push(op.event);
+          result.timeline.transitions.push(op.transition);
           break;
-        case "update": {
-          const eventIndex = result.events.findIndex((e) => e.id === op.id);
-          if (eventIndex !== -1) {
-            result.events[eventIndex] = op.event;
-          }
-          break;
-        }
       }
     });
   }
@@ -195,9 +240,6 @@ export function applyDelta(
       switch (op.op) {
         case "set":
           result.stores[op.key] = op.value;
-          break;
-        case "delete":
-          delete result.stores[op.key];
           break;
       }
     });
@@ -242,30 +284,41 @@ export function reconstructFromDeltas(
  * Full replay remains available through persisted checkpoint files.
  */
 export function pruneWorkingState(sim: Simulation): Simulation {
-  const events = sim.events.filter((event) =>
-    event.status !== EventState.Finished
+  const events = Object.fromEntries(
+    Object.entries(sim.timeline.events).filter(([_id, event]) =>
+      sim.timeline.status[event.id] !== EventState.Finished
+    ),
   );
+
+  const status = Object.fromEntries(
+    Object.entries(sim.timeline.status).filter(([id, status]) =>
+      events[id] !== undefined && status !== EventState.Finished
+    ),
+  );
+
+  const transitions = sim.timeline.transitions.filter((transition) =>
+    events[transition.id] !== undefined &&
+    status[transition.id] !== EventState.Finished
+  );
+
   const referencedState = new Set<string>();
 
-  for (const event of events) {
+  for (const event of Object.values(events)) {
     if (event.parent) referencedState.add(event.parent);
-  }
-
-  for (const store of Object.values(sim.stores)) {
-    for (const request of store.getRequests) {
-      if (request.parent) referencedState.add(request.parent);
-    }
-    for (const request of store.putRequests) {
-      if (request.parent) referencedState.add(request.parent);
-    }
   }
 
   return {
     ...sim,
-    events,
+    timeline: {
+      ...sim.timeline,
+      events: { ...events },
+      status: { ...status },
+      transitions: [...transitions],
+    },
     state: Object.fromEntries(
       Object.entries(sim.state).filter(([id]) => referencedState.has(id)),
     ),
+    stores: sim.stores,
   };
 }
 
@@ -279,7 +332,10 @@ export async function reconstructFullCurrent(
 ): Promise<Simulation> {
   const snapshots = await Promise.all(
     checkpoints.map(async (checkpoint) => {
-      const states = deserializeSimulation(await Deno.readTextFile(checkpoint));
+      const states = deserializeSimulation(
+        await Deno.readTextFile(checkpoint),
+        tail.registry,
+      );
       return states[states.length - 1];
     }),
   );
@@ -301,21 +357,35 @@ function mergeReplayState(
   previous: Simulation,
   current: Simulation,
 ): Simulation {
-  const eventsById = previous.events.reduce<Record<string, Event>>(
-    (acc, event) => {
-      acc[event.id] = event;
-      return acc;
-    },
-    {},
-  );
+  const eventsById: Record<string, Event> = {
+    ...previous.timeline.events,
+  };
 
-  for (const event of current.events) {
-    eventsById[event.id] = event;
+  for (const [id, event] of Object.entries(current.timeline.events)) {
+    eventsById[id] = event;
   }
+
+  const statusById: Record<EventID, EventState> = {
+    ...previous.timeline.status,
+  };
+
+  for (const [id, status] of Object.entries(current.timeline.status)) {
+    statusById[id] = status;
+  }
+
+  const transitions = [
+    ...previous.timeline.transitions,
+    ...current.timeline.transitions,
+  ];
 
   return {
     ...current,
-    events: Object.values(eventsById),
+    timeline: {
+      ...current.timeline,
+      events: eventsById,
+      status: statusById,
+      transitions,
+    },
     state: {
       ...previous.state,
       ...current.state,

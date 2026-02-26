@@ -78,7 +78,7 @@ if (import.meta.main) {
             },
           },
           next: [
-            createEvent(sim, {
+            createEvent({
               parent: event.id,
               scheduledAt: sim.currentTime,
               process: {
@@ -103,7 +103,7 @@ if (import.meta.main) {
               step: "stop",
             },
             next: [
-              createEvent(sim, {
+              createEvent({
                 scheduledAt: sim.currentTime,
                 process: {
                   type: "step1",
@@ -117,17 +117,14 @@ if (import.meta.main) {
           };
         } else {
           // Still waiting
-          const nextEvent: Event<TimeoutData> = createEvent(
-            sim,
-            {
-              parent: event.id,
-              scheduledAt: targetTime, // Schedule exactly at completion time
-              process: {
-                type: "bar",
-                inheritStep: true, // Continue from parent's state
-              },
+          const nextEvent: Event<TimeoutData> = createEvent({
+            parent: event.id,
+            scheduledAt: targetTime, // Schedule exactly at completion time
+            process: {
+              type: "bar",
+              inheritStep: true, // Continue from parent's state
             },
-          );
+          });
 
           return {
             state: { ...state, step: "wait" },
@@ -168,7 +165,7 @@ if (import.meta.main) {
             },
           },
           next: [
-            createEvent(sim, {
+            createEvent({
               parent: event.id,
               scheduledAt: sim.currentTime,
               process: {
@@ -193,7 +190,7 @@ if (import.meta.main) {
               step: "stop",
             },
             next: [
-              createEvent(sim, {
+              createEvent({
                 scheduledAt: sim.currentTime,
                 process: {
                   type: "step2",
@@ -203,17 +200,14 @@ if (import.meta.main) {
           };
         } else {
           // Still waiting
-          const nextEvent = createEvent(
-            sim,
-            {
-              parent: event.id,
-              scheduledAt: targetTime,
-              process: {
-                type: "step1",
-                inheritStep: true, // Continue from parent's state
-              },
+          const nextEvent = createEvent({
+            parent: event.id,
+            scheduledAt: targetTime,
+            process: {
+              type: "step1",
+              inheritStep: true, // Continue from parent's state
             },
-          );
+          });
 
           return {
             state: { ...state, step: "wait" },
@@ -273,7 +267,6 @@ if (import.meta.main) {
             },
           },
           next: [createEvent(
-            sim,
             {
               parent: event.id,
               scheduledAt: sim.currentTime,
@@ -299,7 +292,6 @@ if (import.meta.main) {
             },
             next: [
               createEvent(
-                sim,
                 {
                   scheduledAt: sim.currentTime,
                   process: {
@@ -314,7 +306,6 @@ if (import.meta.main) {
           };
         } else {
           const nextEvent: Event<TimeoutData> = createEvent(
-            sim,
             {
               parent: event.id,
               scheduledAt: targetTime,
@@ -342,35 +333,35 @@ if (import.meta.main) {
 
   sim.registry = registerProcess(sim, bazCb);
 
-  const e1 = createEvent(sim, {
+  const e1 = createEvent({
     scheduledAt: 10,
     process: { type: "foo", data: { "from": "main" } },
   });
-  sim.events = scheduleEvent(sim, e1);
+  sim.timeline = scheduleEvent(sim, e1);
 
-  const e2 = createEvent(sim, { scheduledAt: 20, process: { type: "bar" } });
-  sim.events = scheduleEvent(sim, e2);
+  const e2 = createEvent({ scheduledAt: 20, process: { type: "bar" } });
+  sim.timeline = scheduleEvent(sim, e2);
 
-  const e3 = createEvent(sim, {
+  const e3 = createEvent({
     scheduledAt: 30,
     process: { type: "foo", data: { "from": "main" } },
   });
-  sim.events = scheduleEvent(sim, e3);
+  sim.timeline = scheduleEvent(sim, e3);
 
-  const e4 = createEvent(sim, {
+  const e4 = createEvent({
     scheduledAt: 37,
     process: { type: "foo", data: { "from": "main" } },
   });
-  sim.events = scheduleEvent(sim, e4);
+  sim.timeline = scheduleEvent(sim, e4);
 
-  const e5 = createEvent(sim, {
+  const e5 = createEvent({
     scheduledAt: 50,
     process: { type: "foo", data: { "from": "main" } },
   });
-  sim.events = scheduleEvent(sim, e5);
+  sim.timeline = scheduleEvent(sim, e5);
 
-  const e6 = createEvent(sim, { scheduledAt: 60, process: { type: "baz" } });
-  sim.events = scheduleEvent(sim, e6);
+  const e6 = createEvent({ scheduledAt: 60, process: { type: "baz" } });
+  sim.timeline = scheduleEvent(sim, e6);
 
   const [stop, stats] = await runSimulation(sim);
 
