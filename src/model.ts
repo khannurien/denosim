@@ -19,7 +19,7 @@ export interface Simulation<
 
   /**
    * Full lifecycle record for every event in the simulation.
-   * Combines immutable event definitions with the append-only transition log and derived indexes that make common queries (current status, pending events) O(1).
+   * Combines immutable event definitions with the append-only transition log and derived status index that makes queries O(1).
    */
   timeline: Timeline;
 
@@ -356,6 +356,17 @@ export interface SimulationStats {
 
   /** Real-world time (in milliseconds) the simulation took to complete */
   duration: number;
+}
+
+/**
+ * TODO:
+ */
+export interface SimulationResult<T> {
+  /** TODO: */
+  result: T;
+
+  /** TODO: */
+  stats: SimulationStats;
 }
 
 /**

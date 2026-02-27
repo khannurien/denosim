@@ -8,11 +8,11 @@ import {
   StoreID,
 } from "../src/model.ts";
 import { get, initializeStore, put, registerStore } from "../src/resources.ts";
+import { runSimulation } from "../src/runner.ts";
 import {
   createEvent,
   initializeSimulation,
   registerProcess,
-  runSimulation,
   scheduleEvent,
 } from "../src/simulation.ts";
 
@@ -114,55 +114,57 @@ Deno.test("producer-consumer synchronization with blocking", async () => {
   sim.timeline = scheduleEvent(sim, e3);
   sim.timeline = scheduleEvent(sim, e4);
 
-  const [stop, _stats] = await runSimulation(sim);
+  const { result } = await runSimulation(sim);
 
   // Producer has been unblocked by consumer
-  const prodBlocked = Object.values(stop.timeline.events).find((event) =>
+  const prodBlocked = Object.values(result.timeline.events).find((event) =>
     event.id === e1.id
   );
-  const prodBlockedFinished = [...stop.timeline.transitions].reverse().find((
+  const prodBlockedFinished = [...result.timeline.transitions].reverse().find((
     transition,
   ) =>
     transition.id === prodBlocked?.id &&
     transition.state === EventState.Finished
   );
   assertEquals(prodBlockedFinished?.at, 0);
-  const prodUnblocked = Object.values(stop.timeline.events).find((event) =>
+  const prodUnblocked = Object.values(result.timeline.events).find((event) =>
     event.parent && event.parent === e1.id && event.scheduledAt === 5
   );
-  const prodUnblockedFinished = [...stop.timeline.transitions].reverse().find((
-    transition,
-  ) =>
-    transition.id === prodUnblocked?.id &&
-    transition.state === EventState.Finished
+  const prodUnblockedFinished = [...result.timeline.transitions].reverse().find(
+    (
+      transition,
+    ) =>
+      transition.id === prodUnblocked?.id &&
+      transition.state === EventState.Finished,
   );
   assertEquals(prodUnblockedFinished?.at, 5);
 
   // Consumer has been unblocked by producer and has gotten the data
-  const consBlocked = Object.values(stop.timeline.events).find((event) =>
+  const consBlocked = Object.values(result.timeline.events).find((event) =>
     event.id === e3.id
   );
-  const consBlockedFinished = [...stop.timeline.transitions].reverse().find((
+  const consBlockedFinished = [...result.timeline.transitions].reverse().find((
     transition,
   ) =>
     transition.id === consBlocked?.id &&
     transition.state === EventState.Finished
   );
   assertEquals(consBlockedFinished?.at, 10);
-  const consUnblocked = Object.values(stop.timeline.events).find((event) =>
+  const consUnblocked = Object.values(result.timeline.events).find((event) =>
     event.parent && event.parent === e3.id && event.scheduledAt === 15
   );
-  const consUnblockedFinished = [...stop.timeline.transitions].reverse().find((
-    transition,
-  ) =>
-    transition.id === consUnblocked?.id &&
-    transition.state === EventState.Finished
+  const consUnblockedFinished = [...result.timeline.transitions].reverse().find(
+    (
+      transition,
+    ) =>
+      transition.id === consUnblocked?.id &&
+      transition.state === EventState.Finished,
   );
   assertEquals(consUnblockedFinished?.at, 15);
   assertEquals(consUnblocked!.process.data!["foo"], "baz");
 
   // All processes have reached their final step
-  assert(Object.values(stop.state).every((state) => state.step === "stop"));
+  assert(Object.values(result.state).every((state) => state.step === "stop"));
 });
 
 Deno.test("multiple consumers with single producer", () => {
@@ -689,22 +691,22 @@ Deno.test("process step unblocks multiple consumers", async () => {
   sim.timeline = scheduleEvent(sim, p2);
   sim.timeline = scheduleEvent(sim, p3);
 
-  const [stop] = await runSimulation(sim);
+  const { result } = await runSimulation(sim);
 
   assert(
-    Object.values(stop.timeline.events).every(
-      (e) => stop.timeline.status[e.id] === EventState.Finished,
+    Object.values(result.timeline.events).every(
+      (e) => result.timeline.status[e.id] === EventState.Finished,
     ),
   );
 
   // FIFO: c1 (earliest) is unblocked by p1, c2 by p2, c3 by p3
-  const c1Cont = Object.values(stop.timeline.events).find(
+  const c1Cont = Object.values(result.timeline.events).find(
     (e) => e.parent === c1.id && e.scheduledAt === 10,
   );
-  const c2Cont = Object.values(stop.timeline.events).find(
+  const c2Cont = Object.values(result.timeline.events).find(
     (e) => e.parent === c2.id && e.scheduledAt === 11,
   );
-  const c3Cont = Object.values(stop.timeline.events).find(
+  const c3Cont = Object.values(result.timeline.events).find(
     (e) => e.parent === c3.id && e.scheduledAt === 12,
   );
 
@@ -761,22 +763,22 @@ Deno.test("process step unblocks multiple producers", async () => {
   sim.timeline = scheduleEvent(sim, c2);
   sim.timeline = scheduleEvent(sim, c3);
 
-  const [stop] = await runSimulation(sim);
+  const { result } = await runSimulation(sim);
 
   assert(
-    Object.values(stop.timeline.events).every(
-      (e) => stop.timeline.status[e.id] === EventState.Finished,
+    Object.values(result.timeline.events).every(
+      (e) => result.timeline.status[e.id] === EventState.Finished,
     ),
   );
 
   // Each consumer continuation carries the payload from the matching producer (FIFO)
-  const c1Cont = Object.values(stop.timeline.events).find(
+  const c1Cont = Object.values(result.timeline.events).find(
     (e) => e.parent === c1.id && e.scheduledAt === 10,
   );
-  const c2Cont = Object.values(stop.timeline.events).find(
+  const c2Cont = Object.values(result.timeline.events).find(
     (e) => e.parent === c2.id && e.scheduledAt === 11,
   );
-  const c3Cont = Object.values(stop.timeline.events).find(
+  const c3Cont = Object.values(result.timeline.events).find(
     (e) => e.parent === c3.id && e.scheduledAt === 12,
   );
 
@@ -895,18 +897,18 @@ Deno.test("finished waiting placeholder is marked Finished after unblocking", as
   sim.timeline = scheduleEvent(sim, consumer);
   sim.timeline = scheduleEvent(sim, producer);
 
-  const [stop] = await runSimulation(sim);
+  const { result } = await runSimulation(sim);
 
   // The waiting placeholder (child of consumer, waiting: true) must be Finished
-  const placeholder = Object.values(stop.timeline.events).find(
+  const placeholder = Object.values(result.timeline.events).find(
     (e) => e.parent === consumer.id && e.waiting === true,
   );
   assert(placeholder, "waiting placeholder event must exist in timeline");
-  assertEquals(stop.timeline.status[placeholder.id], EventState.Finished);
+  assertEquals(result.timeline.status[placeholder.id], EventState.Finished);
 
   assert(
-    Object.values(stop.timeline.events).every(
-      (e) => stop.timeline.status[e.id] === EventState.Finished,
+    Object.values(result.timeline.events).every(
+      (e) => result.timeline.status[e.id] === EventState.Finished,
     ),
   );
 });

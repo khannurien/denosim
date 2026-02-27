@@ -1,9 +1,9 @@
 import { Event, ProcessDefinition, StateData } from "../src/model.ts";
+import { runSimulation } from "../src/runner.ts";
 import {
   createEvent,
   initializeSimulation,
   registerProcess,
-  runSimulation,
   scheduleEvent,
 } from "../src/simulation.ts";
 

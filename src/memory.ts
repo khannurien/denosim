@@ -9,7 +9,6 @@ import {
   StoreID,
   Timestamp,
 } from "./model.ts";
-import { deserializeSimulation } from "./serialize.ts";
 
 /** Delta operations for events */
 type EventDeltaOp = { op: "set"; key: EventID; event: Event };
@@ -203,6 +202,7 @@ export function applyDelta(
     });
   }
 
+  // Apply status operations
   if (delta.es) {
     delta.es.forEach((op) => {
       switch (op.op) {
@@ -213,6 +213,7 @@ export function applyDelta(
     });
   }
 
+  // Apply transition operations
   if (delta.et) {
     delta.et.forEach((op) => {
       switch (op.op) {
@@ -319,76 +320,5 @@ export function pruneWorkingState(sim: Simulation): Simulation {
       Object.entries(sim.state).filter(([id]) => referencedState.has(id)),
     ),
     stores: sim.stores,
-  };
-}
-
-/**
- * Reconstructs a full current state from checkpoint files and an in-memory tail.
- * This restores replay-complete state for run outputs while allowing in-run pruning.
- */
-export async function reconstructFullCurrent(
-  checkpoints: string[],
-  tail: Simulation,
-): Promise<Simulation> {
-  const snapshots = await Promise.all(
-    checkpoints.map(async (checkpoint) => {
-      const states = deserializeSimulation(
-        await Deno.readTextFile(checkpoint),
-        tail.registry,
-      );
-      return states[states.length - 1];
-    }),
-  );
-
-  if (snapshots.length === 0) {
-    return tail;
-  }
-
-  const [first, ...rest] = snapshots;
-  const full = rest.reduce(
-    (acc, current) => mergeReplayState(acc, current),
-    first,
-  );
-
-  return mergeReplayState(full, tail);
-}
-
-function mergeReplayState(
-  previous: Simulation,
-  current: Simulation,
-): Simulation {
-  const eventsById: Record<string, Event> = {
-    ...previous.timeline.events,
-  };
-
-  for (const [id, event] of Object.entries(current.timeline.events)) {
-    eventsById[id] = event;
-  }
-
-  const statusById: Record<EventID, EventState> = {
-    ...previous.timeline.status,
-  };
-
-  for (const [id, status] of Object.entries(current.timeline.status)) {
-    statusById[id] = status;
-  }
-
-  const transitions = [
-    ...previous.timeline.transitions,
-    ...current.timeline.transitions,
-  ];
-
-  return {
-    ...current,
-    timeline: {
-      ...current.timeline,
-      events: eventsById,
-      status: statusById,
-      transitions,
-    },
-    state: {
-      ...previous.state,
-      ...current.state,
-    },
   };
 }

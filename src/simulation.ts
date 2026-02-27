@@ -9,19 +9,10 @@ import {
   ProcessType,
   RunSimulationOptions,
   Simulation,
-  SimulationStats,
   StateData,
   StepStateMap,
   Timeline,
 } from "./model.ts";
-import {
-  createDelta,
-  DeltaEncodedSimulation,
-  pruneWorkingState,
-  reconstructFullCurrent,
-} from "./memory.ts";
-import { dumpToDisk, resolveRunContext, shouldDump } from "./runner.ts";
-import { serializeSimulation } from "./serialize.ts";
 
 /**
  * Initializes a new simulation instance with:
@@ -64,110 +55,12 @@ export function initializeSimulation(): Simulation {
 }
 
 /**
- * Runs the discrete-event simulation until:
- * - either no more events remain to process;
- * - or the simulation time reaches at least the specified `until` time;
- * - or the simulation reaches a point where the specified `until` event is processed.
- * The simulation processes events in chronological order (earliest first).
- * Playback speed can be adjusted by passing a simulation rate (expressed in Hz).
- * Stores intermediate simulation state (instances) for each event processed.
- * TODO: Publishes states as they go on the optional socket.
- * Checks continuation (events remaining) and termination conditions (i.e. timestamp or event).
- * Returns all the instances along with statistics about the simulation run.
- */
-export async function runSimulation(
-  init: Simulation,
-  options?: RunSimulationOptions,
-): Promise<[Simulation, SimulationStats]> {
-  const [sim, stats] = await runSimulationWithDeltas(init, options);
-
-  return [sim.current, stats];
-}
-
-/**
- * Runs the simulation and exposes the delta/checkpoint representation.
- * This is intended for persistence, replay, and memory management tooling.
- */
-export async function runSimulationWithDeltas(
-  init: Simulation,
-  options?: RunSimulationOptions,
-): Promise<[DeltaEncodedSimulation, SimulationStats]> {
-  const runContext = await resolveRunContext(options);
-  const dumpInterval = runContext.manifest.dump.interval;
-
-  const sim: DeltaEncodedSimulation = {
-    base: {
-      ...init,
-    },
-    deltas: [],
-    current: {
-      ...init,
-    },
-  };
-  const checkpoints: string[] = [];
-
-  const start = performance.now();
-  while (true) {
-    const [next, continuation] = run(sim.current);
-    if (!continuation) break;
-
-    // Memory management: store deltas and dump to disk if necessary
-    sim.deltas.push(createDelta(sim.current, next));
-    sim.current = next;
-
-    if (shouldDump(sim, dumpInterval)) {
-      const checkpoint = await dumpToDisk(
-        serializeSimulation(sim),
-        sim.current.currentTime,
-        runContext,
-      );
-      checkpoints.push(checkpoint.path);
-      const compacted = pruneWorkingState(next);
-      sim.base = compacted;
-      sim.deltas = [];
-      sim.current = compacted;
-    }
-
-    if (options && shouldTerminate(next, options)) break;
-    if (options?.rate) await delay(options.rate);
-  }
-
-  const end = performance.now();
-  if (checkpoints.length > 0) {
-    const current = await reconstructFullCurrent(checkpoints, sim.current);
-    // Keep returned delta representation self-consistent
-    sim.base = current;
-    sim.deltas = [];
-    sim.current = current;
-  }
-
-  return [
-    sim,
-    {
-      end: sim.current.currentTime,
-      duration: end - start,
-    },
-  ];
-}
-
-/**
- * Helper function to introduce a wall-clock delay based on desired simulation rate (in Hz).
- * If rate is not provided, executes immediately.
- * Otherwise, computes delay in milliseconds and times out accordingly.
- */
-function delay(rate: number): Promise<void> {
-  return new Promise((resolve) =>
-    setTimeout(resolve, rate > 0 ? 1000 / rate : 0)
-  );
-}
-
-/**
  * Helper function to check simulation termination conditions.
  * If `untilTime` is provided, terminates when current time is greater than or equal to `untilTime`.
  * If `untilEvent` is provided, terminates when the event is finished.
  * Always returns false if neither condition is provided.
  */
-function shouldTerminate(
+export function shouldTerminate(
   sim: Simulation,
   options: RunSimulationOptions,
 ): boolean {
@@ -187,7 +80,7 @@ function shouldTerminate(
  * Returns a boolean indicating whether the simulation should continue.
  * Simulation should continue if there are more events to process in queue.
  */
-function run(current: Simulation): [Simulation, boolean] {
+export function run(current: Simulation): [Simulation, boolean] {
   // Get all scheduled events that haven't been processed yet,
   // sorted in descending order so we can efficiently pop the earliest event
   const pending = Object.values(current.timeline.events).filter((event) =>
@@ -249,19 +142,18 @@ function step(sim: Simulation, event: Event): Simulation {
   // Update the event's process state in the simulation container
   nextSim.state[event.id] = { ...state };
 
-  // Finalize the current event: mark as `Finished` and log transition
+  // Mark the event as finished and append a lifecycle transition
   nextSim.timeline = finishEvent(nextSim, event);
 
   // Schedule the next events yielded by the current process if necessary
-  // `Waiting` events are not automatically scheduled
-  // Allow processes to yield events that are triggered by external conditions or other processes, rather than automatically handled at their scheduled time
+  // `Waiting` events are not automatically scheduled. This allows processes to yield events that are triggered by external conditions or other processes, rather than automatically handled at their scheduled time.
   for (const nextEvent of next) {
     nextSim.timeline = scheduleEvent(nextSim, nextEvent);
   }
 
-  // Finish the old events yielded by the current process if necessary
+  // Finish the old events yielded by the current process
   for (const finishedEvent of finish ?? []) {
-    nextSim.timeline = finishEvent(nextSim, sim.timeline.events[finishedEvent.id]);
+    nextSim.timeline = finishEvent(nextSim, finishedEvent);
   }
 
   return nextSim;

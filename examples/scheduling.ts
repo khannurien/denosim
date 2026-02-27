@@ -1,9 +1,9 @@
 import { Event, ProcessDefinition, StateData } from "../src/model.ts";
+import { runSimulation } from "../src/runner.ts";
 import {
   createEvent,
   initializeSimulation,
   registerProcess,
-  runSimulation,
   scheduleEvent,
 } from "../src/simulation.ts";
 
@@ -361,8 +361,8 @@ if (import.meta.main) {
   const e6 = createEvent({ scheduledAt: 60, process: { type: "baz" } });
   sim.timeline = scheduleEvent(sim, e6);
 
-  const [stop, stats] = await runSimulation(sim);
+  const { result, stats } = await runSimulation(sim);
 
-  console.log(`Simulation ended at ${stop.currentTime}`);
+  console.log(`Simulation ended at ${result.currentTime}`);
   console.log(`Simulation took: ${stats.duration} ms`);
 }

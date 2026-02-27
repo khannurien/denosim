@@ -1,5 +1,18 @@
-import { DeltaEncodedSimulation } from "./memory.ts";
-import { RunSimulationOptions } from "./model.ts";
+import {
+  createDelta,
+  DeltaEncodedSimulation,
+  pruneWorkingState,
+} from "./memory.ts";
+import {
+  Event,
+  EventID,
+  EventState,
+  RunSimulationOptions,
+  Simulation,
+  SimulationResult,
+} from "./model.ts";
+import { deserializeSimulation, serializeSimulation } from "./serialize.ts";
+import { run, shouldTerminate } from "./simulation.ts";
 
 interface RunDumpMetadata {
   directory: string;
@@ -96,7 +109,7 @@ export async function dumpToDisk(
   };
   runContext.manifest = nextManifest;
 
-  await persistRunManifest(runContext);
+  await persistRunManifest(runContext.manifest, runContext.manifestPath);
 
   return {
     path: dumpPath,
@@ -144,7 +157,7 @@ export async function resolveRunContext(
     },
   };
 
-  await Deno.writeTextFile(manifestPath, JSON.stringify(manifest, null, 2));
+  await persistRunManifest(manifest, manifestPath);
 
   return {
     runRoot,
@@ -155,16 +168,184 @@ export async function resolveRunContext(
 }
 
 /**
- * Persists the run manifest to disk, updating the `updatedAt` timestamp.
+ * Persists the run manifest to disk.
  * This should be called whenever the run manifest is updated, such as after creating a new dump or updating run metadata.
  * By keeping the manifest up-to-date on disk, we ensure that the run state can be accurately resumed in case of interruption.
  */
 export async function persistRunManifest(
-  runContext: RunContext,
+  manifest: RunManifest,
+  manifestPath: string,
 ): Promise<void> {
-  runContext.manifest.updatedAt = new Date().toISOString();
   await Deno.writeTextFile(
-    runContext.manifestPath,
-    JSON.stringify(runContext.manifest, null, 2),
+    manifestPath,
+    JSON.stringify(manifest, null, 2),
   );
+}
+
+/**
+ * Runs the discrete-event simulation until:
+ * - either no more events remain to process;
+ * - or the simulation time reaches at least the specified `until` time;
+ * - or the simulation reaches a point where the specified `until` event is processed.
+ * The simulation processes events in chronological order (earliest first).
+ * Playback speed can be adjusted by passing a simulation rate (expressed in Hz).
+ * Returns the final simulation state along with statistics about the run.
+ */
+export async function runSimulation(
+  init: Simulation,
+  options?: RunSimulationOptions,
+): Promise<SimulationResult<Simulation>> {
+  const { result, stats } = await runSimulationWithDeltas(init, options);
+
+  return {
+    result: result.current,
+    stats,
+  };
+}
+
+/**
+ * Runs the simulation and exposes the delta/checkpoint representation.
+ * Layers on memory management: delta accumulation, periodic checkpoint dumps, state pruning, and final reconstruction from disk when checkpoints have been written.
+ */
+export async function runSimulationWithDeltas(
+  init: Simulation,
+  options?: RunSimulationOptions,
+): Promise<SimulationResult<DeltaEncodedSimulation>> {
+  const runContext = await resolveRunContext(options);
+  const dumpInterval = runContext.manifest.dump.interval;
+
+  const encoded: DeltaEncodedSimulation = {
+    base: { ...init },
+    deltas: [],
+    current: { ...init },
+  };
+  const checkpoints: string[] = [];
+  const result = {
+    current: init,
+  };
+
+  const start = performance.now();
+  while (true) {
+    const [next, continuation] = run(result.current);
+    if (!continuation) break;
+    result.current = next;
+
+    encoded.deltas.push(createDelta(encoded.current, result.current));
+    encoded.current = result.current;
+
+    if (options?.rate) await delay(options.rate);
+    if (options && shouldTerminate(result.current, options)) break;
+
+    if (shouldDump(encoded, dumpInterval)) {
+      const checkpoint = await dumpToDisk(
+        serializeSimulation(encoded),
+        encoded.current.currentTime,
+        runContext,
+      );
+      checkpoints.push(checkpoint.path);
+      const compacted = pruneWorkingState(result.current);
+      encoded.base = compacted;
+      encoded.deltas = [];
+      encoded.current = compacted;
+      result.current = compacted;
+    }
+  }
+
+  const stop = performance.now();
+  if (checkpoints.length > 0) {
+    const current = await reconstructFullCurrent(checkpoints, encoded.current);
+    encoded.base = current;
+    encoded.deltas = [];
+    encoded.current = current;
+  }
+
+  return {
+    result: encoded,
+    stats: {
+      end: encoded.current.currentTime,
+      duration: stop - start,
+    },
+  };
+}
+
+/**
+ * Helper function to introduce a wall-clock delay based on desired simulation rate (in Hz).
+ * If rate is not provided, executes immediately.
+ * Otherwise, computes delay in milliseconds and times out accordingly.
+ */
+function delay(rate: number): Promise<void> {
+  return new Promise((resolve) =>
+    setTimeout(resolve, rate > 0 ? 1000 / rate : 0)
+  );
+}
+
+/**
+ * Reconstructs a full current state from checkpoint files and an in-memory tail.
+ * This restores replay-complete state for run outputs while allowing in-run pruning.
+ */
+export async function reconstructFullCurrent(
+  checkpoints: string[],
+  tail: Simulation,
+): Promise<Simulation> {
+  const snapshots = await Promise.all(
+    checkpoints.map(async (checkpoint) => {
+      const states = deserializeSimulation(
+        await Deno.readTextFile(checkpoint),
+        tail.registry,
+      );
+      return states[states.length - 1];
+    }),
+  );
+
+  if (snapshots.length === 0) {
+    return tail;
+  }
+
+  const [first, ...rest] = snapshots;
+  const full = rest.reduce(
+    (acc, current) => mergeReplayState(acc, current),
+    first,
+  );
+
+  return mergeReplayState(full, tail);
+}
+
+function mergeReplayState(
+  previous: Simulation,
+  current: Simulation,
+): Simulation {
+  const eventsById: Record<string, Event> = {
+    ...previous.timeline.events,
+  };
+
+  for (const [id, event] of Object.entries(current.timeline.events)) {
+    eventsById[id] = event;
+  }
+
+  const statusById: Record<EventID, EventState> = {
+    ...previous.timeline.status,
+  };
+
+  for (const [id, status] of Object.entries(current.timeline.status)) {
+    statusById[id] = status;
+  }
+
+  const transitions = [
+    ...previous.timeline.transitions,
+    ...current.timeline.transitions,
+  ];
+
+  return {
+    ...current,
+    timeline: {
+      ...current.timeline,
+      events: eventsById,
+      status: statusById,
+      transitions,
+    },
+    state: {
+      ...previous.state,
+      ...current.state,
+    },
+  };
 }

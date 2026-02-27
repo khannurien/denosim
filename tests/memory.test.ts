@@ -6,7 +6,6 @@ import {
   createDeltaEncodedSimulation,
   pruneWorkingState,
   reconstructFromDeltas,
-  reconstructFullCurrent,
 } from "../src/memory.ts";
 import {
   Event,
@@ -17,12 +16,11 @@ import {
   StateData,
 } from "../src/model.ts";
 import { registerStore } from "../src/resources.ts";
+import { runSimulationWithDeltas } from "../src/runner.ts";
 import {
   createEvent,
   initializeSimulation,
   registerProcess,
-  runSimulation,
-  runSimulationWithDeltas,
   scheduleEvent,
 } from "../src/simulation.ts";
 
@@ -71,8 +69,8 @@ Deno.test("createDelta captures status transition and state mutations", async ()
     state: { ...sim.state },
   };
 
-  const [encoded] = await runSimulationWithDeltas(sim);
-  const next = encoded.current;
+  const { result } = await runSimulationWithDeltas(sim);
+  const next = result.current;
 
   const delta = createDelta(prev, next);
 
@@ -158,18 +156,18 @@ Deno.test("runSimulation records only real steps and keeps full final state afte
     sim.timeline = scheduleEvent(sim, event);
   }
 
-  const [encoded] = await runSimulationWithDeltas(sim, {
+  const { result } = await runSimulationWithDeltas(sim, {
     runDirectory: dir,
     dumpInterval: 2,
   });
 
-  assertEquals(encoded.current.currentTime, 4);
+  assertEquals(result.current.currentTime, 4);
   assert(
     initial.every((event) =>
-      encoded.current.timeline.status[event.id] === EventState.Finished
+      result.current.timeline.status[event.id] === EventState.Finished
     ),
   );
-  assertEquals(encoded.deltas.length, 0);
+  assertEquals(result.deltas.length, 0);
 
   const dump0 = await Deno.stat(`${dir}/dumps/0-t1.json`);
   const dump1 = await Deno.stat(`${dir}/dumps/1-t3.json`);
@@ -177,83 +175,6 @@ Deno.test("runSimulation records only real steps and keeps full final state afte
   assert(dump1.isFile);
 
   await Deno.remove(dir, { recursive: true });
-});
-
-Deno.test("reconstructFullCurrent merges checkpoint files with in-memory state", async () => {
-  const dir = "runs/test/reconstruct-full-current-test";
-  await Deno.remove(dir, { recursive: true }).catch(() => {});
-
-  // Create a simple process
-  const sim = initializeSimulation();
-  const simpleProcess: ProcessDefinition<{
-    start: StateData;
-  }> = {
-    type: "reconstruct-test",
-    initial: "start",
-    steps: {
-      start: (_sim, _event, state) => {
-        return {
-          state: { ...state, completed: true },
-          next: [],
-        };
-      },
-    },
-  };
-
-  sim.registry = registerProcess(sim, simpleProcess);
-
-  // Create and run first checkpoint
-  const e1 = createEvent({
-    scheduledAt: 0,
-    process: { type: "reconstruct-test" },
-  });
-  sim.timeline = scheduleEvent(sim, e1);
-
-  const [_checkpoint1] = await runSimulation(sim, {
-    runDirectory: dir,
-    dumpInterval: 1,
-  });
-
-  // Create checkpoint file path
-  const checkpointFiles = [
-    `${dir}/dumps/0-t0.json`,
-  ];
-
-  // Verify checkpoint file exists
-  const checkpointStat = await Deno.stat(checkpointFiles[0]);
-  assert(checkpointStat.isFile);
-
-  // Create in-memory tail with additional events
-  const tailSim = initializeSimulation();
-  tailSim.registry = sim.registry;
-  const e2 = createEvent({
-    scheduledAt: 1,
-    process: { type: "reconstruct-test" },
-  });
-  tailSim.timeline = scheduleEvent(tailSim, e2);
-  const [tail] = await runSimulation(tailSim);
-
-  // Reconstruct full current state from checkpoints and tail
-  const reconstructed = await reconstructFullCurrent(checkpointFiles, tail);
-
-  // e1 comes from the checkpoint file, e2 from the tail — both must be present
-  assert(reconstructed.timeline.events[e1.id], "e1 from checkpoint must be present");
-  assert(reconstructed.timeline.events[e2.id], "e2 from tail must be present");
-  assertEquals(reconstructed.timeline.status[e1.id], EventState.Finished);
-  assertEquals(reconstructed.timeline.status[e2.id], EventState.Finished);
-
-  // Clean up
-  await Deno.remove(dir, { recursive: true });
-});
-
-Deno.test("reconstructFullCurrent handles empty checkpoints", async () => {
-  const tail = initializeSimulation();
-
-  // Test with empty checkpoint array
-  const reconstructed = await reconstructFullCurrent([], tail);
-
-  // Should return the tail unchanged
-  assertEquals(reconstructed, tail);
 });
 
 Deno.test("pruneWorkingState filters out finished events and their transitions", () => {
@@ -409,18 +330,18 @@ Deno.test("runSimulation keeps base immutable and reconstructs current from delt
   const event = createEvent({ scheduledAt: 0 });
   sim.timeline = scheduleEvent(sim, event);
 
-  const [encoded] = await runSimulationWithDeltas(sim, {
+  const { result } = await runSimulationWithDeltas(sim, {
     runDirectory: dir,
     dumpInterval: 100,
   });
 
-  assertEquals(Object.keys(encoded.base.timeline.events).length, 1);
-  assertEquals(encoded.base.timeline.status[event.id], EventState.Scheduled);
-  assertEquals(Object.keys(encoded.base.state).length, 0);
+  assertEquals(Object.keys(result.base.timeline.events).length, 1);
+  assertEquals(result.base.timeline.status[event.id], EventState.Scheduled);
+  assertEquals(Object.keys(result.base.state).length, 0);
 
-  const replay = reconstructFromDeltas(encoded.base, encoded.deltas);
+  const replay = reconstructFromDeltas(result.base, result.deltas);
   const replayStop = replay[replay.length - 1];
-  assertEquals(replayStop, encoded.current);
+  assertEquals(replayStop, result.current);
   assertEquals(replayStop.timeline.status[event.id], EventState.Finished);
   assertEquals(Object.keys(replayStop.state).length, 1);
 
@@ -447,10 +368,11 @@ Deno.test("checkpoints preserve full replay state by default", async () => {
 
   const dir = "runs/test/dumps-checkpoint-compact";
   await Deno.remove(dir, { recursive: true }).catch(() => {});
-  const [stop] = await runSimulation(sim, {
+  const { result } = await runSimulationWithDeltas(sim, {
     runDirectory: dir,
     dumpInterval: 1,
   });
+  const stop = result.current;
 
   assertEquals(Object.keys(stop.timeline.events).length, 2);
   assertEquals(stop.timeline.status[e1.id], EventState.Finished);
@@ -470,11 +392,12 @@ Deno.test("checkpoints keep untilEvent semantics with full replay state", async 
 
   const dir = "runs/test/dumps-checkpoint-until-event";
   await Deno.remove(dir, { recursive: true }).catch(() => {});
-  const [stop, stats] = await runSimulation(sim, {
+  const { result, stats } = await runSimulationWithDeltas(sim, {
     untilEvent: e2,
     runDirectory: dir,
     dumpInterval: 1,
   });
+  const stop = result.current;
 
   assertEquals(stats.end, 20);
   const handledE1 = Object.values(stop.timeline.events).find((event) =>

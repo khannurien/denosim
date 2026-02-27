@@ -1,19 +1,12 @@
 {
   "permissions": {
-    "dev": {
-      "read": ["runs"],
-      "write": ["runs"]
-    },
     "test": {
       "read": ["runs"],
       "write": ["runs"]
     }
   },
   "tasks": {
-    "example_er_triage": "deno run -P=dev --v8-flags=--prof examples/er-triage.ts",
-    "example_scheduling": "deno run -P=dev --watch examples/scheduling.ts",
-    "example_synchronization": "deno run -P=dev --watch examples/synchronization.ts",
-    "example_stack_size": "deno run -P=dev --v8-flags=--prof examples/stack-size.ts",
+    "profile": "deno run -P=test --v8-flags=--prof examples/stack-size.ts",
     "test": "deno test -P=test --coverage"
   },
   "imports": {

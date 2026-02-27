@@ -1,18 +1,19 @@
+import { randomIntegerBetween, randomSeeded } from "@std/random";
+
 import {
   Event,
   ProcessDefinition,
   QueueDiscipline,
   StateData,
 } from "../src/model.ts";
+import { get, initializeStore, put, registerStore } from "../src/resources.ts";
+import { runSimulation } from "../src/runner.ts";
 import {
   createEvent,
   initializeSimulation,
   registerProcess,
-  runSimulation,
   scheduleEvent,
 } from "../src/simulation.ts";
-import { get, initializeStore, put, registerStore } from "../src/resources.ts";
-import { randomIntegerBetween, randomSeeded } from "@std/random";
 
 /**
  * ER triage showcase:
@@ -336,10 +337,10 @@ async function runScenario(
   const stop = createEvent({ scheduledAt: SIM_TIME });
   sim.timeline = scheduleEvent(sim, stop);
 
-  const [done] = await runSimulation(sim, { untilEvent: stop });
+  const { result } = await runSimulation(sim, { untilEvent: stop });
 
   const latestByPatient = new Map<number, PatientData>();
-  for (const processState of Object.values(done.state)) {
+  for (const processState of Object.values(result.state)) {
     if (processState.type !== "patient") continue;
     const data = processState.data as Partial<PatientData>;
     if (typeof data.patientId !== "number") continue;
@@ -417,7 +418,7 @@ async function runScenario(
 
   return {
     discipline,
-    endedAt: done.currentTime,
+    endedAt: result.currentTime,
     finished: finished.length,
     urgentFinished: urgent.length,
     standardFinished: standard.length,

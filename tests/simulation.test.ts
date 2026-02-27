@@ -6,11 +6,11 @@ import {
   ProcessDefinition,
   StateData,
 } from "../src/model.ts";
+import { runSimulation } from "../src/runner.ts";
 import {
   createEvent,
   initializeSimulation,
   registerProcess,
-  runSimulation,
   scheduleEvent,
 } from "../src/simulation.ts";
 
@@ -23,17 +23,17 @@ Deno.test("basic event scheduling", async () => {
   sim.timeline = scheduleEvent(sim, e1);
   assertEquals(Object.keys(sim.timeline.events).length, 1);
 
-  const [stop, _stats] = await runSimulation(sim);
-  const finished = [...stop.timeline.transitions].reverse().find((transition) =>
-    transition.id === e1.id && transition.state === EventState.Finished
-  );
+  const { result } = await runSimulation(sim);
+  const finished = [...result.timeline.transitions].reverse().find((
+    transition,
+  ) => transition.id === e1.id && transition.state === EventState.Finished);
 
-  assertEquals(Object.keys(stop.timeline.events).length, 1);
+  assertEquals(Object.keys(result.timeline.events).length, 1);
   assert(finished);
   assertEquals(finished.at, 10);
   assert(
-    Object.values(stop.timeline.events).every((event) =>
-      stop.timeline.status[event.id] === EventState.Finished
+    Object.values(result.timeline.events).every((event) =>
+      result.timeline.status[event.id] === EventState.Finished
     ),
   );
 });
@@ -44,10 +44,10 @@ Deno.test("zero-duration events", async () => {
   const e1 = createEvent({ scheduledAt: sim.currentTime });
   sim.timeline = scheduleEvent(sim, e1);
 
-  const [stop, _stats] = await runSimulation(sim);
-  const finished = [...stop.timeline.transitions].reverse().find((transition) =>
-    transition.id === e1.id && transition.state === EventState.Finished
-  );
+  const { result } = await runSimulation(sim);
+  const finished = [...result.timeline.transitions].reverse().find((
+    transition,
+  ) => transition.id === e1.id && transition.state === EventState.Finished);
 
   assert(finished);
   assertEquals(finished.at, 0);
@@ -66,12 +66,12 @@ Deno.test("basic out of order scheduling", async () => {
   sim.timeline = scheduleEvent(sim, e1);
   assertEquals(Object.keys(sim.timeline.events).length, 3);
 
-  const [stop, _stats] = await runSimulation(sim);
+  const { result } = await runSimulation(sim);
 
-  assertEquals(Object.keys(stop.timeline.events).length, 3);
+  assertEquals(Object.keys(result.timeline.events).length, 3);
   assert(
-    Object.values(stop.timeline.events).every((event) =>
-      stop.timeline.status[event.id] === EventState.Finished
+    Object.values(result.timeline.events).every((event) =>
+      result.timeline.status[event.id] === EventState.Finished
     ),
   );
 });
@@ -114,13 +114,13 @@ Deno.test("basic event ordering", async () => {
   sim.timeline = scheduleEvent(sim, e5);
   sim.timeline = scheduleEvent(sim, e6);
 
-  const [stop, _stats] = await runSimulation(sim);
+  const { result } = await runSimulation(sim);
 
-  assertEquals(Object.keys(stop.timeline.events).length, 6);
+  assertEquals(Object.keys(result.timeline.events).length, 6);
   assertEquals(processedOrder, [0, 2, 5, 10, 15, 50]);
   assert(
-    Object.values(stop.timeline.events).every((event) =>
-      stop.timeline.status[event.id] === EventState.Finished
+    Object.values(result.timeline.events).every((event) =>
+      result.timeline.status[event.id] === EventState.Finished
     ),
   );
 });
@@ -156,7 +156,7 @@ Deno.test("scheduling events in the past", async () => {
   sim.timeline = scheduleEvent(sim, e2);
 
   await assertRejects(async () => {
-    const [_stop, _stats] = await runSimulation(sim);
+    await runSimulation(sim);
   });
 });
 
@@ -192,15 +192,15 @@ Deno.test("event process scheduling", async () => {
   sim.timeline = scheduleEvent(sim, e3);
   assertEquals(Object.keys(sim.timeline.events).length, 3);
 
-  const [stop, _stats] = await runSimulation(sim);
+  const { result } = await runSimulation(sim);
 
   assertEquals(results[10].id, e1.id);
   assertEquals(results[20].id, e2.id);
   assertEquals(results[30].id, e3.id);
 
   assert(
-    Object.values(stop.timeline.events).every((event) =>
-      stop.timeline.status[event.id] === EventState.Finished
+    Object.values(result.timeline.events).every((event) =>
+      result.timeline.status[event.id] === EventState.Finished
     ),
   );
 });
@@ -215,12 +215,12 @@ Deno.test("simulation until time condition", async () => {
   sim.timeline = scheduleEvent(sim, e2);
   sim.timeline = scheduleEvent(sim, e3);
 
-  const [stop, stats] = await runSimulation(sim, { untilTime: 20 });
+  const { result, stats } = await runSimulation(sim, { untilTime: 20 });
 
   assertEquals(stats.end, 20);
-  assertEquals(stop.timeline.status[e1.id], EventState.Finished);
-  assertEquals(stop.timeline.status[e2.id], EventState.Finished);
-  assertEquals(stop.timeline.status[e3.id], EventState.Scheduled);
+  assertEquals(result.timeline.status[e1.id], EventState.Finished);
+  assertEquals(result.timeline.status[e2.id], EventState.Finished);
+  assertEquals(result.timeline.status[e3.id], EventState.Scheduled);
 });
 
 Deno.test("simulation until event condition", async () => {
@@ -233,12 +233,12 @@ Deno.test("simulation until event condition", async () => {
   sim.timeline = scheduleEvent(sim, e2);
   sim.timeline = scheduleEvent(sim, e3);
 
-  const [stop, stats] = await runSimulation(sim, { untilEvent: e2 });
+  const { result, stats } = await runSimulation(sim, { untilEvent: e2 });
 
   assertEquals(stats.end, 20);
-  assertEquals(stop.timeline.status[e1.id], EventState.Finished);
-  assertEquals(stop.timeline.status[e2.id], EventState.Finished);
-  assertEquals(stop.timeline.status[e3.id], EventState.Scheduled);
+  assertEquals(result.timeline.status[e1.id], EventState.Finished);
+  assertEquals(result.timeline.status[e2.id], EventState.Finished);
+  assertEquals(result.timeline.status[e3.id], EventState.Scheduled);
 });
 
 Deno.test("events with same time process by priority order (lower number = higher priority)", async () => {
@@ -549,10 +549,10 @@ Deno.test("process state initialization", async () => {
 
   sim.timeline = scheduleEvent(sim, e1);
 
-  const [stop, _stats] = await runSimulation(sim);
-  assertEquals(stop.state[e1.id].step, "foo");
-  assertEquals(stop.state[e1.id].data.foo, "baz");
-  assertEquals(stop.state[e1.id].data.bar, 42.1337);
+  const { result } = await runSimulation(sim);
+  assertEquals(result.state[e1.id].step, "foo");
+  assertEquals(result.state[e1.id].data.foo, "baz");
+  assertEquals(result.state[e1.id].data.bar, 42.1337);
 });
 
 Deno.test("process state across steps", async () => {
@@ -633,8 +633,8 @@ Deno.test("process state across steps", async () => {
 
   sim.timeline = scheduleEvent(sim, e1);
 
-  const [stop, _stats] = await runSimulation(sim);
-  const terminal = Object.values(stop.state).find((state) =>
+  const { result } = await runSimulation(sim);
+  const terminal = Object.values(result.state).find((state) =>
     state.type === "foobar" && state.step === "baz"
   );
   assert(terminal);
@@ -759,7 +759,7 @@ Deno.test("process state inheritance (fork)", async () => {
 
   sim.timeline = scheduleEvent(sim, e1);
 
-  const [_stop, _stats] = await runSimulation(sim);
+  await runSimulation(sim);
 
   assertEquals(results["main"], 0);
   assertEquals(results["worker1"], 10);
@@ -845,8 +845,8 @@ Deno.test("process state inheritance (exec)", async () => {
 
   sim.timeline = scheduleEvent(sim, e1);
 
-  const [stop, _stats] = await runSimulation(sim);
-  const barStates = Object.values(stop.state).filter((state) =>
+  const { result } = await runSimulation(sim);
+  const barStates = Object.values(result.state).filter((state) =>
     state.type === "bar"
   );
   assertEquals(barStates.length, 2);
@@ -919,8 +919,8 @@ Deno.test("process state inheritance (spawn)", async () => {
 
   sim.timeline = scheduleEvent(sim, e1);
 
-  const [stop, _stats] = await runSimulation(sim);
-  const barState = Object.values(stop.state).find((state) =>
+  const { result } = await runSimulation(sim);
+  const barState = Object.values(result.state).find((state) =>
     state.type === "bar"
   );
   assert(barState);
@@ -933,13 +933,13 @@ Deno.test("default none process is a no-op", async () => {
   const e1 = createEvent({ scheduledAt: 5 }); // no process specified → defaults to none
   sim.timeline = scheduleEvent(sim, e1);
 
-  const [stop] = await runSimulation(sim);
+  const { result } = await runSimulation(sim);
 
-  assertEquals(stop.timeline.status[e1.id], EventState.Finished);
-  assertEquals(stop.state[e1.id].type, "none");
-  assertEquals(stop.state[e1.id].step, "none");
+  assertEquals(result.timeline.status[e1.id], EventState.Finished);
+  assertEquals(result.state[e1.id].type, "none");
+  assertEquals(result.state[e1.id].step, "none");
   // none handler returns next: [] so no new events are spawned
-  assertEquals(Object.keys(stop.timeline.events).length, 1);
+  assertEquals(Object.keys(result.timeline.events).length, 1);
 });
 
 Deno.test("events with same time and priority are processed in LIFO scheduling order", async () => {
@@ -994,22 +994,22 @@ Deno.test("simulation rate acts as best-effort wall-clock throttling", async () 
 
   const throttled = createTestSim();
   const startSlow = performance.now();
-  const [slowStop] = await runSimulation(throttled, { rate: 20 });
+  const slowStop = await runSimulation(throttled, { rate: 20 });
   const slowElapsed = performance.now() - startSlow;
 
   const unthrottled = createTestSim();
   const startFast = performance.now();
-  const [fastStop] = await runSimulation(unthrottled, { rate: -1 });
+  const fastStop = await runSimulation(unthrottled, { rate: -1 });
   const fastElapsed = performance.now() - startFast;
 
   assert(
-    Object.values(slowStop.timeline.events).every((event) =>
-      slowStop.timeline.status[event.id] === EventState.Finished
+    Object.values(slowStop.result.timeline.events).every((event) =>
+      slowStop.result.timeline.status[event.id] === EventState.Finished
     ),
   );
   assert(
-    Object.values(fastStop.timeline.events).every((event) =>
-      fastStop.timeline.status[event.id] === EventState.Finished
+    Object.values(fastStop.result.timeline.events).every((event) =>
+      fastStop.result.timeline.status[event.id] === EventState.Finished
     ),
   );
 
