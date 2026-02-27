@@ -114,14 +114,10 @@ export function run(current: Simulation): [Simulation, boolean] {
  */
 function step(sim: Simulation, event: Event): Simulation {
   // Advance simulation time to this event's scheduled time
+  // Start with a shallow copy of the timeline; finishEvent and scheduleEvent will do deep copies
   const nextSim: Simulation = {
     ...sim,
     currentTime: event.scheduledAt,
-    timeline: {
-      events: { ...sim.timeline.events },
-      status: { ...sim.timeline.status },
-      transitions: [...sim.timeline.transitions],
-    },
     state: { ...sim.state },
     stores: Object.fromEntries(
       Object.entries(sim.stores).map(([id, store]) => [
@@ -142,18 +138,16 @@ function step(sim: Simulation, event: Event): Simulation {
   // Update the event's process state in the simulation container
   nextSim.state[event.id] = { ...state };
 
-  // Mark the event as finished and append a lifecycle transition
-  nextSim.timeline = finishEvent(nextSim, event);
+  // Mark the events as finished and append a lifecycle transition
+  const finished = finish ? [...finish, event] : [event];
+  for (const finishedEvent of finished) {
+    nextSim.timeline = finishEvent(nextSim, finishedEvent);
+  }
 
   // Schedule the next events yielded by the current process if necessary
   // `Waiting` events are not automatically scheduled. This allows processes to yield events that are triggered by external conditions or other processes, rather than automatically handled at their scheduled time.
   for (const nextEvent of next) {
     nextSim.timeline = scheduleEvent(nextSim, nextEvent);
-  }
-
-  // Finish the old events yielded by the current process
-  for (const finishedEvent of finish ?? []) {
-    nextSim.timeline = finishEvent(nextSim, finishedEvent);
   }
 
   return nextSim;
@@ -299,7 +293,7 @@ export function scheduleEvent<T extends StateData>(
 
   return {
     ...sim.timeline,
-    events: { ...sim.timeline.events, [event.id]: { ...event } },
+    events: { ...sim.timeline.events, [event.id]: event },
     status: {
       ...sim.timeline.status,
       [event.id]: initialState,
