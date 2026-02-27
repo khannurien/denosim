@@ -13,12 +13,25 @@ import {
 } from "./model.ts";
 import { createEvent } from "./simulation.ts";
 
+/**
+ * Type guard that narrows a store event's `process.data` field from `StateData | undefined` to `T`.
+ * Used internally before accessing payload data from resumed put requests or buffered items, where a missing payload indicates a programming error in the store usage.
+ */
 function hasStorePayload<T extends StateData>(
   payload: StateData | undefined,
 ): payload is T {
   return payload !== undefined;
 }
 
+/**
+ * Creates a new store with:
+ * - Unique ID
+ * - Optional capacity (defaults to 1)
+ * - Blocking or non-blocking behavior (defaults to `true`)
+ * - A queueing discipline to follow (defaults to `QueueDiscipline.LIFO`)
+ * All queues (`buffer`, `getRequests`, `putRequests`) start empty.
+ * The returned store must be registered with `registerStore` before use in a simulation.
+ */
 export function initializeStore<
   T extends StateData = StateData,
   K extends StoreID = StoreID,
@@ -37,6 +50,10 @@ export function initializeStore<
   };
 }
 
+/**
+ * Adds a store to the simulation's store registry and returns the updated store definitions.
+ * The store's ID and payload type are reflected in the return type, enabling typed access via `sim.stores[id]` in subsequent calls.
+ */
 export function registerStore<
   R extends ProcessRegistry,
   S extends StoreRegistry,
@@ -82,6 +99,12 @@ function queueGet<T extends StateData = StateData>(
   }
 }
 
+/**
+ * Sends `data` to a store on behalf of `event`. Mutates `sim.stores` directly and returns a `StoreResult` describing the continuation. Three cases:
+ * 1. Pending consumer (`getRequests` non-empty): the put completes immediately. The waiting consumer is dequeued and rescheduled with the data attached (`resume`); its waiting placeholder event is marked for cleanup (`finish`). The producer receives a continuation event (`step`).
+ * 2. Blocking store, or non-blocking store at capacity (no pending consumer): the producer blocks. A waiting placeholder event carrying the data is created and added to `putRequests`. The same event is returned as `step` so the handler can schedule it.
+ * 3. Non-blocking store with available capacity (no pending consumer): the data is buffered. A continuation event is added to the store's `buffer` and returned as `step`.
+ */
 export function put<
   R extends ProcessRegistry,
   S extends StoreRegistry,
@@ -117,7 +140,7 @@ export function put<
     };
 
     // Reschedule the get request with the data attached
-    const updatedGet: Event<T> = createEvent<T>(sim, {
+    const updatedGet: Event<T> = createEvent({
       parent: getRequest.parent,
       scheduledAt: sim.currentTime,
       process: {
@@ -127,7 +150,7 @@ export function put<
       },
     });
 
-    const updatedPut: Event<T> = createEvent(sim, {
+    const updatedPut: Event<T> = createEvent({
       parent: event.id,
       scheduledAt: sim.currentTime,
       process: {
@@ -136,14 +159,14 @@ export function put<
       },
     });
 
-    return { step: updatedPut, resume: updatedGet };
+    return { step: updatedPut, resume: [updatedGet], finish: [getRequest] };
   }
 
   // Blocking store or non-blocking store without pending get request: block put
   if (
     store.blocking || (!store.blocking && store.buffer.length >= store.capacity)
   ) {
-    const updatedPut: Event<T> = createEvent(sim, {
+    const updatedPut: Event<T> = createEvent({
       parent: event.id,
       waiting: true,
       scheduledAt: sim.currentTime,
@@ -166,7 +189,7 @@ export function put<
   }
 
   // Non-blocking store with capacity available: use buffer
-  const updatedPut: Event<T> = createEvent(sim, {
+  const updatedPut: Event<T> = createEvent({
     parent: event.id,
     scheduledAt: sim.currentTime,
     process: {
@@ -187,6 +210,12 @@ export function put<
   return { step: updatedPut };
 }
 
+/**
+ * Retrieves an item from a store on behalf of `event`. Mutates `sim.stores` directly and returns a `StoreResult` describing the continuation. Three cases:
+ * 1. Pending producer (`putRequests` non-empty): the get completes immediately. The waiting producer is dequeued and rescheduled (`resume`); its waiting placeholder event is marked for cleanup (`finish`). The consumer receives a continuation event (`step`) with the data attached.
+ * 2. Non-blocking store with buffered data (`buffer` non-empty): the oldest (FIFO) or newest (LIFO) buffered item is dequeued and its data is attached to the consumer's continuation (`step`).
+ * 3. No data available: the consumer blocks. A waiting placeholder event is created and added to `getRequests`. The same event is returned as `step` so the handler can schedule it.
+ */
 export function get<
   R extends ProcessRegistry,
   S extends StoreRegistry,
@@ -228,7 +257,7 @@ export function get<
       );
     }
 
-    const updatedPut: Event<T> = createEvent<T>(sim, {
+    const updatedPut: Event<T> = createEvent({
       parent: putRequest.parent,
       scheduledAt: sim.currentTime,
       process: {
@@ -238,7 +267,7 @@ export function get<
       },
     });
 
-    const updatedGet = createEvent<T>(sim, {
+    const updatedGet = createEvent({
       parent: event.id,
       scheduledAt: sim.currentTime,
       process: {
@@ -248,7 +277,7 @@ export function get<
       },
     });
 
-    return { step: updatedGet, resume: updatedPut };
+    return { step: updatedGet, resume: [updatedPut], finish: [putRequest] };
   }
 
   // Non-blocking store: check buffer (completed puts)
@@ -272,7 +301,7 @@ export function get<
       );
     }
 
-    const updatedGet = createEvent<T>(sim, {
+    const updatedGet = createEvent({
       parent: event.id,
       scheduledAt: sim.currentTime,
       process: {
@@ -286,7 +315,7 @@ export function get<
   }
 
   // No data available: wait in queue
-  const updatedGet = createEvent(sim, {
+  const updatedGet = createEvent({
     parent: event.id,
     scheduledAt: sim.currentTime,
     waiting: true,

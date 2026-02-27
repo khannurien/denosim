@@ -1,9 +1,10 @@
 /**
  * Core simulation container that maintains:
  * - The current virtual time of the simulation
- * - All events that have been scheduled
+ * - The simulation timeline (events along with their state transitions)
  * - A process definition registry for all processes available in the simulation
  * - The current state of all running processes
+ * - All resource stores registered for use in process handlers
  */
 export interface Simulation<
   R extends ProcessRegistry = ProcessRegistry,
@@ -17,13 +18,10 @@ export interface Simulation<
   currentTime: Timestamp;
 
   /**
-   * Queue of all events in the system.
-   * Includes:
-   * - Newly scheduled but not yet processed events
-   * - Partially processed events, which have related process execution state
-   * - Completed events (for historical tracking)
+   * Full lifecycle record for every event in the simulation.
+   * Combines immutable event definitions with the append-only transition log and derived status index that makes queries O(1).
    */
-  events: Event[];
+  timeline: Timeline;
 
   /**
    * Registry of all process definitions available in the simulation.
@@ -39,8 +37,33 @@ export interface Simulation<
    */
   state: Record<EventID, ProcessState>;
 
-  /** Current state of all stores in the simulation, used for process synchronization */
+  /**
+   * Current state of all stores in the simulation.
+   * Stores may be used for inter-process communications (message passing, data sharing, synchronization, etc.).
+   */
   stores: StoreDefinitions<S>;
+}
+
+/**
+ * Parallel data structures that together describe the full lifecycle of every event:
+ * - `events`: immutable event definitions, keyed by ID (what the event is)
+ * - `transitions`: append-only log of every state change (when and how it progressed)
+ * - `status`: denormalized current-state index derived from `transitions` (fast O(1) lookup)
+ *
+ * `transitions` is the source of truth for event progression; `status` is a derived cache.
+ * Together they bound each event's lifetime: the first transition records when it was scheduled (or placed in waiting), and subsequent transitions record state changes through to `Finished`.
+ *
+ * `transitions` is append-only and grows with the simulation; old entries are pruned at checkpoint boundaries via `pruneWorkingState` while the full history remains on disk.
+ */
+export interface Timeline {
+  /** Immutable event definitions keyed by event ID */
+  events: Record<EventID, Event>;
+
+  /** Always reflects the most recent transition for each event ID */
+  status: Record<EventID, EventState>;
+
+  /** Append-only source of truth for event progression */
+  transitions: EventTransition[];
 }
 
 /**
@@ -48,12 +71,6 @@ export interface Simulation<
  * Events progress through states with possible blocking at Waiting.
  */
 export enum EventState {
-  /**
-   * Initial state when event is first created.
-   * Indicates the event has been instantiated but not yet scheduled.
-   */
-  Fired = "Fired",
-
   /**
    * Event has been scheduled for future processing.
    * Will be executed when simulation time reaches `scheduledAt`.
@@ -74,11 +91,25 @@ export enum EventState {
   Finished = "Finished",
 }
 
+/** Append-only event lifecycle transition entry */
+export interface EventTransition {
+  /** Event identifier affected by this transition */
+  id: EventID;
+
+  /** Lifecycle state reached by the event */
+  state: EventState;
+
+  /** Simulation timestamp when the transition occurred */
+  at: Timestamp;
+}
+
 /**
  * Represents a discrete event in the simulation system.
  * Events can be tied to processes, which define their behavior.
- * Events are immutable - state changes are tied to new event instances.
+ * Event definitions are immutable; lifecycle progression is represented through `EventTransition` entries.
  * Events can have parent-child relationships in the context of their process.
+ * Events can be created with a `waiting` attribute that places them directly in `EventState.Waiting`, preventing their execution until they are explicitly resumed.
+ * Events scheduled at the same timestamp will be selected based on their priority (the lower the value, the higher the priority). In case of a tie, the scheduler dequeues events in a LIFO fashion.
  */
 export interface Event<T extends StateData = StateData> {
   /** Unique identifier for the event */
@@ -87,8 +118,8 @@ export interface Event<T extends StateData = StateData> {
   /** Optional parent event ID; defines a graph of events across processes */
   parent?: EventID;
 
-  /** Current lifecycle state of the event */
-  status: EventState;
+  /** If `true`, the event will not be scheduled for process execution */
+  waiting?: boolean;
 
   /**
    * Optional event priority for scheduling; lower value yields higher priority (cf. UNIX `nice`).
@@ -97,22 +128,10 @@ export interface Event<T extends StateData = StateData> {
   priority: number;
 
   /**
-   * When the event was initially created.
-   * Represents the simulation time when `createEvent()` was called.
-   */
-  firedAt: Timestamp;
-
-  /**
    * When the event should be processed.
    * Simulation time will jump directly to this value when processed.
    */
   scheduledAt: Timestamp;
-
-  /**
-   * When the event completed processing.
-   * Only populated when `status` is `EventState.Finished`.
-   */
-  finishedAt?: Timestamp;
 
   /**
    * Type of process to execute when event is handled.
@@ -123,7 +142,7 @@ export interface Event<T extends StateData = StateData> {
 }
 
 /**
- * Synchronization data structure used for coordinating processes.
+ * Shared data structure used for coordinating processes.
  * Stores are used through `get` and `put` primitives that work in a LIFO fashion.
  * Used for inter-process synchronization, producer-consumer patterns, resource sharing, etc.
  */
@@ -160,17 +179,25 @@ export interface Store<
  * Returned by `get` and `put` store operations to indicate the outcome in terms of continuation and possible resume events.
  */
 export interface StoreResult<T extends StateData = StateData> {
-  /** Continuation event for the calling process.
+  /**
+   * Continuation event for the calling process.
    * Must be scheduled by the process handler of the calling event.
    */
   step: Event<T>;
 
-  /** Resume event for the blocked process, if any.
+  /**
+   * Resume event for the blocked process, if any.
    * Used to resume a process that was blocked by a store operation when the conditions for resumption are met.
    * This is relevant for blocking stores where processes can be paused until certain conditions are satisfied (e.g., an item is put into the store or space becomes available).
    * In non-blocking scenarios, this may be `undefined` since the process can continue immediately without waiting for store conditions.
    */
-  resume?: Event<T>;
+  resume?: Event<T>[];
+
+  /**
+   * Events to explicitly mark as `Finished` as a side effect of the store operation.
+   * Typically used to clean up waiting request events once the blocked condition they represent has been resolved.
+   */
+  finish?: Event[];
 }
 
 /** Timestamp for simulation clock */
@@ -200,25 +227,14 @@ export type StoreDefinitions<R extends StoreRegistry> = {
 };
 
 /**
- * Used to specify and narrow the type of input state data for a process.
- * This is the type of the state data that is passed to the process step handler.
+ * Used to specify and narrow the type of input state data for a process step.
+ * Associates a process step to the type of the state data that is passed to the process step handler.
  */
-type StateInput = StateData;
-/**
- * Used to specify and narrow the types of output state data for a process.
- * This is an ordered list of types that map to the `next` events yielded by a process step.
- */
-type StateOutput = StateData[];
-
-/** Maps process steps to their input and output state data types */
-export type StepStateMap<
-  I extends StateInput = StateInput,
-  O extends StateOutput = StateOutput,
-> = Record<StepType, [I, O]>;
+export type StepStateMap = Record<StepType, StateData>;
 
 /** Dynamically maps process steps to their corresponding handlers */
-export type StepsDefinition<T extends StepStateMap> = {
-  [K in keyof T]: ProcessHandler<T[K][0], T[K][1]>;
+export type StepsDefinition<M extends StepStateMap> = {
+  [K in keyof M]: ProcessHandler<M, K>;
 };
 
 /**
@@ -267,30 +283,41 @@ export interface ProcessCall<T extends StateData = StateData> {
   data?: T;
 }
 
+// type ValidProcessState<M extends StepStateMap> = {
+//   [K in keyof M]: { type: ProcessType; step: K; data: M[K] };
+// }[keyof M];
+
+type ProcessStateFor<M extends StepStateMap> = {
+  [K in keyof M]: ProcessState<M[K], K & StepType>;
+}[keyof M];
+
 /**
  * A process handler is a function that executes the processing logic associated with an event, and returns a
  * process step.
  * Knowing the current simulation state, it is capable of computing the state of the process's next step.
  */
 export type ProcessHandler<
-  I extends StateInput = StateInput,
-  O extends StateOutput = StateOutput,
+  M extends StepStateMap,
+  K extends keyof M,
 > = (
   sim: Simulation,
-  event: Event<I>,
-  state: ProcessState<I>,
-) => ProcessStep<I, O>;
+  event: Event<M[K]>,
+  state: ProcessState<M[K], K & StepType>,
+) => ProcessStep<M>;
 
 /**
  * This is a process-level structure that is used to keep track of a process's progress and data.
  * It is passed to the process handler of an event to compute the next step of the process.
  */
-export interface ProcessState<T extends StateData = StateData> {
+export interface ProcessState<
+  T extends StateData = StateData,
+  K extends StepType = StepType,
+> {
   /** Unique process type identifier */
   type: ProcessType;
 
   /** Current step of the process */
-  step: StepType;
+  step: K;
 
   /** Current state data for the process */
   data: T;
@@ -300,12 +327,9 @@ export interface ProcessState<T extends StateData = StateData> {
  * This is a scheduler-level data structure that is used to keep track of a process's progress and data.
  * It is returned by the process handler of an event and stored in the simulation state.
  */
-export interface ProcessStep<
-  I extends StateInput = StateInput,
-  O extends StateOutput = StateOutput,
-> {
+export interface ProcessStep<M extends StepStateMap = StepStateMap> {
   /** Process handler returns the updated state of the process */
-  state: ProcessState<I>;
+  state: ProcessStateFor<M>;
 
   /**
    * Process handler returns the next events to be scheduled.
@@ -313,7 +337,13 @@ export interface ProcessStep<
    * - If `type O = [A, B, C]`, resolves to [Event<A>, Event<B>, Event<C>];
    * - Mapped types over tuples preserve order and length.
    */
-  next: { [K in keyof O]: Event<O[K]> };
+  next: Event[];
+
+  /**
+   * Optional events to explicitly mark as `Finished` after this step.
+   * Used when the handler needs to terminate events currently in `EventState.Waiting`.
+   */
+  finish?: Event[];
 }
 
 /**
@@ -328,6 +358,18 @@ export interface SimulationStats {
 
   /** Real-world time (in milliseconds) the simulation took to complete */
   duration: number;
+}
+
+/**
+ * Return value of a completed simulation run.
+ * Bundles the final simulation along with run statistics.
+ */
+export interface SimulationResult<T> {
+  /** Final simulation representation after the run completes */
+  result: T;
+
+  /** Statistics for the completed run */
+  stats: SimulationStats;
 }
 
 /**

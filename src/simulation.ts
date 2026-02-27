@@ -9,23 +9,33 @@ import {
   ProcessType,
   RunSimulationOptions,
   Simulation,
-  SimulationStats,
   StateData,
   StepStateMap,
+  Timeline,
 } from "./model.ts";
-import { createDelta, DeltaEncodedSimulation } from "./memory.ts";
-import { dumpToDisk, resolveRunContext, shouldDump } from "./runner.ts";
 
 /**
  * Initializes a new simulation instance with:
  * - `currentTime` set to 0 (starting point of simulation)
- * - Empty events array (no scheduled events)
+ * - Empty timeline (no initial events)
  * - Process registry populated with a dummy process (`none`)
  * - Empty state array (no running processes)
  */
 export function initializeSimulation(): Simulation {
+  const sim = {
+    currentTime: 0,
+    timeline: {
+      events: {},
+      status: {},
+      transitions: [],
+    },
+    registry: {},
+    state: {},
+    stores: {},
+  };
+
   const emptyProcess: ProcessDefinition<{
-    none: [StateData, []];
+    none: StateData;
   }> = {
     type: "none",
     initial: "none",
@@ -39,97 +49,9 @@ export function initializeSimulation(): Simulation {
     },
   };
 
-  const sim = {
-    currentTime: 0,
-    events: [],
-    registry: {
-      "none": emptyProcess,
-    },
-    state: {},
-    stores: {},
-  };
+  sim.registry = registerProcess(sim, emptyProcess);
 
   return sim;
-}
-
-/**
- * Runs the discrete-event simulation until:
- * - either no more events remain to process;
- * - or the simulation time reaches at least the specified `until` time;
- * - or the simulation reaches a point where the specified `until` event is processed.
- * The simulation processes events in chronological order (earliest first).
- * Playback speed can be adjusted by passing a simulation rate (expressed in Hz).
- * Stores intermediate simulation state (instances) for each event processed.
- * TODO: Publishes states as they go on the optional socket.
- * Checks continuation (events remaining) and termination conditions (i.e. timestamp or event).
- * Returns all the instances along with statistics about the simulation run.
- */
-export async function runSimulation(
-  init: Simulation,
-  options?: RunSimulationOptions,
-): Promise<[Simulation, SimulationStats]> {
-  const [sim, stats] = await runSimulationWithDeltas(init, options);
-
-  return [sim.current, stats];
-}
-
-/**
- * Runs the simulation and exposes the delta/checkpoint representation.
- * This is intended for persistence, replay, and memory management tooling.
- */
-export async function runSimulationWithDeltas(
-  init: Simulation,
-  options?: RunSimulationOptions,
-): Promise<[DeltaEncodedSimulation, SimulationStats]> {
-  const runContext = await resolveRunContext(options);
-  const dumpInterval = runContext.manifest.dump.interval;
-
-  const start = performance.now();
-
-  const sim: DeltaEncodedSimulation = {
-    base: { ...init },
-    deltas: [],
-    current: { ...init },
-  };
-
-  while (true) {
-    const [next, continuation] = run(sim.current);
-    if (!continuation) break;
-
-    // Memory management: store deltas and dump to disk if necessary
-    sim.deltas.push(createDelta(sim.current, next));
-    sim.current = next;
-
-    if (shouldDump(sim, dumpInterval)) {
-      await dumpToDisk(sim, runContext);
-      sim.base = next;
-      sim.deltas = [];
-    }
-
-    if (options && shouldTerminate(next, options)) break;
-    if (options?.rate) await delay(options.rate);
-  }
-
-  const end = performance.now();
-
-  return [
-    sim,
-    {
-      end: sim.current.currentTime,
-      duration: end - start,
-    },
-  ];
-}
-
-/**
- * Helper function to introduce a wall-clock delay based on desired simulation rate (in Hz).
- * If rate is not provided, executes immediately.
- * Otherwise, computes delay in milliseconds and times out accordingly.
- */
-function delay(rate: number): Promise<void> {
-  return new Promise((resolve) =>
-    setTimeout(resolve, rate > 0 ? 1000 / rate : 0)
-  );
 }
 
 /**
@@ -138,7 +60,7 @@ function delay(rate: number): Promise<void> {
  * If `untilEvent` is provided, terminates when the event is finished.
  * Always returns false if neither condition is provided.
  */
-function shouldTerminate(
+export function shouldTerminate(
   sim: Simulation,
   options: RunSimulationOptions,
 ): boolean {
@@ -148,8 +70,7 @@ function shouldTerminate(
 
   const untilEvent = options.untilEvent;
   const eventMet = untilEvent !== undefined &&
-    sim.events.find((event) => event.id === untilEvent.id)?.status ===
-      EventState.Finished;
+    sim.timeline.status[untilEvent.id] === EventState.Finished;
 
   return timeMet || eventMet;
 }
@@ -159,12 +80,12 @@ function shouldTerminate(
  * Returns a boolean indicating whether the simulation should continue.
  * Simulation should continue if there are more events to process in queue.
  */
-function run(current: Simulation): [Simulation, boolean] {
+export function run(current: Simulation): [Simulation, boolean] {
   // Get all scheduled events that haven't been processed yet,
   // sorted in descending order so we can efficiently pop the earliest event
-  const pending = current.events.filter((event) =>
+  const pending = Object.values(current.timeline.events).filter((event) =>
     (event.scheduledAt >= current.currentTime) &&
-    (event.status === EventState.Scheduled)
+    (current.timeline.status[event.id] === EventState.Scheduled)
   ).sort((a, b) => {
     return a.scheduledAt !== b.scheduledAt
       ? b.scheduledAt - a.scheduledAt
@@ -193,10 +114,10 @@ function run(current: Simulation): [Simulation, boolean] {
  */
 function step(sim: Simulation, event: Event): Simulation {
   // Advance simulation time to this event's scheduled time
+  // Start with a shallow copy of the timeline; finishEvent and scheduleEvent will do deep copies
   const nextSim: Simulation = {
     ...sim,
     currentTime: event.scheduledAt,
-    events: [...sim.events],
     state: { ...sim.state },
     stores: Object.fromEntries(
       Object.entries(sim.stores).map(([id, store]) => [
@@ -211,30 +132,22 @@ function step(sim: Simulation, event: Event): Simulation {
     ),
   };
 
-  // Handle the event by executing its process, which may yield new events
-  const { state, next } = handleEvent(nextSim, event);
+  // Handle the event by executing its process, which may yield new events to schedule and old events to finish
+  const { state, next, finish } = handleEvent(nextSim, event);
 
   // Update the event's process state in the simulation container
   nextSim.state[event.id] = { ...state };
 
-  // Update the event instance in the global event queue
-  nextSim.events = nextSim.events.map((previous) =>
-    (previous.id === event.id)
-      ? {
-        ...previous,
-        status: EventState.Finished,
-        finishedAt: nextSim.currentTime,
-      }
-      : previous
-  );
+  // Mark the events as finished and append a lifecycle transition
+  const finished = finish ? [...finish, event] : [event];
+  for (const finishedEvent of finished) {
+    nextSim.timeline = finishEvent(nextSim, finishedEvent);
+  }
 
   // Schedule the next events yielded by the current process if necessary
-  // TODO: ? [...nextSim.events, nextEvent]
-  // Should we leave `Waiting` (intermediary) events "dangling" in the final queue?
+  // `Waiting` events are not automatically scheduled. This allows processes to yield events that are triggered by external conditions or other processes, rather than automatically handled at their scheduled time.
   for (const nextEvent of next) {
-    nextSim.events = nextEvent.status === EventState.Waiting
-      ? nextSim.events
-      : scheduleEvent(nextSim, nextEvent);
+    nextSim.timeline = scheduleEvent(nextSim, nextEvent);
   }
 
   return nextSim;
@@ -337,21 +250,20 @@ export function registerProcess<
  * Returns a new event with:
  * - Unique ID
  * - Optional parent event ID (defaults to `undefined`)
- * - Initial event state set to `Waiting` or `Fired`
+ * - Initial event status optionally set to `Waiting`
  * - An optional priority value (the lower the value, the higher the priority; defaults to 0)
- * - Timestamps for when it was created and scheduled
+ * - Scheduled timestamp
  * - Optional process to run on event handling (defaults to `none`, the dummy process)
  */
 export function createEvent<T extends StateData>(
-  sim: Simulation,
   options: CreateEventOptions<T>,
 ): Event<T> {
   return {
-    ...options,
     id: crypto.randomUUID(),
-    status: options.waiting ? EventState.Waiting : EventState.Fired,
+    parent: options.parent,
+    waiting: options.waiting,
     priority: options.priority ?? 0,
-    firedAt: sim.currentTime,
+    scheduledAt: options.scheduledAt,
     process: options.process ? { ...options.process } : {
       type: "none",
     },
@@ -361,12 +273,13 @@ export function createEvent<T extends StateData>(
 /**
  * Schedules an event for future processing in the simulation.
  * Validates that the event isn't scheduled in the past.
- * Returns updated events array with the new scheduled event.
+ * `initialState` defaults to `EventState.Scheduled` unless `waiting` specificed at event creation when expected to block until explicitly resumed (through e.g. store synchronization primitives).
+ * Returns an updated Timeline reflecting the new event and its initial transition.
  */
 export function scheduleEvent<T extends StateData>(
   sim: Simulation,
   event: Event<T>,
-): Event[] {
+): Timeline {
   if (event.scheduledAt < sim.currentTime) {
     throw RangeError(
       `Event scheduled at a point in time in the past: ${event.id} ` +
@@ -374,8 +287,39 @@ export function scheduleEvent<T extends StateData>(
     );
   }
 
-  return [
-    ...sim.events,
-    { ...event, status: EventState.Scheduled },
-  ];
+  const initialState: EventState = event.waiting
+    ? EventState.Waiting
+    : EventState.Scheduled;
+
+  return {
+    ...sim.timeline,
+    events: { ...sim.timeline.events, [event.id]: event },
+    status: {
+      ...sim.timeline.status,
+      [event.id]: initialState,
+    },
+    transitions: [
+      ...sim.timeline.transitions,
+      { id: event.id, state: initialState, at: sim.currentTime },
+    ],
+  };
+}
+
+/**
+ * Closes an event's lifecycle in the timeline by marking it `Finished`.
+ * Because the timeline is append-only and events are never deleted, this signals completion and excludes the event from future scheduling.
+ * Returns an updated Timeline with the event's status marked as `Finished` and the corresponding transition appended.
+ */
+export function finishEvent<T extends StateData>(
+  sim: Simulation,
+  event: Event<T>,
+): Timeline {
+  return {
+    ...sim.timeline,
+    status: { ...sim.timeline.status, [event.id]: EventState.Finished },
+    transitions: [
+      ...sim.timeline.transitions,
+      { id: event.id, state: EventState.Finished, at: sim.currentTime },
+    ],
+  };
 }

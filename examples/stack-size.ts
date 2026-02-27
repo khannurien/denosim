@@ -1,13 +1,11 @@
+import { Event, ProcessDefinition, StateData } from "../src/model.ts";
+import { runSimulation } from "../src/runner.ts";
 import {
   createEvent,
-  Event,
   initializeSimulation,
-  ProcessDefinition,
   registerProcess,
-  runSimulation,
   scheduleEvent,
-  StateData,
-} from "../mod.ts";
+} from "../src/simulation.ts";
 
 if (import.meta.main) {
   const sim = initializeSimulation();
@@ -18,8 +16,8 @@ if (import.meta.main) {
   }
 
   const foo: ProcessDefinition<{
-    start: [FooData, [FooData]];
-    stop: [FooData, []];
+    start: FooData;
+    stop: FooData;
   }> = {
     type: "foo",
     initial: "start",
@@ -31,7 +29,7 @@ if (import.meta.main) {
           }; got count = ${state.data["count"]}`,
         );
 
-        const nextEvent: Event<FooData> = createEvent(sim, {
+        const nextEvent: Event<FooData> = createEvent({
           parent: event.id,
           scheduledAt: sim.currentTime < state.data["stop"]
             ? sim.currentTime + 1
@@ -68,7 +66,7 @@ if (import.meta.main) {
 
   sim.registry = registerProcess(sim, foo);
 
-  const e1 = createEvent(sim, {
+  const e1 = createEvent({
     scheduledAt: 0,
     process: {
       type: "foo",
@@ -78,10 +76,10 @@ if (import.meta.main) {
       },
     },
   });
-  sim.events = scheduleEvent(sim, e1);
+  sim.timeline = scheduleEvent(sim, e1);
 
-  const [stop, stats] = await runSimulation(sim);
+  const { result, stats } = await runSimulation(sim);
 
-  console.log(`Simulation ended at ${stop.currentTime}`);
+  console.log(`Simulation ended at ${result.currentTime}`);
   console.log(`Simulation took: ${stats.duration} ms`);
 }

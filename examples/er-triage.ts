@@ -1,19 +1,19 @@
+import { randomIntegerBetween, randomSeeded } from "@std/random";
+
+import {
+  Event,
+  ProcessDefinition,
+  QueueDiscipline,
+  StateData,
+} from "../src/model.ts";
+import { get, initializeStore, put, registerStore } from "../src/resources.ts";
+import { runSimulation } from "../src/runner.ts";
 import {
   createEvent,
-  Event,
-  get,
   initializeSimulation,
-  initializeStore,
-  ProcessDefinition,
-  put,
-  QueueDiscipline,
   registerProcess,
-  registerStore,
-  runSimulation,
   scheduleEvent,
-  StateData,
-} from "../mod.ts";
-import { randomIntegerBetween, randomSeeded } from "@std/random";
+} from "../src/simulation.ts";
 
 /**
  * ER triage showcase:
@@ -147,7 +147,7 @@ async function runScenario(
       doctorId: `U${i + 1}`,
       pool: URGENT_POOL_ID,
     };
-    const seedEvent = createEvent<DoctorToken>(sim, {
+    const seedEvent = createEvent({
       scheduledAt: 0,
       process: { type: "none", data: token },
     });
@@ -159,7 +159,7 @@ async function runScenario(
       doctorId: `G${i + 1}`,
       pool: GENERAL_POOL_ID,
     };
-    const seedEvent = createEvent<DoctorToken>(sim, {
+    const seedEvent = createEvent({
       scheduledAt: 0,
       process: { type: "none", data: token },
     });
@@ -167,10 +167,10 @@ async function runScenario(
   }
 
   const patient: ProcessDefinition<{
-    arrive: [PatientData, StateData[]];
-    waitDoctor: [PatientData, StateData[]];
-    treat: [PatientData, StateData[]];
-    done: [PatientData, StateData[]];
+    arrive: PatientData;
+    waitDoctor: PatientData;
+    treat: PatientData;
+    done: PatientData;
   }> = {
     type: "patient",
     initial: "arrive",
@@ -183,10 +183,10 @@ async function runScenario(
           );
         }
 
-        const wait = get(sim, event, pool);
+        const { step } = get(sim, event, pool);
         return {
           state: { ...state, step: "waitDoctor" },
-          next: [wait.step],
+          next: [step],
         };
       },
       waitDoctor(sim, event, state) {
@@ -212,7 +212,7 @@ async function runScenario(
         return {
           state: { ...state, step: "treat", data: updated },
           next: [
-            createEvent(sim, {
+            createEvent({
               parent: event.id,
               scheduledAt: sim.currentTime + updated.serviceTime,
               process: {
@@ -239,17 +239,19 @@ async function runScenario(
           );
         }
 
-        const releaseEvent = createEvent<DoctorToken>(sim, {
+        const releaseEvent = createEvent({
           parent: event.id,
           scheduledAt: sim.currentTime,
           process: { type: "none" },
         });
-        const release = put(sim, releaseEvent, pool, { doctorId, pool });
+        const { step, resume, finish } = put(sim, releaseEvent, pool, {
+          doctorId,
+          pool,
+        });
         return {
           state: { ...state, step: "done", data: finished },
-          next: release.resume
-            ? [release.step, release.resume]
-            : [release.step],
+          next: resume ? [step, ...resume] : [step],
+          finish: finish ?? [],
         };
       },
       done(_sim, _event, state) {
@@ -259,7 +261,7 @@ async function runScenario(
   };
 
   const arrivals: ProcessDefinition<{
-    run: [ArrivalState, StateData[]];
+    run: ArrivalState;
   }> = {
     type: "arrivals",
     initial: "run",
@@ -286,7 +288,7 @@ async function runScenario(
 
         const nextId = state.data.nextId + 1;
         const events: Event[] = [
-          createEvent(sim, {
+          createEvent({
             scheduledAt: sim.currentTime,
             process: {
               type: "patient",
@@ -299,7 +301,7 @@ async function runScenario(
         const nextAt = sim.currentTime + interArrival;
         if (nextAt <= SIM_TIME) {
           events.push(
-            createEvent(sim, {
+            createEvent({
               parent: event.id,
               scheduledAt: nextAt,
               priority: -1,
@@ -323,22 +325,22 @@ async function runScenario(
   sim.registry = registerProcess(sim, patient);
   sim.registry = registerProcess(sim, arrivals);
 
-  const start = createEvent(sim, {
+  const start = createEvent({
     scheduledAt: 0,
     process: {
       type: "arrivals",
       data: { nextId: 1 },
     },
   });
-  sim.events = scheduleEvent(sim, start);
+  sim.timeline = scheduleEvent(sim, start);
 
-  const stop = createEvent(sim, { scheduledAt: SIM_TIME });
-  sim.events = scheduleEvent(sim, stop);
+  const stop = createEvent({ scheduledAt: SIM_TIME });
+  sim.timeline = scheduleEvent(sim, stop);
 
-  const [done] = await runSimulation(sim, { untilEvent: stop });
+  const { result } = await runSimulation(sim, { untilEvent: stop });
 
   const latestByPatient = new Map<number, PatientData>();
-  for (const processState of Object.values(done.state)) {
+  for (const processState of Object.values(result.state)) {
     if (processState.type !== "patient") continue;
     const data = processState.data as Partial<PatientData>;
     if (typeof data.patientId !== "number") continue;
@@ -416,7 +418,7 @@ async function runScenario(
 
   return {
     discipline,
-    endedAt: done.currentTime,
+    endedAt: result.currentTime,
     finished: finished.length,
     urgentFinished: urgent.length,
     standardFinished: standard.length,
