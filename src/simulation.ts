@@ -305,6 +305,11 @@ export function scheduleEvent<T extends StateData>(
   };
 }
 
+/**
+ * Closes an event's lifecycle in the timeline by marking it `Finished`.
+ * Because the timeline is append-only and events are never deleted, this signals completion and excludes the event from future scheduling.
+ * Returns an updated Timeline with the event's status marked as `Finished` and the corresponding transition appended.
+ */
 export function finishEvent<T extends StateData>(
   sim: Simulation,
   event: Event<T>,

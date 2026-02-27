@@ -108,7 +108,7 @@ export interface EventTransition {
  * Events can be tied to processes, which define their behavior.
  * Event definitions are immutable; lifecycle progression is represented through `EventTransition` entries.
  * Events can have parent-child relationships in the context of their process.
- * TODO: They can be created with a `waiting` attribute that...
+ * Events can be created with a `waiting` attribute that places them directly in `EventState.Waiting`, preventing their execution until they are explicitly resumed.
  * Events scheduled at the same timestamp will be selected based on their priority (the lower the value, the higher the priority). In case of a tie, the scheduler dequeues events in a LIFO fashion.
  */
 export interface Event<T extends StateData = StateData> {
@@ -118,7 +118,7 @@ export interface Event<T extends StateData = StateData> {
   /** Optional parent event ID; defines a graph of events across processes */
   parent?: EventID;
 
-  /** TODO: */
+  /** If `true`, the event will not be scheduled for process execution */
   waiting?: boolean;
 
   /**
@@ -194,7 +194,8 @@ export interface StoreResult<T extends StateData = StateData> {
   resume?: Event<T>[];
 
   /**
-   * TODO:
+   * Events to explicitly mark as `Finished` as a side effect of the store operation.
+   * Typically used to clean up waiting request events once the blocked condition they represent has been resolved.
    */
   finish?: Event[];
 }
@@ -339,7 +340,8 @@ export interface ProcessStep<M extends StepStateMap = StepStateMap> {
   next: Event[];
 
   /**
-   * TODO:
+   * Optional events to explicitly mark as `Finished` after this step.
+   * Used when the handler needs to terminate events currently in `EventState.Waiting`.
    */
   finish?: Event[];
 }
@@ -359,13 +361,14 @@ export interface SimulationStats {
 }
 
 /**
- * TODO:
+ * Return value of a completed simulation run.
+ * Bundles the final simulation along with run statistics.
  */
 export interface SimulationResult<T> {
-  /** TODO: */
+  /** Final simulation representation after the run completes */
   result: T;
 
-  /** TODO: */
+  /** Statistics for the completed run */
   stats: SimulationStats;
 }
 

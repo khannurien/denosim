@@ -310,6 +310,11 @@ export async function reconstructFullCurrent(
   return mergeReplayState(full, tail);
 }
 
+/**
+ * Merges two simulation states for full-history reconstruction after a run with checkpoints.
+ * Used to fold checkpoint snapshots together with the in-memory tail into a single replay-complete simulation state.
+ * Events and statuses from `current` take precedence over `previous`; transitions are concatenated in chronological order.
+ */
 function mergeReplayState(
   previous: Simulation,
   current: Simulation,
