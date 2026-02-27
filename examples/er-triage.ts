@@ -1,18 +1,17 @@
 import {
-  createEvent,
   Event,
-  get,
-  initializeSimulation,
-  initializeStore,
   ProcessDefinition,
-  put,
   QueueDiscipline,
+  StateData,
+} from "../src/model.ts";
+import {
+  createEvent,
+  initializeSimulation,
   registerProcess,
-  registerStore,
   runSimulation,
   scheduleEvent,
-  StateData,
-} from "../mod.ts";
+} from "../src/simulation.ts";
+import { get, initializeStore, put, registerStore } from "../src/resources.ts";
 import { randomIntegerBetween, randomSeeded } from "@std/random";
 
 /**
@@ -147,7 +146,7 @@ async function runScenario(
       doctorId: `U${i + 1}`,
       pool: URGENT_POOL_ID,
     };
-    const seedEvent = createEvent<DoctorToken>({
+    const seedEvent = createEvent({
       scheduledAt: 0,
       process: { type: "none", data: token },
     });
@@ -159,7 +158,7 @@ async function runScenario(
       doctorId: `G${i + 1}`,
       pool: GENERAL_POOL_ID,
     };
-    const seedEvent = createEvent<DoctorToken>({
+    const seedEvent = createEvent({
       scheduledAt: 0,
       process: { type: "none", data: token },
     });
@@ -167,10 +166,10 @@ async function runScenario(
   }
 
   const patient: ProcessDefinition<{
-    arrive: [PatientData, StateData[]];
-    waitDoctor: [PatientData, StateData[]];
-    treat: [PatientData, StateData[]];
-    done: [PatientData, StateData[]];
+    arrive: PatientData;
+    waitDoctor: PatientData;
+    treat: PatientData;
+    done: PatientData;
   }> = {
     type: "patient",
     initial: "arrive",
@@ -183,10 +182,10 @@ async function runScenario(
           );
         }
 
-        const wait = get(sim, event, pool);
+        const { step } = get(sim, event, pool);
         return {
           state: { ...state, step: "waitDoctor" },
-          next: [wait.step],
+          next: [step],
         };
       },
       waitDoctor(sim, event, state) {
@@ -239,17 +238,19 @@ async function runScenario(
           );
         }
 
-        const releaseEvent = createEvent<DoctorToken>({
+        const releaseEvent = createEvent({
           parent: event.id,
           scheduledAt: sim.currentTime,
           process: { type: "none" },
         });
-        const release = put(sim, releaseEvent, pool, { doctorId, pool });
+        const { step, resume, finish } = put(sim, releaseEvent, pool, {
+          doctorId,
+          pool,
+        });
         return {
           state: { ...state, step: "done", data: finished },
-          next: release.resume
-            ? [release.step, release.resume]
-            : [release.step],
+          next: resume ? [step, ...resume] : [step],
+          finish: finish ?? [],
         };
       },
       done(_sim, _event, state) {
@@ -259,7 +260,7 @@ async function runScenario(
   };
 
   const arrivals: ProcessDefinition<{
-    run: [ArrivalState, StateData[]];
+    run: ArrivalState;
   }> = {
     type: "arrivals",
     initial: "run",

@@ -1,13 +1,11 @@
+import { Event, ProcessDefinition, StateData } from "../src/model.ts";
 import {
   createEvent,
-  Event,
   initializeSimulation,
-  ProcessDefinition,
   registerProcess,
   runSimulation,
   scheduleEvent,
-  StateData,
-} from "../mod.ts";
+} from "../src/simulation.ts";
 
 interface DriverData extends StateData {
   shared: number;
@@ -22,8 +20,8 @@ interface WorkerData extends StateData {
 const observations: string[] = [];
 
 const driver: ProcessDefinition<{
-  start: [DriverData, [DriverData, WorkerData, WorkerData]];
-  done: [DriverData, []];
+  start: DriverData;
+  done: DriverData;
 }> = {
   type: "driver",
   initial: "start",
@@ -83,7 +81,7 @@ const driver: ProcessDefinition<{
 };
 
 const worker: ProcessDefinition<{
-  start: [WorkerData, []];
+  start: WorkerData;
 }> = {
   type: "worker",
   initial: "start",

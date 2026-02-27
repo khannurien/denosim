@@ -1,13 +1,11 @@
+import { Event, ProcessDefinition, StateData } from "../src/model.ts";
 import {
   createEvent,
-  Event,
   initializeSimulation,
-  ProcessDefinition,
   registerProcess,
   runSimulation,
   scheduleEvent,
-  StateData,
-} from "../mod.ts";
+} from "../src/simulation.ts";
 
 /**
  * Expected output:
@@ -40,7 +38,7 @@ if (import.meta.main) {
   const sim = initializeSimulation();
 
   const fooCb: ProcessDefinition<{
-    none: [FooData, []];
+    none: FooData;
   }> = {
     type: "foo",
     initial: "none",
@@ -58,9 +56,9 @@ if (import.meta.main) {
   sim.registry = registerProcess(sim, fooCb);
 
   const barCb: ProcessDefinition<{
-    start: [TimeoutData, [TimeoutData]];
-    wait: [TimeoutData, [TimeoutData]];
-    stop: [TimeoutData, []];
+    start: TimeoutData;
+    wait: TimeoutData;
+    stop: TimeoutData;
   }> = {
     type: "bar",
     initial: "start",
@@ -145,9 +143,9 @@ if (import.meta.main) {
   sim.registry = registerProcess(sim, barCb);
 
   const step1Cb: ProcessDefinition<{
-    start: [TimeoutData, [TimeoutData]];
-    wait: [TimeoutData, [StateData | TimeoutData]];
-    stop: [TimeoutData, []];
+    start: TimeoutData;
+    wait: TimeoutData;
+    stop: TimeoutData;
   }> = {
     type: "step1",
     initial: "start",
@@ -227,7 +225,7 @@ if (import.meta.main) {
   sim.registry = registerProcess(sim, step1Cb);
 
   const step2Cb: ProcessDefinition<{
-    none: [StateData, []];
+    none: StateData;
   }> = {
     type: "step2",
     initial: "none",
@@ -247,9 +245,9 @@ if (import.meta.main) {
   sim.registry = registerProcess(sim, step2Cb);
 
   const bazCb: ProcessDefinition<{
-    start: [TimeoutData, [TimeoutData]];
-    wait: [TimeoutData, [StateData | TimeoutData]];
-    stop: [TimeoutData, []];
+    start: TimeoutData;
+    wait: TimeoutData;
+    stop: TimeoutData;
   }> = {
     type: "baz",
     initial: "start",

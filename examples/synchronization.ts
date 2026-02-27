@@ -1,16 +1,12 @@
+import { ProcessDefinition, StateData } from "../src/model.ts";
 import {
   createEvent,
-  get,
   initializeSimulation,
-  initializeStore,
-  ProcessDefinition,
-  put,
   registerProcess,
-  registerStore,
   runSimulation,
   scheduleEvent,
-  StateData,
-} from "../mod.ts";
+} from "../src/simulation.ts";
+import { get, initializeStore, put, registerStore } from "../src/resources.ts";
 
 if (import.meta.main) {
   const sim = initializeSimulation();
@@ -24,8 +20,8 @@ if (import.meta.main) {
   sim.stores = registerStore(sim, store);
 
   const prod: ProcessDefinition<{
-    start: [FooData, [FooData, FooData] | [FooData]];
-    stop: [FooData, []];
+    start: FooData;
+    stop: FooData;
   }> = {
     type: "prod",
     initial: "start",
@@ -38,7 +34,7 @@ if (import.meta.main) {
           `[${sim.currentTime}] prod @ start state = ${state.data.foo}`,
         );
 
-        const { step, resume } = put(sim, event, store.id, {
+        const { step, resume, finish } = put(sim, event, store.id, {
           ...state.data,
         });
 
@@ -60,7 +56,8 @@ if (import.meta.main) {
 
         return {
           state: { ...state, step: "stop" },
-          next: resume ? [step, resume] : [step],
+          next: resume ? [step, ...resume] : [step],
+          finish: finish ?? [],
         };
       },
       stop(sim, event, state) {
@@ -79,8 +76,8 @@ if (import.meta.main) {
   sim.registry = registerProcess(sim, prod);
 
   const cons: ProcessDefinition<{
-    start: [FooData, [FooData, FooData] | [FooData]];
-    stop: [FooData, []];
+    start: FooData;
+    stop: FooData;
   }> = {
     type: "cons",
     initial: "start",
@@ -91,7 +88,7 @@ if (import.meta.main) {
           `[${sim.currentTime}] cons @ start state = ${state.data.foo}`,
         );
 
-        const { step, resume } = get(sim, event, store.id);
+        const { step, resume, finish } = get(sim, event, store.id);
 
         console.log(
           `[${sim.currentTime}] cons received: step = ${step} | resume = ${resume}`,
@@ -115,7 +112,8 @@ if (import.meta.main) {
             data: { ...step.process.data ?? state.data },
             step: "stop",
           },
-          next: resume ? [step, resume] : [step],
+          next: resume ? [step, ...resume] : [step],
+          finish: finish ?? [],
         };
       },
       stop(sim, _event, state) {

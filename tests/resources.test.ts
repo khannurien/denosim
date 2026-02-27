@@ -1,20 +1,20 @@
 import { assert, assertEquals, assertThrows } from "@std/assert";
+
 import {
-  createEvent,
   EventState,
-  get,
-  initializeSimulation,
-  initializeStore,
   ProcessDefinition,
-  put,
   QueueDiscipline,
-  registerProcess,
-  registerStore,
-  runSimulation,
-  scheduleEvent,
   StateData,
   StoreID,
-} from "../mod.ts";
+} from "../src/model.ts";
+import { get, initializeStore, put, registerStore } from "../src/resources.ts";
+import {
+  createEvent,
+  initializeSimulation,
+  registerProcess,
+  runSimulation,
+  scheduleEvent,
+} from "../src/simulation.ts";
 
 interface FooData extends StateData {
   foo?: string;
@@ -22,20 +22,21 @@ interface FooData extends StateData {
 }
 
 const prod: ProcessDefinition<{
-  start: [FooData, [FooData, FooData] | [FooData]];
-  stop: [FooData, []];
+  start: FooData;
+  stop: FooData;
 }> = {
   type: "prod",
   initial: "start",
   steps: {
     start(sim, event, state) {
-      const { step, resume } = put(sim, event, state.data["store"], {
+      const { step, resume, finish } = put(sim, event, state.data["store"], {
         ...state.data,
       });
 
       return {
         state: { ...state, step: "stop" },
-        next: resume ? [step, resume] : [step],
+        next: resume ? [step, ...resume] : [step],
+        finish: finish ?? [],
       };
     },
     stop(_sim, _event, state) {
@@ -48,8 +49,8 @@ const prod: ProcessDefinition<{
 };
 
 const cons: ProcessDefinition<{
-  start: [FooData, [FooData, FooData] | [FooData]];
-  stop: [FooData, []];
+  start: FooData;
+  stop: FooData;
 }> = {
   type: "cons",
   initial: "start",
@@ -63,7 +64,7 @@ const cons: ProcessDefinition<{
           data: { ...step.process.data ?? state.data },
           step: "stop",
         },
-        next: resume ? [step, resume] : [step],
+        next: resume ? [step, ...resume] : [step],
       };
     },
     stop(_sim, _event, state) {
@@ -193,7 +194,8 @@ Deno.test("multiple consumers with single producer", () => {
   const putResult = put(sim, producer, store.id, { store: store.id, foo: "x" });
 
   assert(putResult.resume);
-  assertEquals(putResult.resume.parent, consumerA.id);
+  assert(putResult.resume[0]);
+  assertEquals(putResult.resume[0].parent, consumerA.id);
   assertEquals(sim.stores[store.id].getRequests.length, 1);
 });
 
@@ -227,8 +229,9 @@ Deno.test("multiple producers with delayed consumers", () => {
   const getResult = get(sim, consumer, store.id);
 
   assert(getResult.resume);
+  assert(getResult.resume[0]);
   assertEquals(getResult.step.process.data?.["foo"], "A");
-  assertEquals(getResult.resume.process.data?.["foo"], "A");
+  assertEquals(getResult.resume[0].process.data?.["foo"], "A");
   assertEquals(sim.stores[store.id].putRequests.length, 1);
 });
 
@@ -435,7 +438,8 @@ Deno.test("blocked gets resume in LIFO order", () => {
   });
 
   assert(result.resume);
-  assertEquals(result.resume.parent, consumerB.id);
+  assert(result.resume[0]);
+  assertEquals(result.resume[0].parent, consumerB.id);
 });
 
 Deno.test("blocked gets resume in FIFO order", () => {
@@ -470,7 +474,8 @@ Deno.test("blocked gets resume in FIFO order", () => {
   });
 
   assert(result.resume);
-  assertEquals(result.resume.parent, consumerA.id);
+  assert(result.resume[0]);
+  assertEquals(result.resume[0].parent, consumerA.id);
 });
 
 Deno.test("blocked put resumes get with preserved payload", () => {
@@ -636,4 +641,10 @@ Deno.test("unsupported queue discipline throws", () => {
     Error,
     "Unsupported queue discipline",
   );
+});
+
+Deno.test("process step unblocks multiple consumers", () => {
+});
+
+Deno.test("process step unblocks multiple producers", () => {
 });

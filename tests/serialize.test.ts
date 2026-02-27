@@ -1,16 +1,17 @@
 import { assert, assertEquals } from "@std/assert";
+
+import { EventState, ProcessDefinition, StateData } from "../src/model.ts";
+import {
+  deserializeSimulation,
+  serializeSimulation,
+} from "../src/serialize.ts";
 import {
   createEvent,
-  deserializeSimulation,
-  EventState,
   initializeSimulation,
-  ProcessDefinition,
   registerProcess,
   runSimulationWithDeltas,
   scheduleEvent,
-  serializeSimulation,
-  StateData,
-} from "../mod.ts";
+} from "../src/simulation.ts";
 
 interface CounterData extends StateData {
   count: number;
@@ -18,7 +19,7 @@ interface CounterData extends StateData {
 }
 
 const counter: ProcessDefinition<{
-  tick: [CounterData, [CounterData] | []];
+  tick: CounterData;
 }> = {
   type: "counter",
   initial: "tick",
@@ -28,7 +29,6 @@ const counter: ProcessDefinition<{
         return { state, next: [] };
       }
 
-      // FIXME: Closures in handlers do not survive serialize/deserialize + eval.
       const next = createEvent({
         parent: event.id,
         scheduledAt: sim.currentTime + 1,
@@ -68,7 +68,7 @@ Deno.test("basic serialization", async () => {
   }
 
   const dummy: ProcessDefinition<{
-    start: [DummyData, []];
+    start: DummyData;
   }> = {
     type: "dummy",
     initial: "start",
@@ -210,7 +210,7 @@ Deno.test("serialize handles arrow-function handlers", async () => {
   }
 
   const arrow: ProcessDefinition<{
-    start: [ArrowData, []];
+    start: ArrowData;
   }> = {
     type: "arrow",
     initial: "start",

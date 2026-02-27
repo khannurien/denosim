@@ -1,6 +1,5 @@
-import { ProcessRegistry } from "../mod.ts";
 import { DeltaEncodedSimulation, reconstructFromDeltas } from "./memory.ts";
-import { Simulation } from "./model.ts";
+import { ProcessRegistry, Simulation } from "./model.ts";
 
 /**
  * The whole simulation should be completely serializable to JSON.

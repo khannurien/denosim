@@ -1,13 +1,11 @@
+import { Event, ProcessDefinition, StateData } from "../src/model.ts";
 import {
   createEvent,
-  Event,
   initializeSimulation,
-  ProcessDefinition,
   registerProcess,
   runSimulation,
   scheduleEvent,
-  StateData,
-} from "../mod.ts";
+} from "../src/simulation.ts";
 
 if (import.meta.main) {
   const sim = initializeSimulation();
@@ -18,8 +16,8 @@ if (import.meta.main) {
   }
 
   const foo: ProcessDefinition<{
-    start: [FooData, [FooData]];
-    stop: [FooData, []];
+    start: FooData;
+    stop: FooData;
   }> = {
     type: "foo",
     initial: "start",

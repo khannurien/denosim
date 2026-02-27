@@ -1,15 +1,18 @@
 import { assert, assertEquals, assertRejects, assertThrows } from "@std/assert";
+
 import {
-  createEvent,
   Event,
   EventState,
-  initializeSimulation,
   ProcessDefinition,
+  StateData,
+} from "../src/model.ts";
+import {
+  createEvent,
+  initializeSimulation,
   registerProcess,
   runSimulation,
   scheduleEvent,
-  StateData,
-} from "../mod.ts";
+} from "../src/simulation.ts";
 
 Deno.test("basic event scheduling", async () => {
   const sim = initializeSimulation();
@@ -79,7 +82,7 @@ Deno.test("basic event ordering", async () => {
   const processedOrder: number[] = [];
 
   const foo: ProcessDefinition<{
-    start: [StateData, []];
+    start: StateData;
   }> = {
     type: "foo",
     initial: "start",
@@ -126,7 +129,7 @@ Deno.test("scheduling events in the past", async () => {
   const sim = initializeSimulation();
 
   const foo: ProcessDefinition<{
-    start: [StateData, [StateData]];
+    start: StateData;
   }> = {
     type: "foo",
     initial: "start",
@@ -163,7 +166,7 @@ Deno.test("event process scheduling", async () => {
   const results: Record<number, Event> = {};
 
   const foo: ProcessDefinition<{
-    start: [StateData, []];
+    start: StateData;
   }> = {
     type: "foo",
     initial: "start",
@@ -243,7 +246,7 @@ Deno.test("events with same time process by priority order (lower number = highe
   const executionOrder: string[] = [];
 
   const testProcess: ProcessDefinition<{
-    log: [StateData, []];
+    log: StateData;
   }> = {
     type: "test",
     initial: "log",
@@ -301,7 +304,7 @@ Deno.test("priority only affects ordering at same time", async () => {
   const executionOrder: string[] = [];
 
   const testProcess: ProcessDefinition<{
-    log: [StateData, []];
+    log: StateData;
   }> = {
     type: "test",
     initial: "log",
@@ -351,7 +354,7 @@ Deno.test("default priority is 0 (highest priority)", async () => {
   const executionOrder: string[] = [];
 
   const testProcess: ProcessDefinition<{
-    log: [StateData, []];
+    log: StateData;
   }> = {
     type: "test",
     initial: "log",
@@ -393,7 +396,7 @@ Deno.test("negative priorities work correctly (very high priority)", async () =>
   const executionOrder: string[] = [];
 
   const testProcess: ProcessDefinition<{
-    log: [StateData, []];
+    log: StateData;
   }> = {
     type: "test",
     initial: "log",
@@ -443,7 +446,7 @@ Deno.test("priority with different process types", async () => {
   const executionOrder: string[] = [];
 
   const processA: ProcessDefinition<{
-    log: [StateData, []];
+    log: StateData;
   }> = {
     type: "A",
     initial: "log",
@@ -459,7 +462,7 @@ Deno.test("priority with different process types", async () => {
   };
 
   const processB: ProcessDefinition<{
-    log: [StateData, []];
+    log: StateData;
   }> = {
     type: "B",
     initial: "log",
@@ -513,7 +516,7 @@ Deno.test("process state initialization", async () => {
   const sim = initializeSimulation();
 
   const foo: ProcessDefinition<{
-    foo: [FooData, []];
+    foo: FooData;
   }> = {
     type: "foo",
     initial: "foo",
@@ -561,9 +564,9 @@ Deno.test("process state across steps", async () => {
   const sim = initializeSimulation();
 
   const foobar: ProcessDefinition<{
-    foo: [FooData, [FooData]];
-    bar: [FooData, [FooData]];
-    baz: [FooData, []];
+    foo: FooData;
+    bar: FooData;
+    baz: FooData;
   }> = {
     type: "foobar",
     initial: "foo",
@@ -655,9 +658,9 @@ Deno.test("process state inheritance (fork)", async () => {
   };
 
   const foo: ProcessDefinition<{
-    main: [WorkerData, [WorkerData, WorkerData, WorkerData]];
-    thread: [WorkerData, [WorkerData]];
-    stop: [WorkerData, []];
+    main: WorkerData;
+    thread: WorkerData;
+    stop: WorkerData;
   }> = {
     type: "foo",
     initial: "main",
@@ -772,7 +775,7 @@ Deno.test("process state inheritance (exec)", async () => {
   const sim = initializeSimulation();
 
   const foo: ProcessDefinition<{
-    start: [FooData, [FooData, FooData]];
+    start: FooData;
   }> = {
     type: "foo",
     initial: "start",
@@ -810,7 +813,7 @@ Deno.test("process state inheritance (exec)", async () => {
   };
 
   const bar: ProcessDefinition<{
-    start: [FooData, []];
+    start: FooData;
   }> = {
     type: "bar",
     initial: "start",
@@ -859,7 +862,7 @@ Deno.test("process state inheritance (spawn)", async () => {
   const sim = initializeSimulation();
 
   const foo: ProcessDefinition<{
-    start: [FooData, [FooData]];
+    start: FooData;
   }> = {
     type: "foo",
     initial: "start",
@@ -888,7 +891,7 @@ Deno.test("process state inheritance (spawn)", async () => {
   };
 
   const bar: ProcessDefinition<{
-    start: [FooData, []];
+    start: FooData;
   }> = {
     type: "bar",
     initial: "start",
@@ -925,19 +928,19 @@ Deno.test("process state inheritance (spawn)", async () => {
 });
 
 Deno.test("simulation rate acts as best-effort wall-clock throttling", async () => {
-  const makeSim = () => {
+  const createTestSim = () => {
     const sim = initializeSimulation();
     sim.timeline = scheduleEvent(sim, createEvent({ scheduledAt: 0 }));
     sim.timeline = scheduleEvent(sim, createEvent({ scheduledAt: 1 }));
     return sim;
   };
 
-  const throttled = makeSim();
+  const throttled = createTestSim();
   const startSlow = performance.now();
   const [slowStop] = await runSimulation(throttled, { rate: 20 });
   const slowElapsed = performance.now() - startSlow;
 
-  const unthrottled = makeSim();
+  const unthrottled = createTestSim();
   const startFast = performance.now();
   const [fastStop] = await runSimulation(unthrottled, { rate: -1 });
   const fastElapsed = performance.now() - startFast;

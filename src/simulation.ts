@@ -1,6 +1,7 @@
 import {
   CreateEventOptions,
   Event,
+  EventID,
   EventState,
   ProcessDefinition,
   ProcessRegistry,
@@ -26,13 +27,25 @@ import { serializeSimulation } from "./serialize.ts";
 /**
  * Initializes a new simulation instance with:
  * - `currentTime` set to 0 (starting point of simulation)
- * - Empty events array (no scheduled events)
+ * - Empty timeline (no initial events)
  * - Process registry populated with a dummy process (`none`)
  * - Empty state array (no running processes)
  */
 export function initializeSimulation(): Simulation {
+  const sim = {
+    currentTime: 0,
+    timeline: {
+      events: {},
+      status: {},
+      transitions: [],
+    },
+    registry: {},
+    state: {},
+    stores: {},
+  };
+
   const emptyProcess: ProcessDefinition<{
-    none: [StateData, []];
+    none: StateData;
   }> = {
     type: "none",
     initial: "none",
@@ -46,19 +59,7 @@ export function initializeSimulation(): Simulation {
     },
   };
 
-  const sim = {
-    currentTime: 0,
-    timeline: {
-      events: {},
-      status: {},
-      transitions: [],
-    },
-    registry: {
-      "none": emptyProcess,
-    },
-    state: {},
-    stores: {},
-  };
+  sim.registry = registerProcess(sim, emptyProcess);
 
   return sim;
 }
@@ -108,9 +109,15 @@ export async function runSimulationWithDeltas(
   };
   const checkpoints: string[] = [];
 
+  // Pending is a local hot-path index of Scheduled event IDs, kept outside the model.
+  // Initialized from the incoming simulation state; rebuilt after each checkpoint prune.
+  let pending = buildPending(sim.current);
+
   while (true) {
-    const [next, continuation] = run(sim.current);
+    const [next, nextPending, continuation] = run(sim.current, pending);
     if (!continuation) break;
+
+    pending = nextPending;
 
     // Memory management: store deltas and dump to disk if necessary
     sim.deltas.push(createDelta(sim.current, next));
@@ -127,6 +134,7 @@ export async function runSimulationWithDeltas(
       sim.base = compacted;
       sim.deltas = [];
       sim.current = compacted;
+      pending = buildPending(compacted);
     }
 
     if (options && shouldTerminate(next, options)) break;
@@ -136,7 +144,7 @@ export async function runSimulationWithDeltas(
   const end = performance.now();
   if (checkpoints.length > 0) {
     const current = await reconstructFullCurrent(checkpoints, sim.current);
-    // Keep returned delta representation self-consistent.
+    // Keep returned delta representation self-consistent
     sim.base = current;
     sim.deltas = [];
     sim.current = current;
@@ -184,32 +192,56 @@ function shouldTerminate(
 }
 
 /**
+ * Derives the initial pending set from a simulation state by collecting all event IDs currently in `EventState.Scheduled`.
+ * Used to seed the run loop and to rebuild after each checkpoint prune.
+ */
+function buildPending(sim: Simulation): Set<EventID> {
+  return new Set(
+    Object.entries(sim.timeline.status)
+      .filter(([_, state]) => state === EventState.Scheduled)
+      .map(([id]) => id),
+  );
+}
+
+/**
  * Returns the next simulation state after processing the current event.
  * Returns a boolean indicating whether the simulation should continue.
  * Simulation should continue if there are more events to process in queue.
  */
-function run(current: Simulation): [Simulation, boolean] {
-  // Get all scheduled events that haven't been processed yet,
-  // sorted in descending order so we can efficiently pop the earliest event
-  const pending = Object.values(current.timeline.events).filter((event) =>
-    (event.scheduledAt >= current.currentTime) &&
-    (current.timeline.status[event.id] === EventState.Scheduled)
-  ).sort((a, b) => {
-    return a.scheduledAt !== b.scheduledAt
-      ? b.scheduledAt - a.scheduledAt
-      : b.priority - a.priority;
-  });
-
-  // The global event queue is not modified in place
-  const event = pending.pop();
-
-  if (!event) {
-    return [current, false]; // No more events to process
+function run(
+  current: Simulation,
+  pending: Set<EventID>,
+): [Simulation, Set<EventID>, boolean] {
+  if (pending.size === 0) {
+    return [current, pending, false];
   }
 
+  // Sort descending so we can pop the earliest event
+  const sorted = [...pending]
+    .map((id) => current.timeline.events[id])
+    .sort((a, b) => {
+      return a.scheduledAt !== b.scheduledAt
+        ? b.scheduledAt - a.scheduledAt
+        : b.priority - a.priority;
+    });
+
+  const event = sorted.pop()!;
   const next = step(current, event);
 
-  return [next, true];
+  // Maintain pending incrementally: remove processed event, add any newly scheduled ones.
+  // New events are those that appear in next but not in current; only Scheduled ones enter pending.
+  const nextPending = new Set(pending);
+  nextPending.delete(event.id);
+  for (const id of Object.keys(next.timeline.events)) {
+    if (
+      !(id in current.timeline.events) &&
+      next.timeline.status[id] === EventState.Scheduled
+    ) {
+      nextPending.add(id);
+    }
+  }
+
+  return [next, nextPending, true];
 }
 
 /**
@@ -244,27 +276,25 @@ function step(sim: Simulation, event: Event): Simulation {
     ),
   };
 
-  // Handle the event by executing its process, which may yield new events
-  const { state, next } = handleEvent(nextSim, event);
+  // Handle the event by executing its process, which may yield new events to schedule and old events to finish
+  const { state, next, finish } = handleEvent(nextSim, event);
 
   // Update the event's process state in the simulation container
   nextSim.state[event.id] = { ...state };
 
-  // Append a lifecycle transition
-  nextSim.timeline.status[event.id] = EventState.Finished;
-  nextSim.timeline.transitions = [
-    ...nextSim.timeline.transitions,
-    {
-      id: event.id,
-      state: EventState.Finished,
-      at: nextSim.currentTime,
-    },
-  ];
+  // Finalize the current event: mark as `Finished` and log transition
+  nextSim.timeline = finishEvent(nextSim, event);
 
   // Schedule the next events yielded by the current process if necessary
-  // `Waiting` events are not automatically scheduled. This allows processes to yield events that are triggered by external conditions or other processes, rather than automatically handled at their scheduled time.
+  // `Waiting` events are not automatically scheduled
+  // Allow processes to yield events that are triggered by external conditions or other processes, rather than automatically handled at their scheduled time
   for (const nextEvent of next) {
     nextSim.timeline = scheduleEvent(nextSim, nextEvent);
+  }
+
+  // Finish the old events yielded by the current process if necessary
+  for (const finishId of finish ?? []) {
+    nextSim.timeline = finishEvent(nextSim, sim.timeline.events[finishId]);
   }
 
   return nextSim;
@@ -390,7 +420,8 @@ export function createEvent<T extends StateData>(
 /**
  * Schedules an event for future processing in the simulation.
  * Validates that the event isn't scheduled in the past.
- * FIXME: Returns updated events array with the new scheduled event.
+ * `initialState` defaults to `EventState.Scheduled` unless `waiting` specificed at event creation when expected to block until explicitly resumed (through e.g. store synchronization primitives).
+ * Returns an updated Timeline reflecting the new event and its initial transition.
  */
 export function scheduleEvent<T extends StateData>(
   sim: Simulation,
@@ -403,12 +434,34 @@ export function scheduleEvent<T extends StateData>(
     );
   }
 
+  const initialState: EventState = event.waiting
+    ? EventState.Waiting
+    : EventState.Scheduled;
+
   return {
     ...sim.timeline,
     events: { ...sim.timeline.events, [event.id]: { ...event } },
     status: {
       ...sim.timeline.status,
-      [event.id]: event.waiting ? EventState.Waiting : EventState.Scheduled,
+      [event.id]: initialState,
     },
+    transitions: [
+      ...sim.timeline.transitions,
+      { id: event.id, state: initialState, at: sim.currentTime },
+    ],
+  };
+}
+
+export function finishEvent<T extends StateData>(
+  sim: Simulation,
+  event: Event<T>,
+): Timeline {
+  return {
+    ...sim.timeline,
+    status: { ...sim.timeline.status, [event.id]: EventState.Finished },
+    transitions: [
+      ...sim.timeline.transitions,
+      { id: event.id, state: EventState.Finished, at: sim.currentTime },
+    ],
   };
 }
