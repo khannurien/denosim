@@ -136,7 +136,7 @@ export function put<
       },
     });
 
-    return { step: updatedPut, resume: [updatedGet], finish: [getRequest.id] };
+    return { step: updatedPut, resume: [updatedGet], finish: [getRequest] };
   }
 
   // Blocking store or non-blocking store without pending get request: block put
@@ -248,7 +248,7 @@ export function get<
       },
     });
 
-    return { step: updatedGet, resume: [updatedPut], finish: [putRequest.id] };
+    return { step: updatedGet, resume: [updatedPut], finish: [putRequest] };
   }
 
   // Non-blocking store: check buffer (completed puts)

@@ -196,7 +196,7 @@ export interface StoreResult<T extends StateData = StateData> {
   /**
    * TODO:
    */
-  finish?: EventID[];
+  finish?: Event[];
 }
 
 /** Timestamp for simulation clock */
@@ -282,8 +282,12 @@ export interface ProcessCall<T extends StateData = StateData> {
   data?: T;
 }
 
-type ValidProcessState<M extends StepStateMap> = {
-  [K in keyof M]: { type: ProcessType; step: K; data: M[K] };
+// type ValidProcessState<M extends StepStateMap> = {
+//   [K in keyof M]: { type: ProcessType; step: K; data: M[K] };
+// }[keyof M];
+
+type ProcessStateFor<M extends StepStateMap> = {
+  [K in keyof M]: ProcessState<M[K], K & StepType>;
 }[keyof M];
 
 /**
@@ -324,7 +328,7 @@ export interface ProcessState<
  */
 export interface ProcessStep<M extends StepStateMap = StepStateMap> {
   /** Process handler returns the updated state of the process */
-  state: ValidProcessState<M>;
+  state: ProcessStateFor<M>;
 
   /**
    * Process handler returns the next events to be scheduled.
@@ -337,7 +341,7 @@ export interface ProcessStep<M extends StepStateMap = StepStateMap> {
   /**
    * TODO:
    */
-  finish?: EventID[];
+  finish?: Event[];
 }
 
 /**

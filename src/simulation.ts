@@ -293,8 +293,8 @@ function step(sim: Simulation, event: Event): Simulation {
   }
 
   // Finish the old events yielded by the current process if necessary
-  for (const finishId of finish ?? []) {
-    nextSim.timeline = finishEvent(nextSim, sim.timeline.events[finishId]);
+  for (const finishedEvent of finish ?? []) {
+    nextSim.timeline = finishEvent(nextSim, sim.timeline.events[finishedEvent.id]);
   }
 
   return nextSim;
