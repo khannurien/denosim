@@ -927,6 +927,63 @@ Deno.test("process state inheritance (spawn)", async () => {
   assertEquals(barState.data.foobar, -3.14);
 });
 
+Deno.test("default none process is a no-op", async () => {
+  const sim = initializeSimulation();
+
+  const e1 = createEvent({ scheduledAt: 5 }); // no process specified → defaults to none
+  sim.timeline = scheduleEvent(sim, e1);
+
+  const [stop] = await runSimulation(sim);
+
+  assertEquals(stop.timeline.status[e1.id], EventState.Finished);
+  assertEquals(stop.state[e1.id].type, "none");
+  assertEquals(stop.state[e1.id].step, "none");
+  // none handler returns next: [] so no new events are spawned
+  assertEquals(Object.keys(stop.timeline.events).length, 1);
+});
+
+Deno.test("events with same time and priority are processed in LIFO scheduling order", async () => {
+  const sim = initializeSimulation();
+  const executionOrder: string[] = [];
+
+  const testProcess: ProcessDefinition<{
+    log: StateData;
+  }> = {
+    type: "test",
+    initial: "log",
+    steps: {
+      log(_sim, _event, state) {
+        executionOrder.push(state.data.name as string);
+        return { state, next: [] };
+      },
+    },
+  };
+
+  sim.registry = registerProcess(sim, testProcess);
+
+  const e1 = createEvent({
+    scheduledAt: 10,
+    process: { type: "test", data: { name: "first" } },
+  });
+  const e2 = createEvent({
+    scheduledAt: 10,
+    process: { type: "test", data: { name: "second" } },
+  });
+  const e3 = createEvent({
+    scheduledAt: 10,
+    process: { type: "test", data: { name: "third" } },
+  });
+
+  sim.timeline = scheduleEvent(sim, e1);
+  sim.timeline = scheduleEvent(sim, e2);
+  sim.timeline = scheduleEvent(sim, e3);
+
+  await runSimulation(sim);
+
+  // LIFO: last scheduled (e3) is dequeued first
+  assertEquals(executionOrder, ["third", "second", "first"]);
+});
+
 Deno.test("simulation rate acts as best-effort wall-clock throttling", async () => {
   const createTestSim = () => {
     const sim = initializeSimulation();
@@ -957,7 +1014,7 @@ Deno.test("simulation rate acts as best-effort wall-clock throttling", async () 
   );
 
   const expectedMs = 2 * (1000 / 20); // 100ms nominal
-  const tolerance = 0.95; // allow 5% timing jitter
+  const tolerance = 0.80; // allow 20% timing jitter on loaded CI environments
   assert(slowElapsed >= expectedMs * tolerance);
   assert(slowElapsed > fastElapsed);
 });

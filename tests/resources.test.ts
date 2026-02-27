@@ -56,7 +56,7 @@ const cons: ProcessDefinition<{
   initial: "start",
   steps: {
     start(sim, event, state) {
-      const { step, resume } = get(sim, event, state.data["store"]);
+      const { step, resume, finish } = get(sim, event, state.data["store"]);
 
       return {
         state: {
@@ -65,6 +65,7 @@ const cons: ProcessDefinition<{
           step: "stop",
         },
         next: resume ? [step, ...resume] : [step],
+        finish: finish ?? [],
       };
     },
     stop(_sim, _event, state) {
@@ -286,7 +287,7 @@ Deno.test("blocking store with unlimited capacity behavior", () => {
   assertEquals(sim.stores[store.id].buffer.length, 0);
 });
 
-Deno.test("non-blocking store with capacity 0 (immediate rejection)", () => {
+Deno.test("non-blocking store with capacity 0 (requests will block)", () => {
   const sim = initializeSimulation();
   const store = initializeStore<FooData>({
     blocking: false,
@@ -643,8 +644,269 @@ Deno.test("unsupported queue discipline throws", () => {
   );
 });
 
-Deno.test("process step unblocks multiple consumers", () => {
+Deno.test("process step unblocks multiple consumers", async () => {
+  const sim = initializeSimulation();
+  const store = initializeStore<FooData>({
+    blocking: true,
+    discipline: QueueDiscipline.FIFO,
+  });
+  sim.stores = registerStore(sim, store);
+  sim.registry = registerProcess(sim, prod);
+  sim.registry = registerProcess(sim, cons);
+
+  // 3 consumers arrive first and block (no producers yet)
+  const c1 = createEvent({
+    scheduledAt: 0,
+    process: { type: "cons", data: { store: store.id } },
+  });
+  const c2 = createEvent({
+    scheduledAt: 1,
+    process: { type: "cons", data: { store: store.id } },
+  });
+  const c3 = createEvent({
+    scheduledAt: 2,
+    process: { type: "cons", data: { store: store.id } },
+  });
+
+  // 3 producers arrive later, each unblocking one consumer in FIFO order
+  const p1 = createEvent({
+    scheduledAt: 10,
+    process: { type: "prod", data: { store: store.id, foo: "first" } },
+  });
+  const p2 = createEvent({
+    scheduledAt: 11,
+    process: { type: "prod", data: { store: store.id, foo: "second" } },
+  });
+  const p3 = createEvent({
+    scheduledAt: 12,
+    process: { type: "prod", data: { store: store.id, foo: "third" } },
+  });
+
+  sim.timeline = scheduleEvent(sim, c1);
+  sim.timeline = scheduleEvent(sim, c2);
+  sim.timeline = scheduleEvent(sim, c3);
+  sim.timeline = scheduleEvent(sim, p1);
+  sim.timeline = scheduleEvent(sim, p2);
+  sim.timeline = scheduleEvent(sim, p3);
+
+  const [stop] = await runSimulation(sim);
+
+  assert(
+    Object.values(stop.timeline.events).every(
+      (e) => stop.timeline.status[e.id] === EventState.Finished,
+    ),
+  );
+
+  // FIFO: c1 (earliest) is unblocked by p1, c2 by p2, c3 by p3
+  const c1Cont = Object.values(stop.timeline.events).find(
+    (e) => e.parent === c1.id && e.scheduledAt === 10,
+  );
+  const c2Cont = Object.values(stop.timeline.events).find(
+    (e) => e.parent === c2.id && e.scheduledAt === 11,
+  );
+  const c3Cont = Object.values(stop.timeline.events).find(
+    (e) => e.parent === c3.id && e.scheduledAt === 12,
+  );
+
+  assert(c1Cont);
+  assert(c2Cont);
+  assert(c3Cont);
+  assertEquals(c1Cont.process.data?.["foo"], "first");
+  assertEquals(c2Cont.process.data?.["foo"], "second");
+  assertEquals(c3Cont.process.data?.["foo"], "third");
 });
 
-Deno.test("process step unblocks multiple producers", () => {
+Deno.test("process step unblocks multiple producers", async () => {
+  const sim = initializeSimulation();
+  const store = initializeStore<FooData>({
+    blocking: true,
+    discipline: QueueDiscipline.FIFO,
+  });
+  sim.stores = registerStore(sim, store);
+  sim.registry = registerProcess(sim, prod);
+  sim.registry = registerProcess(sim, cons);
+
+  // 3 producers arrive first and block (no consumers yet)
+  const p1 = createEvent({
+    scheduledAt: 0,
+    process: { type: "prod", data: { store: store.id, foo: "first" } },
+  });
+  const p2 = createEvent({
+    scheduledAt: 1,
+    process: { type: "prod", data: { store: store.id, foo: "second" } },
+  });
+  const p3 = createEvent({
+    scheduledAt: 2,
+    process: { type: "prod", data: { store: store.id, foo: "third" } },
+  });
+
+  // 3 consumers arrive later, each unblocking one producer in FIFO order
+  const c1 = createEvent({
+    scheduledAt: 10,
+    process: { type: "cons", data: { store: store.id } },
+  });
+  const c2 = createEvent({
+    scheduledAt: 11,
+    process: { type: "cons", data: { store: store.id } },
+  });
+  const c3 = createEvent({
+    scheduledAt: 12,
+    process: { type: "cons", data: { store: store.id } },
+  });
+
+  sim.timeline = scheduleEvent(sim, p1);
+  sim.timeline = scheduleEvent(sim, p2);
+  sim.timeline = scheduleEvent(sim, p3);
+  sim.timeline = scheduleEvent(sim, c1);
+  sim.timeline = scheduleEvent(sim, c2);
+  sim.timeline = scheduleEvent(sim, c3);
+
+  const [stop] = await runSimulation(sim);
+
+  assert(
+    Object.values(stop.timeline.events).every(
+      (e) => stop.timeline.status[e.id] === EventState.Finished,
+    ),
+  );
+
+  // Each consumer continuation carries the payload from the matching producer (FIFO)
+  const c1Cont = Object.values(stop.timeline.events).find(
+    (e) => e.parent === c1.id && e.scheduledAt === 10,
+  );
+  const c2Cont = Object.values(stop.timeline.events).find(
+    (e) => e.parent === c2.id && e.scheduledAt === 11,
+  );
+  const c3Cont = Object.values(stop.timeline.events).find(
+    (e) => e.parent === c3.id && e.scheduledAt === 12,
+  );
+
+  assert(c1Cont);
+  assert(c2Cont);
+  assert(c3Cont);
+  assertEquals(c1Cont.process.data?.["foo"], "first");
+  assertEquals(c2Cont.process.data?.["foo"], "second");
+  assertEquals(c3Cont.process.data?.["foo"], "third");
+});
+
+Deno.test("blocked puts resume in FIFO order", () => {
+  const sim = initializeSimulation();
+  const store = initializeStore<FooData>({
+    blocking: true,
+    discipline: QueueDiscipline.FIFO,
+  });
+  sim.stores = registerStore(sim, store);
+
+  const producerA = createEvent<FooData>({
+    scheduledAt: 0,
+    process: { type: "none", data: { store: store.id, foo: "A" } },
+  });
+  const producerB = createEvent<FooData>({
+    scheduledAt: 1,
+    process: { type: "none", data: { store: store.id, foo: "B" } },
+  });
+
+  const blockedA = put(sim, producerA, store.id, { store: store.id, foo: "A" });
+  const blockedB = put(sim, producerB, store.id, { store: store.id, foo: "B" });
+  assert(blockedA.step.waiting);
+  assert(blockedB.step.waiting);
+
+  const consumer = createEvent<FooData>({
+    scheduledAt: 2,
+    process: { type: "none", data: { store: store.id } },
+  });
+  const result = get(sim, consumer, store.id);
+
+  // FIFO: A was enqueued first, so it is dequeued first
+  assert(result.resume);
+  assertEquals(result.resume[0].parent, producerA.id);
+  assertEquals(result.step.process.data?.["foo"], "A");
+  assertEquals(sim.stores[store.id].putRequests.length, 1);
+});
+
+Deno.test("blocked puts resume in LIFO order", () => {
+  const sim = initializeSimulation();
+  const store = initializeStore<FooData>({
+    blocking: true,
+    discipline: QueueDiscipline.LIFO,
+  });
+  sim.stores = registerStore(sim, store);
+
+  const producerA = createEvent<FooData>({
+    scheduledAt: 0,
+    process: { type: "none", data: { store: store.id, foo: "A" } },
+  });
+  const producerB = createEvent<FooData>({
+    scheduledAt: 1,
+    process: { type: "none", data: { store: store.id, foo: "B" } },
+  });
+
+  const blockedA = put(sim, producerA, store.id, { store: store.id, foo: "A" });
+  const blockedB = put(sim, producerB, store.id, { store: store.id, foo: "B" });
+  assert(blockedA.step.waiting);
+  assert(blockedB.step.waiting);
+
+  const consumer = createEvent<FooData>({
+    scheduledAt: 2,
+    process: { type: "none", data: { store: store.id } },
+  });
+  const result = get(sim, consumer, store.id);
+
+  // LIFO: B was enqueued last, so it is dequeued first
+  assert(result.resume);
+  assertEquals(result.resume[0].parent, producerB.id);
+  assertEquals(result.step.process.data?.["foo"], "B");
+  assertEquals(sim.stores[store.id].putRequests.length, 1);
+});
+
+Deno.test("non-blocking store get on empty buffer blocks", () => {
+  const sim = initializeSimulation();
+  const store = initializeStore<FooData>({ blocking: false, capacity: 2 });
+  sim.stores = registerStore(sim, store);
+
+  const consumer = createEvent<FooData>({
+    scheduledAt: 0,
+    process: { type: "none", data: { store: store.id } },
+  });
+  const result = get(sim, consumer, store.id);
+
+  assert(result.step.waiting);
+  assertEquals(result.resume, undefined);
+  assertEquals(sim.stores[store.id].getRequests.length, 1);
+});
+
+Deno.test("finished waiting placeholder is marked Finished after unblocking", async () => {
+  const sim = initializeSimulation();
+  const store = initializeStore<FooData>({ blocking: true });
+  sim.stores = registerStore(sim, store);
+  sim.registry = registerProcess(sim, prod);
+  sim.registry = registerProcess(sim, cons);
+
+  // Consumer blocks first, creating a waiting placeholder event
+  const consumer = createEvent({
+    scheduledAt: 0,
+    process: { type: "cons", data: { store: store.id } },
+  });
+  // Producer arrives later and unblocks the consumer
+  const producer = createEvent({
+    scheduledAt: 5,
+    process: { type: "prod", data: { store: store.id, foo: "data" } },
+  });
+
+  sim.timeline = scheduleEvent(sim, consumer);
+  sim.timeline = scheduleEvent(sim, producer);
+
+  const [stop] = await runSimulation(sim);
+
+  // The waiting placeholder (child of consumer, waiting: true) must be Finished
+  const placeholder = Object.values(stop.timeline.events).find(
+    (e) => e.parent === consumer.id && e.waiting === true,
+  );
+  assert(placeholder, "waiting placeholder event must exist in timeline");
+  assertEquals(stop.timeline.status[placeholder.id], EventState.Finished);
+
+  assert(
+    Object.values(stop.timeline.events).every(
+      (e) => stop.timeline.status[e.id] === EventState.Finished,
+    ),
+  );
 });

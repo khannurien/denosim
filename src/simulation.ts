@@ -1,7 +1,6 @@
 import {
   CreateEventOptions,
   Event,
-  EventID,
   EventState,
   ProcessDefinition,
   ProcessRegistry,
@@ -96,8 +95,6 @@ export async function runSimulationWithDeltas(
   const runContext = await resolveRunContext(options);
   const dumpInterval = runContext.manifest.dump.interval;
 
-  const start = performance.now();
-
   const sim: DeltaEncodedSimulation = {
     base: {
       ...init,
@@ -109,15 +106,10 @@ export async function runSimulationWithDeltas(
   };
   const checkpoints: string[] = [];
 
-  // Pending is a local hot-path index of Scheduled event IDs, kept outside the model.
-  // Initialized from the incoming simulation state; rebuilt after each checkpoint prune.
-  let pending = buildPending(sim.current);
-
+  const start = performance.now();
   while (true) {
-    const [next, nextPending, continuation] = run(sim.current, pending);
+    const [next, continuation] = run(sim.current);
     if (!continuation) break;
-
-    pending = nextPending;
 
     // Memory management: store deltas and dump to disk if necessary
     sim.deltas.push(createDelta(sim.current, next));
@@ -134,7 +126,6 @@ export async function runSimulationWithDeltas(
       sim.base = compacted;
       sim.deltas = [];
       sim.current = compacted;
-      pending = buildPending(compacted);
     }
 
     if (options && shouldTerminate(next, options)) break;
@@ -192,56 +183,32 @@ function shouldTerminate(
 }
 
 /**
- * Derives the initial pending set from a simulation state by collecting all event IDs currently in `EventState.Scheduled`.
- * Used to seed the run loop and to rebuild after each checkpoint prune.
- */
-function buildPending(sim: Simulation): Set<EventID> {
-  return new Set(
-    Object.entries(sim.timeline.status)
-      .filter(([_, state]) => state === EventState.Scheduled)
-      .map(([id]) => id),
-  );
-}
-
-/**
  * Returns the next simulation state after processing the current event.
  * Returns a boolean indicating whether the simulation should continue.
  * Simulation should continue if there are more events to process in queue.
  */
-function run(
-  current: Simulation,
-  pending: Set<EventID>,
-): [Simulation, Set<EventID>, boolean] {
-  if (pending.size === 0) {
-    return [current, pending, false];
+function run(current: Simulation): [Simulation, boolean] {
+  // Get all scheduled events that haven't been processed yet,
+  // sorted in descending order so we can efficiently pop the earliest event
+  const pending = Object.values(current.timeline.events).filter((event) =>
+    (event.scheduledAt >= current.currentTime) &&
+    (current.timeline.status[event.id] === EventState.Scheduled)
+  ).sort((a, b) => {
+    return a.scheduledAt !== b.scheduledAt
+      ? b.scheduledAt - a.scheduledAt
+      : b.priority - a.priority;
+  });
+
+  // The global event queue is not modified in place
+  const event = pending.pop();
+
+  if (!event) {
+    return [current, false]; // No more events to process
   }
 
-  // Sort descending so we can pop the earliest event
-  const sorted = [...pending]
-    .map((id) => current.timeline.events[id])
-    .sort((a, b) => {
-      return a.scheduledAt !== b.scheduledAt
-        ? b.scheduledAt - a.scheduledAt
-        : b.priority - a.priority;
-    });
-
-  const event = sorted.pop()!;
   const next = step(current, event);
 
-  // Maintain pending incrementally: remove processed event, add any newly scheduled ones.
-  // New events are those that appear in next but not in current; only Scheduled ones enter pending.
-  const nextPending = new Set(pending);
-  nextPending.delete(event.id);
-  for (const id of Object.keys(next.timeline.events)) {
-    if (
-      !(id in current.timeline.events) &&
-      next.timeline.status[id] === EventState.Scheduled
-    ) {
-      nextPending.add(id);
-    }
-  }
-
-  return [next, nextPending, true];
+  return [next, true];
 }
 
 /**

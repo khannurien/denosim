@@ -26,13 +26,11 @@ import {
   scheduleEvent,
 } from "../src/simulation.ts";
 
-Deno.test("createDelta captures event/state/store mutations", () => {
-  // Create initial simulation state using proper API
+Deno.test("createDelta captures new events and their initial status", () => {
   const sim1 = initializeSimulation();
   const e1 = createEvent({ scheduledAt: 0 });
   sim1.timeline = scheduleEvent(sim1, e1);
 
-  // Create second simulation state with additional event
   const sim2 = initializeSimulation();
   const e2 = createEvent({ scheduledAt: 2 });
   sim2.timeline = scheduleEvent(sim2, e2);
@@ -40,8 +38,54 @@ Deno.test("createDelta captures event/state/store mutations", () => {
 
   const delta = createDelta(sim1, sim2);
   assertEquals(delta.c, 2);
+  // e2 is new in sim2 → captured in e ops
   assertEquals(delta.e.length, 1);
   assert(delta.e.some((op) => op.op === "set" && op.key === e2.id));
+  // e2's Scheduled status is also new → captured in es ops
+  assertEquals(delta.es.length, 1);
+  assert(delta.es.some((op) => op.op === "set" && op.key === e2.id));
+});
+
+Deno.test("createDelta captures status transition and state mutations", async () => {
+  const sim = initializeSimulation();
+
+  const traced: ProcessDefinition<{ run: StateData }> = {
+    type: "traced",
+    initial: "run",
+    steps: {
+      run: (_sim, _event, state) => ({ state, next: [] }),
+    },
+  };
+  sim.registry = registerProcess(sim, traced);
+
+  const e = createEvent({
+    scheduledAt: 0,
+    process: { type: "traced", data: { value: 7 } },
+  });
+  sim.timeline = scheduleEvent(sim, e);
+
+  // Snapshot before running (event is Scheduled, no process state yet)
+  const prev = {
+    ...sim,
+    timeline: { ...sim.timeline },
+    state: { ...sim.state },
+  };
+
+  const [encoded] = await runSimulationWithDeltas(sim);
+  const next = encoded.current;
+
+  const delta = createDelta(prev, next);
+
+  assertEquals(delta.c, 0);
+  assertEquals(delta.e.length, 0); // event was already in prev
+  assertEquals(delta.es.length, 1); // Scheduled → Finished
+  assertEquals(delta.es[0].key, e.id);
+  assertEquals(delta.es[0].status, EventState.Finished);
+  assertEquals(delta.et.length, 1); // Finished transition appended
+  assertEquals(delta.et[0].transition.id, e.id);
+  assertEquals(delta.et[0].transition.state, EventState.Finished);
+  assertEquals(delta.s.length, 1); // process state set for the event
+  assertEquals(delta.s[0].key, e.id);
 });
 
 Deno.test("delta encoding roundtrip reconstructs final state", () => {
@@ -101,7 +145,7 @@ Deno.test("applyDelta applies store set operations", () => {
 });
 
 Deno.test("runSimulation records only real steps and keeps full final state after dumps", async () => {
-  const dir = "dumps-cadence";
+  const dir = "runs/test/dumps-cadence";
   await Deno.remove(dir, { recursive: true }).catch(() => {});
 
   const sim = initializeSimulation();
@@ -136,7 +180,7 @@ Deno.test("runSimulation records only real steps and keeps full final state afte
 });
 
 Deno.test("reconstructFullCurrent merges checkpoint files with in-memory state", async () => {
-  const dir = "reconstruct-full-current-test";
+  const dir = "runs/test/reconstruct-full-current-test";
   await Deno.remove(dir, { recursive: true }).catch(() => {});
 
   // Create a simple process
@@ -192,11 +236,11 @@ Deno.test("reconstructFullCurrent merges checkpoint files with in-memory state",
   // Reconstruct full current state from checkpoints and tail
   const reconstructed = await reconstructFullCurrent(checkpointFiles, tail);
 
-  // Verify reconstruction includes both checkpoint and tail data
-  assert(
-    reconstructed.timeline.events[e1.id] ||
-      reconstructed.timeline.events[e2.id],
-  );
+  // e1 comes from the checkpoint file, e2 from the tail — both must be present
+  assert(reconstructed.timeline.events[e1.id], "e1 from checkpoint must be present");
+  assert(reconstructed.timeline.events[e2.id], "e2 from tail must be present");
+  assertEquals(reconstructed.timeline.status[e1.id], EventState.Finished);
+  assertEquals(reconstructed.timeline.status[e2.id], EventState.Finished);
 
   // Clean up
   await Deno.remove(dir, { recursive: true });
@@ -357,7 +401,7 @@ Deno.test("pruneWorkingState handles complex parent-child relationships", () => 
 });
 
 Deno.test("runSimulation keeps base immutable and reconstructs current from deltas", async () => {
-  const dir = "dumps-immutability";
+  const dir = "runs/test/dumps-immutability";
   await Deno.remove(dir, { recursive: true }).catch(() => {});
 
   const sim = initializeSimulation();
@@ -401,7 +445,7 @@ Deno.test("checkpoints preserve full replay state by default", async () => {
   sim.timeline = scheduleEvent(sim, e1);
   sim.timeline = scheduleEvent(sim, e2);
 
-  const dir = "dumps-checkpoint-compact";
+  const dir = "runs/test/dumps-checkpoint-compact";
   await Deno.remove(dir, { recursive: true }).catch(() => {});
   const [stop] = await runSimulation(sim, {
     runDirectory: dir,
@@ -424,7 +468,7 @@ Deno.test("checkpoints keep untilEvent semantics with full replay state", async 
   sim.timeline = scheduleEvent(sim, e2);
   sim.timeline = scheduleEvent(sim, e3);
 
-  const dir = "dumps-checkpoint-until-event";
+  const dir = "runs/test/dumps-checkpoint-until-event";
   await Deno.remove(dir, { recursive: true }).catch(() => {});
   const [stop, stats] = await runSimulation(sim, {
     untilEvent: e2,

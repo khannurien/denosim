@@ -5,8 +5,8 @@
       "write": ["runs"]
     },
     "test": {
-      "read": true,
-      "write": true
+      "read": ["runs"],
+      "write": ["runs"]
     }
   },
   "tasks": {

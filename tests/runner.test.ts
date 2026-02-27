@@ -21,7 +21,7 @@ Deno.test("shouldDump depends on local delta window only", () => {
 });
 
 Deno.test("dumpToDisk writes a checkpoint file", async () => {
-  const dir = "run-dumps-test";
+  const dir = "runs/test/run-dumps-test";
   await Deno.remove(dir, { recursive: true }).catch(() => {});
 
   const sim = initializeSimulation();
@@ -45,7 +45,7 @@ Deno.test("dumpToDisk writes a checkpoint file", async () => {
 });
 
 Deno.test("resolveRunContext reuses existing manifest dump state", async () => {
-  const dir = "run-resume-test";
+  const dir = "runs/test/run-resume-test";
   await Deno.remove(dir, { recursive: true }).catch(() => {});
   await Deno.mkdir(dir, { recursive: true });
 
@@ -79,7 +79,7 @@ Deno.test("resolveRunContext reuses existing manifest dump state", async () => {
 });
 
 Deno.test("resolveRunContext tolerates invalid run.json and recreates defaults", async () => {
-  const dir = "run-invalid-manifest-test";
+  const dir = "runs/test/run-invalid-manifest-test";
   await Deno.remove(dir, { recursive: true }).catch(() => {});
   await Deno.mkdir(dir, { recursive: true });
   await Deno.writeTextFile(`${dir}/run.json`, "{ not valid json");

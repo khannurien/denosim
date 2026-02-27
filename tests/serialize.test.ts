@@ -1,6 +1,12 @@
 import { assert, assertEquals } from "@std/assert";
 
-import { EventState, ProcessDefinition, StateData } from "../src/model.ts";
+import {
+  EventState,
+  ProcessDefinition,
+  QueueDiscipline,
+  StateData,
+  Store,
+} from "../src/model.ts";
 import {
   deserializeSimulation,
   serializeSimulation,
@@ -239,4 +245,78 @@ Deno.test("serialize handles arrow-function handlers", async () => {
   );
   const restoredHandler = recovered[0].registry["arrow"].steps["start"];
   assert(typeof restoredHandler === "function");
+});
+
+Deno.test("store state survives serialization roundtrip", async () => {
+  const sim = initializeSimulation();
+
+  // Build two proper Event objects to sit in the store buffer
+  const bufA = createEvent({
+    scheduledAt: 0,
+    process: { type: "none", data: { tag: "alpha" } },
+  });
+  const bufB = createEvent({
+    scheduledAt: 0,
+    process: { type: "none", data: { tag: "beta" } },
+  });
+
+  const store: Store<StateData, "tag-store"> = {
+    id: "tag-store",
+    capacity: 3,
+    blocking: false,
+    discipline: QueueDiscipline.LIFO,
+    buffer: [bufA, bufB],
+    getRequests: [],
+    putRequests: [],
+  };
+
+  // Bypass the typed API to inject the store directly
+  sim.stores = { "tag-store": store } as unknown as typeof sim.stores;
+
+  const [encoded] = await runSimulationWithDeltas(sim);
+  const recovered = deserializeSimulation(
+    serializeSimulation(encoded),
+    encoded.current.registry,
+  );
+  const stop = recovered[recovered.length - 1];
+
+  assertEquals(stop.stores["tag-store"].buffer.length, 2);
+  const tags = stop.stores["tag-store"].buffer
+    .map((e) => e.process.data?.["tag"])
+    .sort();
+  assertEquals(tags, ["alpha", "beta"]);
+});
+
+Deno.test("recovered handler executes correctly on continued simulation", async () => {
+  const sim = initializeSimulation();
+  sim.registry = registerProcess(sim, counter);
+
+  const start = createEvent({
+    scheduledAt: 0,
+    process: { type: "counter", data: { count: 0, limit: 4 } },
+  });
+  sim.timeline = scheduleEvent(sim, start);
+
+  // Run only halfway; pending events must remain for the handler to fire later
+  const [partial] = await runSimulationWithDeltas(sim, { untilTime: 2 });
+  assertEquals(partial.current.currentTime, 2);
+  assert(
+    Object.values(partial.current.timeline.status).some(
+      (s) => s === EventState.Scheduled,
+    ),
+  );
+
+  const recovered = deserializeSimulation(
+    serializeSimulation(partial),
+    partial.current.registry,
+  );
+  const checkpoint = recovered[recovered.length - 1];
+
+  // Continuing the simulation requires the recovered handler to fire
+  const [resumed] = await runSimulationWithDeltas(checkpoint);
+
+  // Handler must have advanced the counter to its limit
+  assertEquals(resumed.current.currentTime, 4);
+  assertEquals(maxCount(resumed.current), 4);
+  assertEquals(finishedCount(resumed.current), 5); // count 0→4 = 5 events
 });
