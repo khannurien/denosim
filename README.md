@@ -30,19 +30,19 @@ Planned features:
 - Process instances are stored in a global simulation state;
 - An event is never reprocessed and is marked `Finished` as it has been handled.
 
-**Concurrency / composition model**
+**Concurrency and composition model**
 
 - Child processes are spawned by emitting new events; parent–child relationships are tracked via parent on events;
 - Three spawn styles supported: `fork`-like continuation (child keeps parent process type and current progress/state); `exec`-like inheritance (child inherits parent data but starts at the process initial step) and `execve`-like spawn (clean state from process definition and explicitly provided input data);
 - Blocking is modeled by a `Waiting` event state and by resumption through newly emitted continuation events when conditions are satisfied.
 
-**Continuations & temporal patterns**
+**Continuations and temporal patterns**
 
 - Process logic is continuation-driven: each step returns the next event(s) that carry execution forward;
 - A process step does not "loop": state-machine progress happens only through emitted next event(s), including revisiting the same step in a later transition;
 - "Sleeping" is modeled by returning a continuation scheduled in the future.
 
-**Messaging / data flow**
+**Messaging and data flow**
 
 - Data flows via process data and step inheritance flags;
 - Events contain a `ProcessCall` that can carry initialization data for process state; child processes can merge inherited state;

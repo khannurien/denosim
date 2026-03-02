@@ -153,7 +153,7 @@ export interface Store<
   /** Unique identifier for this store */
   id: K;
 
-  /** Maximum items the store can hold before `put` operations block. Defaults to `1`. */
+  /** Maximum items the store can hold before `put` operations block; defaults to `1` */
   capacity: number;
 
   /**
@@ -162,7 +162,7 @@ export interface Store<
    */
   blocking: boolean;
 
-  /** Optional discipline for managing the order of events in the store's queues. Defaults to LIFO. */
+  /** Optional discipline for managing the order of events in the store's queues; defaults to LIFO */
   discipline: QueueDiscipline;
 
   /** Items currently stored by non-blocking `put` operations and awaiting consumption */
@@ -283,10 +283,9 @@ export interface ProcessCall<T extends StateData = StateData> {
   data?: T;
 }
 
-// type ValidProcessState<M extends StepStateMap> = {
-//   [K in keyof M]: { type: ProcessType; step: K; data: M[K] };
-// }[keyof M];
-
+/**
+ * Used as the type of the `state` field in `ProcessStep<M>`, ensuring that a handler can only return a state that names a step actually defined in the process and pairs it with the correct data type for that step.
+ */
 type ProcessStateFor<M extends StepStateMap> = {
   [K in keyof M]: ProcessState<M[K], K & StepType>;
 }[keyof M];
@@ -331,12 +330,7 @@ export interface ProcessStep<M extends StepStateMap = StepStateMap> {
   /** Process handler returns the updated state of the process */
   state: ProcessStateFor<M>;
 
-  /**
-   * Process handler returns the next events to be scheduled.
-   * This is expressed as a mapped tuple type:
-   * - If `type O = [A, B, C]`, resolves to [Event<A>, Event<B>, Event<C>];
-   * - Mapped types over tuples preserve order and length.
-   */
+  /** Process step handler returns the next events to be scheduled */
   next: Event[];
 
   /**
@@ -387,7 +381,7 @@ export interface RunSimulationOptions<T extends StateData = StateData> {
   /** Stop simulation when this specific event finishes */
   untilEvent?: Event<T>;
 
-  /** Optional run identifier. Defaults to a random UUID. */
+  /** Optional run identifier; defaults to a random UUID */
   runId?: string;
 
   /**
@@ -396,10 +390,10 @@ export interface RunSimulationOptions<T extends StateData = StateData> {
    */
   runDirectory?: string;
 
-  /** Overrides the simulation dump interval for this run. */
+  /** Overrides the simulation dump interval for this run */
   dumpInterval?: number;
 
-  /** Optional metadata merged into `run.json` for this run. */
+  /** Optional metadata merged into `run.json` for this run */
   runMetadata?: Record<string, unknown>;
 }
 

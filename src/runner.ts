@@ -14,42 +14,68 @@ import {
 import { deserializeSimulation, serializeSimulation } from "./serialize.ts";
 import { run, shouldTerminate } from "./simulation.ts";
 
+/**
+ * Dump configuration and mutable state for a simulation run.
+ * Persisted as part of `RunManifest` so that dump sequencing survives process restarts.
+ */
 interface RunDumpMetadata {
+  /** Directory where dump files are written */
   directory: string;
+
+  /** Number of deltas to accumulate between dumps; controls the granularity vs. disk-write tradeoff */
   interval: number;
+
+  /** Monotonically increasing count of dumps written so far; used as the numeric prefix in dump file names */
   count: number;
+
+  /** File name (not full path) of the most recently written dump, if any */
   lastFile?: string;
 }
 
+/**
+ * Persisted representation of a simulation run, written to `run.json` in the run's root directory.
+ * Combines run identity, timestamps, dump state, and optional user metadata in a single document.
+ * Written on initialization and after every dump, so it always reflects the latest run state and allows interrupted runs to be resumed or inspected after the fact.
+ */
 interface RunManifest {
+  /** Unique identifier for this run; stable across restarts of the same run */
   runId: string;
+
+  /** ISO 8601 timestamp of when this run was first initialized; never updated after creation */
   createdAt: string;
+
+  /** ISO 8601 timestamp of the most recent manifest write; updated on every dump */
   updatedAt: string;
+
+  /** Root directory for this run */
   runRoot: string;
+
+  /** Dump configuration and progress state */
   dump: RunDumpMetadata;
+
+  /** Optional user-supplied metadata, merged from `RunSimulationOptions.runMetadata` at run start */
   metadata?: Record<string, unknown>;
 }
 
 /**
  * Context for managing simulation runs, including dump file management and run metadata persistence.
- * This is used to configure and track long-running simulations, allowing for periodic state dumps and resumption.
  */
 export interface RunContext {
-  /** Base directory for the simulation run, where metadata and dumps are stored. */
-  runRoot: string;
-
-  /** Directory for storing simulation dumps, relative to `runRoot`. */
-  dumpDirectory: string;
-
-  /** Path to the run manifest file (`run.json`) within `runRoot`. */
+  /** Path to run.json on disk */
   manifestPath: string;
 
-  /** In-memory representation of the run manifest, used for tracking run metadata and dump state. */
+  /** In-memory manifest */
   manifest: RunManifest;
 }
 
+/**
+ * Result of a single `dumpToDisk` call: the path of the written checkpoint file and the updated manifest reflecting the incremented dump count and latest file name.
+ */
 export interface DumpWriteResult {
+  /** Absolute or relative path to the checkpoint file just written */
   path: string;
+
+  /** Updated manifest after recording this dump; should be persisted to the `RunContext` */
   manifest: RunManifest;
 }
 
@@ -58,91 +84,36 @@ const DEFAULT_DUMP_DIR = "dumps";
 const DEFAULT_DUMP_INTERVAL = 1000;
 
 /**
- * Reads the run manifest from disk if it exists, or returns an empty object if not.
- * The manifest contains metadata about the simulation run, including dump configuration and run metadata.
- * This allows for resuming runs with existing metadata and dump state.
+ * Reads the run manifest from disk if it exists.
+ * Re-throws any other error (e.g. JSON parse errors, permission errors) in case of corrupted or unreadable manifest.
+ * Returns an empty object if an existing manifest is not found.
  */
 async function readManifest(path: string): Promise<Partial<RunManifest>> {
   try {
-    const raw = await Deno.readTextFile(path);
-    return JSON.parse(raw) as Partial<RunManifest>;
-  } catch (_err) {
-    return {};
+    return JSON.parse(await Deno.readTextFile(path)) as Partial<RunManifest>;
+  } catch (err) {
+    if (err instanceof Deno.errors.NotFound) return {};
+    throw err;
   }
 }
 
 /**
- * Determine if it's time to dump the current simulation state based on the configured interval and the number of deltas accumulated since the last dump.
+ * Merges a previous (possibly partial) manifest with options and computed defaults into a complete RunManifest.
  */
-export function shouldDump(
-  deltaEncoded: DeltaEncodedSimulation,
-  interval: number,
-): boolean {
-  return deltaEncoded.deltas.length >= interval;
-}
-
-/**
- * Dump the current simulation state to disk and return dump file details.
- * Files are written to the run dump directory using the configured sequence/time pattern.
- * The file name uses a simple monotonic sequence and simulation time, e.g. `1-t100.json`.
- * This allows for easy identification of dump files and their corresponding simulation times.
- */
-export async function dumpToDisk(
-  serialized: string,
-  currentTime: number,
-  runContext: RunContext,
-): Promise<DumpWriteResult> {
-  const manifest = runContext.manifest;
-  const fileName = `${manifest.dump.count}-t${currentTime}.json`;
-  const dumpPath = `${runContext.dumpDirectory}/${fileName}`;
-
-  // FIXME: Do not await, write asynchronously
-  await Deno.writeTextFile(dumpPath, serialized);
-
-  const nextManifest: RunManifest = {
-    ...manifest,
-    dump: {
-      ...manifest.dump,
-      count: manifest.dump.count + 1,
-      lastFile: fileName,
-    },
-  };
-  runContext.manifest = nextManifest;
-
-  await persistRunManifest(runContext.manifest, runContext.manifestPath);
-
-  return {
-    path: dumpPath,
-    manifest: nextManifest,
-  };
-}
-
-/**
- * Resolves the run context for a simulation run, including setting up directories and manifest state.
- * If a run manifest already exists, it will be read and used to populate the context; otherwise, a new manifest will be created.
- * This function ensures that the necessary directories exist and that the run manifest is initialized with the appropriate metadata.
- */
-export async function resolveRunContext(
-  options?: RunSimulationOptions,
-): Promise<RunContext> {
-  const runId = options?.runId ?? crypto.randomUUID();
-  const runRoot = options?.runDirectory ?? `${DEFAULT_RUNS_DIR}/run-${runId}`;
-  const manifestPath = `${runRoot}/run.json`;
-
-  const previous = await readManifest(manifestPath);
-
+function buildManifest(
+  previous: Partial<RunManifest>,
+  options: RunSimulationOptions | undefined,
+  defaults: { runId: string; runRoot: string },
+): RunManifest {
+  const now = new Date().toISOString();
   const dumpDirectory = previous.dump?.directory ??
-    `${runRoot}/${DEFAULT_DUMP_DIR}`;
+    `${defaults.runRoot}/${DEFAULT_DUMP_DIR}`;
   const dumpInterval = options?.dumpInterval ?? previous.dump?.interval ??
     DEFAULT_DUMP_INTERVAL;
 
-  await Deno.mkdir(runRoot, { recursive: true });
-  await Deno.mkdir(dumpDirectory, { recursive: true });
-
-  const now = new Date().toISOString();
-  const manifest: RunManifest = {
-    runId: options?.runId ?? previous.runId ?? runId,
-    runRoot,
+  return {
+    runId: previous.runId ?? defaults.runId,
+    runRoot: defaults.runRoot,
     createdAt: previous.createdAt ?? now,
     updatedAt: now,
     dump: {
@@ -156,15 +127,75 @@ export async function resolveRunContext(
       ...(options?.runMetadata ?? {}),
     },
   };
+}
+
+/**
+ * Determines if it's time to dump the current simulation state based on the configured interval and the number of deltas accumulated since the last dump.
+ */
+export function shouldDump(
+  deltaEncoded: DeltaEncodedSimulation,
+  interval: number,
+): boolean {
+  return deltaEncoded.deltas.length >= interval;
+}
+
+/**
+ * Dumps the current simulation state to disk and return dump file details.
+ * Files are written to the run dump directory using the configured sequence/time pattern.
+ * The file name uses a simple monotonic sequence and simulation time, e.g. `1-t100.json`.
+ * Returns the updated manifest.
+ */
+export async function dumpToDisk(
+  serialized: string,
+  currentTime: number,
+  context: RunContext,
+): Promise<DumpWriteResult> {
+  const manifest = context.manifest;
+  const fileName = `${manifest.dump.count}-t${currentTime}.json`;
+  const dumpPath = `${manifest.dump.directory}/${fileName}`;
+
+  // FIXME: Do not await, write asynchronously
+  await Deno.writeTextFile(dumpPath, serialized);
+
+  const nextManifest: RunManifest = {
+    ...manifest,
+    dump: {
+      ...manifest.dump,
+      count: manifest.dump.count + 1,
+      lastFile: fileName,
+    },
+  };
+
+  await persistRunManifest(nextManifest, context.manifestPath);
+
+  return {
+    path: dumpPath,
+    manifest: nextManifest,
+  };
+}
+
+/**
+ * Initializes a simulation run: computes paths, reads any previous manifest from disk, builds the merged manifest, creates necessary directories, and writes the manifest.
+ * Returns a `RunContext` for use in the main simulation loop.
+ */
+export async function initializeRun(
+  options?: RunSimulationOptions,
+): Promise<RunContext> {
+  const runId = options?.runId ?? crypto.randomUUID();
+  const runRoot = options?.runDirectory ?? `${DEFAULT_RUNS_DIR}/run-${runId}`;
+  const manifestPath = `${runRoot}/run.json`;
+
+  // Read previous manifest from disk if it exists
+  const previous = await readManifest(manifestPath);
+
+  const manifest = buildManifest(previous, options, { runId, runRoot });
+
+  await Deno.mkdir(runRoot, { recursive: true });
+  await Deno.mkdir(manifest.dump.directory, { recursive: true });
 
   await persistRunManifest(manifest, manifestPath);
 
-  return {
-    runRoot,
-    dumpDirectory,
-    manifestPath,
-    manifest,
-  };
+  return { manifestPath, manifest };
 }
 
 /**
@@ -211,8 +242,7 @@ export async function runSimulationWithDeltas(
   init: Simulation,
   options?: RunSimulationOptions,
 ): Promise<SimulationResult<DeltaEncodedSimulation>> {
-  const runContext = await resolveRunContext(options);
-  const dumpInterval = runContext.manifest.dump.interval;
+  const context = await initializeRun(options);
 
   const encoded: DeltaEncodedSimulation = {
     base: { ...init },
@@ -220,39 +250,43 @@ export async function runSimulationWithDeltas(
     current: { ...init },
   };
   const checkpoints: string[] = [];
-  const result = {
-    current: init,
-  };
 
+  // Main simulation loop
   const start = performance.now();
   while (true) {
-    const [next, continuation] = run(result.current);
+    const [next, continuation] = run(encoded.current);
     if (!continuation) break;
-    result.current = next;
 
-    encoded.deltas.push(createDelta(encoded.current, result.current));
-    encoded.current = result.current;
+    // Record the diff from the previous state to the next and advance the current pointer
+    encoded.deltas.push(createDelta(encoded.current, next));
+    encoded.current = next;
 
     if (options?.rate) await delay(options.rate);
-    if (options && shouldTerminate(result.current, options)) break;
+    if (options && shouldTerminate(encoded.current, options)) break;
 
-    if (shouldDump(encoded, dumpInterval)) {
-      const checkpoint = await dumpToDisk(
+    if (shouldDump(encoded, context.manifest.dump.interval)) {
+      // Flush accumulated deltas to disk and record the checkpoint path
+      const dump = await dumpToDisk(
         serializeSimulation(encoded),
         encoded.current.currentTime,
-        runContext,
+        context,
       );
-      checkpoints.push(checkpoint.path);
-      const compacted = pruneWorkingState(result.current);
+      checkpoints.push(dump.path);
+      context.manifest = dump.manifest;
+
+      // Compact in-memory state: history is now safely on disk, we can drop it
+      // Make the pruned state the new base for future deltas
+      const compacted = pruneWorkingState(encoded.current);
       encoded.base = compacted;
       encoded.deltas = [];
       encoded.current = compacted;
-      result.current = compacted;
     }
   }
 
   const stop = performance.now();
   if (checkpoints.length > 0) {
+    // Produce a full-history view of the run
+    // Merge all checkpoint files with the in-memory tail
     const current = await reconstructFullCurrent(checkpoints, encoded.current);
     encoded.base = current;
     encoded.deltas = [];

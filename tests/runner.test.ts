@@ -1,11 +1,11 @@
-import { assert, assertEquals } from "@std/assert";
+import { assert, assertEquals, assertRejects } from "@std/assert";
 
 import { DeltaEncodedSimulation } from "../src/memory.ts";
 import { EventState, ProcessDefinition, StateData } from "../src/model.ts";
 import {
   dumpToDisk,
+  initializeRun,
   reconstructFullCurrent,
-  resolveRunContext,
   runSimulation,
   runSimulationWithDeltas,
   shouldDump,
@@ -45,7 +45,7 @@ Deno.test("dumpToDisk writes a checkpoint file", async () => {
     current: { ...sim, currentTime: 1 },
   };
 
-  const runContext = await resolveRunContext({ runDirectory: dir });
+  const runContext = await initializeRun({ runDirectory: dir });
   await dumpToDisk(serializeSimulation(deltaEncoded), 1, runContext);
   const stat = await Deno.stat(`${dir}/dumps/0-t1.json`);
   assert(stat.isFile);
@@ -58,7 +58,7 @@ Deno.test("dumpToDisk writes a checkpoint file", async () => {
   await Deno.remove(dir, { recursive: true });
 });
 
-Deno.test("resolveRunContext reuses existing manifest dump state", async () => {
+Deno.test("initializeRun reuses existing manifest dump state", async () => {
   const dir = "runs/test/run-resume-test";
   await Deno.remove(dir, { recursive: true }).catch(() => {});
   await Deno.mkdir(dir, { recursive: true });
@@ -82,8 +82,8 @@ Deno.test("resolveRunContext reuses existing manifest dump state", async () => {
     JSON.stringify(manifest, null, 2),
   );
 
-  const context = await resolveRunContext({ runDirectory: dir });
-  assertEquals(context.dumpDirectory, `${dir}/custom-dumps`);
+  const context = await initializeRun({ runDirectory: dir });
+  assertEquals(context.manifest.dump.directory, `${dir}/custom-dumps`);
   assertEquals(context.manifest.dump.interval, 7);
   assertEquals(context.manifest.dump.count, 42);
   assertEquals(context.manifest.dump.lastFile, "41-t99.json");
@@ -92,20 +92,16 @@ Deno.test("resolveRunContext reuses existing manifest dump state", async () => {
   await Deno.remove(dir, { recursive: true });
 });
 
-Deno.test("resolveRunContext tolerates invalid run.json and recreates defaults", async () => {
+Deno.test("initializeRun rejects invalid run.json", async () => {
   const dir = "runs/test/run-invalid-manifest-test";
   await Deno.remove(dir, { recursive: true }).catch(() => {});
   await Deno.mkdir(dir, { recursive: true });
   await Deno.writeTextFile(`${dir}/run.json`, "{ not valid json");
 
-  const context = await resolveRunContext({
-    runDirectory: dir,
-    dumpInterval: 3,
-  });
-  assertEquals(context.runRoot, dir);
-  assertEquals(context.dumpDirectory, `${dir}/dumps`);
-  assertEquals(context.manifest.dump.interval, 3);
-  assertEquals(context.manifest.dump.count, 0);
+  await assertRejects(
+    () => initializeRun({ runDirectory: dir, dumpInterval: 3 }),
+    SyntaxError,
+  );
 
   await Deno.remove(dir, { recursive: true });
 });
