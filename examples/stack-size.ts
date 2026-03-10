@@ -1,4 +1,4 @@
-import { Event, ProcessDefinition, StateData } from "../src/model.ts";
+import type { Event, ProcessDefinition, StateData } from "../src/model.ts";
 import { runSimulation } from "../src/runner.ts";
 import {
   createEvent,
@@ -64,7 +64,7 @@ if (import.meta.main) {
     },
   };
 
-  sim.registry = registerProcess(sim, foo);
+  sim.processes = registerProcess(sim, foo);
 
   const e1 = createEvent({
     scheduledAt: 0,

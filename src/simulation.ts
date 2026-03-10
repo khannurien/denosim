@@ -1,7 +1,12 @@
-import {
+import type {
   CreateEventOptions,
+  DisciplineDefinition,
+  DisciplineRegistry,
+  DisciplineType,
   Event,
-  EventState,
+  PredicateDefinition,
+  PredicateRegistry,
+  PredicateType,
   ProcessDefinition,
   ProcessRegistry,
   ProcessState,
@@ -13,23 +18,28 @@ import {
   StepStateMap,
   Timeline,
 } from "./model.ts";
+import { EventState, QueueDiscipline } from "./model.ts";
 
 /**
  * Initializes a new simulation instance with:
  * - `currentTime` set to 0 (starting point of simulation)
  * - Empty timeline (no initial events)
  * - Process registry populated with a dummy process (`none`)
+ * - Discipline registry pre-populated with `FIFO` and `LIFO`
+ * - Empty predicate registry
  * - Empty state array (no running processes)
  */
 export function initializeSimulation(): Simulation {
-  const sim = {
+  const sim: Simulation = {
     currentTime: 0,
     timeline: {
       events: {},
       status: {},
       transitions: [],
     },
-    registry: {},
+    processes: {},
+    disciplines: {},
+    predicates: {},
     state: {},
     stores: {},
   };
@@ -49,7 +59,20 @@ export function initializeSimulation(): Simulation {
     },
   };
 
-  sim.registry = registerProcess(sim, emptyProcess);
+  sim.processes = registerProcess(sim, emptyProcess);
+
+  const fifoDiscipline: DisciplineDefinition = {
+    type: QueueDiscipline.FIFO,
+    comparator: (a, b) => a.index - b.index,
+  };
+
+  const lifoDiscipline: DisciplineDefinition = {
+    type: QueueDiscipline.LIFO,
+    comparator: (a, b) => b.index - a.index,
+  };
+
+  sim.disciplines = registerDiscipline(sim, fifoDiscipline);
+  sim.disciplines = registerDiscipline(sim, lifoDiscipline);
 
   return sim;
 }
@@ -127,6 +150,7 @@ function step(sim: Simulation, event: Event): Simulation {
           buffer: [...store.buffer],
           getRequests: [...store.getRequests],
           putRequests: [...store.putRequests],
+          filteredGetRequests: [...store.filteredGetRequests],
         },
       ]),
     ),
@@ -165,7 +189,12 @@ function handleEvent(
   event: Event,
 ): ProcessStep {
   // Retrieve process definition from the registry
-  const definition = sim.registry[event.process.type];
+  const definition = sim.processes[event.process.type];
+  if (!definition) {
+    throw new RangeError(
+      `Process definition not found in registry: ${event.process.type}`,
+    );
+  }
 
   // Retrieve parent process state if it exists
   const parentState = event.parent && event.parent in sim.state
@@ -228,22 +257,55 @@ function handleEvent(
 }
 
 /**
+ * Registers a discipline definition in the simulation's discipline registry.
+ * Returns the updated discipline registry.
+ */
+export function registerDiscipline<
+  T extends StateData = StateData,
+  K extends DisciplineType = DisciplineType,
+>(
+  sim: Simulation,
+  discipline: DisciplineDefinition<K, T>,
+): DisciplineRegistry {
+  return {
+    ...sim.disciplines,
+    [discipline.type]: discipline,
+  } as DisciplineRegistry;
+}
+
+/**
+ * Registers a predicate function for use with `getWhere`.
+ * Returns the updated predicate registry.
+ */
+export function registerPredicate<
+  K extends PredicateType,
+  T extends StateData = StateData,
+>(
+  sim: Simulation,
+  definition: PredicateDefinition<K, T>,
+): PredicateRegistry {
+  return {
+    ...sim.predicates,
+    [definition.type]: definition.predicate,
+  } as PredicateRegistry;
+}
+
+/**
  * Registers a process for further use during simulation.
  * Processes are spawned on event handling (see `CreateEventOptions`).
  * Returns the updated process registry.
  */
 export function registerProcess<
-  R extends ProcessRegistry,
   S extends StepStateMap,
   K extends ProcessType,
 >(
-  sim: Simulation<R>,
+  sim: Simulation,
   process: ProcessDefinition<S> & { type: K },
-): R & { [P in K]: ProcessDefinition<S> } {
+): ProcessRegistry {
   return {
-    ...sim.registry,
+    ...sim.processes,
     [process.type]: process,
-  };
+  } as ProcessRegistry;
 }
 
 /**
@@ -273,7 +335,7 @@ export function createEvent<T extends StateData>(
 /**
  * Schedules an event for future processing in the simulation.
  * Validates that the event isn't scheduled in the past.
- * `initialState` defaults to `EventState.Scheduled` unless `waiting` specificed at event creation when expected to block until explicitly resumed (through e.g. store synchronization primitives).
+ * `initialState` defaults to `EventState.Scheduled` unless `waiting` is specified at event creation, in which case the event blocks until explicitly resumed (e.g. via store synchronization primitives).
  * Returns an updated Timeline reflecting the new event and its initial transition.
  */
 export function scheduleEvent<T extends StateData>(
@@ -282,8 +344,8 @@ export function scheduleEvent<T extends StateData>(
 ): Timeline {
   if (event.scheduledAt < sim.currentTime) {
     throw RangeError(
-      `Event scheduled at a point in time in the past: ${event.id} ` +
-        `(scheduled at: ${event.scheduledAt}; current time: ${sim.currentTime})`,
+      `Event scheduled at a point in time in the past: ${event.id}` +
+        ` (scheduled at: ${event.scheduledAt}; current time: ${sim.currentTime})`,
     );
   }
 

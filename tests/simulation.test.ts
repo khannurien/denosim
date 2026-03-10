@@ -1,11 +1,7 @@
 import { assert, assertEquals, assertRejects, assertThrows } from "@std/assert";
 
-import {
-  Event,
-  EventState,
-  ProcessDefinition,
-  StateData,
-} from "../src/model.ts";
+import type { Event, ProcessDefinition, StateData } from "../src/model.ts";
+import { EventState } from "../src/model.ts";
 import { runSimulation } from "../src/runner.ts";
 import {
   createEvent,
@@ -98,7 +94,7 @@ Deno.test("basic event ordering", async () => {
     },
   };
 
-  sim.registry = registerProcess(sim, foo);
+  sim.processes = registerProcess(sim, foo);
 
   const e1 = createEvent({ scheduledAt: 10, process: { type: "foo" } });
   const e2 = createEvent({ scheduledAt: 0, process: { type: "foo" } });
@@ -145,7 +141,7 @@ Deno.test("scheduling events in the past", async () => {
     },
   };
 
-  sim.registry = registerProcess(sim, foo);
+  sim.processes = registerProcess(sim, foo);
 
   const e1 = createEvent({ scheduledAt: -1 });
   const e2 = createEvent({ scheduledAt: 10, process: { type: "foo" } });
@@ -182,7 +178,7 @@ Deno.test("event process scheduling", async () => {
     },
   };
 
-  sim.registry = registerProcess(sim, foo);
+  sim.processes = registerProcess(sim, foo);
 
   const e1 = createEvent({ scheduledAt: 10, process: { type: "foo" } });
   const e2 = createEvent({ scheduledAt: 20, process: { type: "foo" } });
@@ -261,7 +257,7 @@ Deno.test("events with same time process by priority order (lower number = highe
     },
   };
 
-  sim.registry = registerProcess(sim, testProcess);
+  sim.processes = registerProcess(sim, testProcess);
 
   // Create events at same time with different priorities
   const lowPriority = createEvent({
@@ -319,7 +315,7 @@ Deno.test("priority only affects ordering at same time", async () => {
     },
   };
 
-  sim.registry = registerProcess(sim, testProcess);
+  sim.processes = registerProcess(sim, testProcess);
 
   // Mix of times and priorities - time should dominate
   const earlyLowPriority = createEvent({
@@ -369,7 +365,7 @@ Deno.test("default priority is 0 (highest priority)", async () => {
     },
   };
 
-  sim.registry = registerProcess(sim, testProcess);
+  sim.processes = registerProcess(sim, testProcess);
 
   const withPriority = createEvent({
     scheduledAt: 10,
@@ -411,7 +407,7 @@ Deno.test("negative priorities work correctly (very high priority)", async () =>
     },
   };
 
-  sim.registry = registerProcess(sim, testProcess);
+  sim.processes = registerProcess(sim, testProcess);
 
   const veryHigh = createEvent({
     scheduledAt: 10,
@@ -477,8 +473,8 @@ Deno.test("priority with different process types", async () => {
     },
   };
 
-  sim.registry = registerProcess(sim, processA);
-  sim.registry = registerProcess(sim, processB);
+  sim.processes = registerProcess(sim, processA);
+  sim.processes = registerProcess(sim, processB);
 
   // Create events and log their priorities
   const aLow = createEvent({
@@ -534,7 +530,7 @@ Deno.test("process state initialization", async () => {
     },
   };
 
-  sim.registry = registerProcess(sim, foo);
+  sim.processes = registerProcess(sim, foo);
 
   const e1 = createEvent({
     scheduledAt: 0,
@@ -618,7 +614,7 @@ Deno.test("process state across steps", async () => {
     },
   };
 
-  sim.registry = registerProcess(sim, foobar);
+  sim.processes = registerProcess(sim, foobar);
 
   const e1 = createEvent({
     scheduledAt: 0,
@@ -745,7 +741,7 @@ Deno.test("process state inheritance (fork)", async () => {
     },
   };
 
-  sim.registry = registerProcess(sim, foo);
+  sim.processes = registerProcess(sim, foo);
 
   const e1 = createEvent({
     scheduledAt: 0,
@@ -833,8 +829,8 @@ Deno.test("process state inheritance (exec)", async () => {
     },
   };
 
-  sim.registry = registerProcess(sim, foo);
-  sim.registry = registerProcess(sim, bar);
+  sim.processes = registerProcess(sim, foo);
+  sim.processes = registerProcess(sim, bar);
 
   const e1 = createEvent({
     scheduledAt: 0,
@@ -907,8 +903,8 @@ Deno.test("process state inheritance (spawn)", async () => {
     },
   };
 
-  sim.registry = registerProcess(sim, foo);
-  sim.registry = registerProcess(sim, bar);
+  sim.processes = registerProcess(sim, foo);
+  sim.processes = registerProcess(sim, bar);
 
   const e1 = createEvent({
     scheduledAt: 0,
@@ -959,7 +955,7 @@ Deno.test("events with same time and priority are processed in LIFO scheduling o
     },
   };
 
-  sim.registry = registerProcess(sim, testProcess);
+  sim.processes = registerProcess(sim, testProcess);
 
   const e1 = createEvent({
     scheduledAt: 10,

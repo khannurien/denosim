@@ -2,12 +2,13 @@
  * Core simulation container that maintains:
  * - The current virtual time of the simulation
  * - The simulation timeline (events along with their state transitions)
- * - A process definition registry for all processes available in the simulation
- * - The current state of all running processes
- * - All resource stores registered for use in process handlers
+ * - `processes`: registry of all process definitions available in the simulation
+ * - `disciplines`: registry of queue discipline implementations used by stores
+ * - `predicates`: registry of predicate functions used by `getWhere`
+ * - `state`: current state of all running processes
+ * - `stores`: all resource stores registered for use in process handlers
  */
 export interface Simulation<
-  R extends ProcessRegistry = ProcessRegistry,
   S extends StoreRegistry = StoreRegistry,
 > {
   /**
@@ -29,7 +30,22 @@ export interface Simulation<
    * Allows dynamic process registration and lookup.
    * Includes a default `none` process for events without associated processes.
    */
-  registry: R;
+  processes: ProcessRegistry;
+
+  /**
+   * Registry of queue discipline implementations used by stores.
+   * Maps discipline keys to their comparator definitions.
+   * Never serialized; re-injected at deserialization time alongside `processes`.
+   * Pre-populated with `FIFO` and `LIFO` by `initializeSimulation`.
+   */
+  disciplines: DisciplineRegistry;
+
+  /**
+   * Registry of predicate functions used by `getWhere`.
+   * Maps predicate keys to their implementations.
+   * Never serialized; re-injected at deserialization time alongside `processes`.
+   */
+  predicates: PredicateRegistry;
 
   /**
    * Current simulation state of all running processes.
@@ -143,7 +159,7 @@ export interface Event<T extends StateData = StateData> {
 
 /**
  * Shared data structure used for coordinating processes.
- * Stores are used through `get` and `put` primitives that work in a LIFO fashion.
+ * Stores are used through `get`, `put`, and `getWhere` primitives.
  * Used for inter-process synchronization, producer-consumer patterns, resource sharing, etc.
  */
 export interface Store<
@@ -162,8 +178,12 @@ export interface Store<
    */
   blocking: boolean;
 
-  /** Optional discipline for managing the order of events in the store's queues; defaults to LIFO */
-  discipline: QueueDiscipline;
+  /**
+   * Discipline key for managing the selection order among available items.
+   * Must be registered in `sim.disciplines`. Defaults to `LIFO`.
+   * Built-in keys `FIFO` and `LIFO` are always available.
+   */
+  discipline: DisciplineType;
 
   /** Items currently stored by non-blocking `put` operations and awaiting consumption */
   buffer: Event<T>[];
@@ -173,6 +193,13 @@ export interface Store<
 
   /** Processes blocked waiting to put items */
   putRequests: Event<T>[];
+
+  /**
+   * Processes blocked on a `getWhere` call, waiting for an item that satisfies their predicate.
+   * Each entry pairs the waiting event with the predicate key used to look up the predicate function in `sim.predicates`.
+   * `predicateType` is a plain string and is fully JSON-serializable. The predicate function is resolved from `predicates` at runtime; checkpoints capture the key correctly and resume correctly as long as the same `predicates` registry is supplied to `deserializeSimulation`.
+   */
+  filteredGetRequests: { event: Event<T>; predicateType: PredicateType }[];
 }
 
 /**
@@ -422,19 +449,106 @@ export interface CreateEventOptions<T extends StateData = StateData> {
   process?: ProcessCall<T>;
 }
 
-/** Discipline for managing the order of events in a store's queues */
-export enum QueueDiscipline {
+/** Unique, user-defined identifier for a queue discipline */
+export type DisciplineType = string;
+
+/**
+ * An entry presented to a discipline comparator.
+ * `index` is the item's current position in the queue array (0 = oldest / front of queue).
+ * `event` carries the full event, including `process.data` which is the item payload.
+ *
+ * The `index` field enables positional policies (FIFO/LIFO).
+ * The `event` field enables data-based policies (priority, EDF, etc.).
+ * Both may be combined, e.g. data-based ordering with FIFO as a tiebreak.
+ */
+export type DisciplineEntry<T extends StateData = StateData> = {
+  readonly event: Event<T>;
+  readonly index: number;
+};
+
+/**
+ * A ranking function over two queue candidates.
+ * Returns negative if `a` should be selected over `b`, positive for `b` over `a`, zero for a tie.
+ */
+export type DisciplineComparator<T extends StateData = StateData> = (
+  a: DisciplineEntry<T>,
+  b: DisciplineEntry<T>,
+) => number;
+
+/**
+ * Defines a named queue discipline with its comparator implementation.
+ * Registered in `sim.disciplines` via `registerDiscipline`.
+ * `T` narrows the payload type visible inside the comparator, so callers can access `a.event.process.data` without casting.
+ * The registry stores disciplines with `T` erased to `StateData`; the narrowing is enforced at registration time.
+ */
+export interface DisciplineDefinition<
+  K extends DisciplineType = DisciplineType,
+  T extends StateData = StateData,
+> {
+  /** Unique identifier for this discipline */
+  type: K;
+
+  /**
+   * The ranking function that selects among queue candidates.
+   * See `DisciplineComparator` for semantics.
+   */
+  comparator: DisciplineComparator<T>;
+}
+
+/**
+ * Maps discipline type keys to their definitions.
+ * `D` is the union of valid discipline keys for this registry.
+ * The registry itself is never serialized; `Store.discipline` stores only the key.
+ */
+export type DisciplineRegistry<D extends DisciplineType = DisciplineType> = {
+  [K in D]: DisciplineDefinition<K>;
+};
+
+/**
+ * Discipline for managing the selection order of events in a store's queues.
+ * FIFO: Selects the item that entered the queue first (lowest index).
+ * LIFO: Selects the item that entered the queue most recently (highest index).
+ */
+export const enum QueueDiscipline {
   FIFO = "FIFO",
   LIFO = "LIFO",
 }
 
+/** Unique name for a store filtering predicate over store elements */
+export type PredicateType = string;
+
+/** Predicate function for store filtering over store elements */
+export type Predicate<T extends StateData = StateData> = (item: T) => boolean;
+
+/**
+ * Registry mapping predicate keys to their implementations.
+ * Predicates must be registered in `sim.predicates` using `registerPredicate`.
+ * The registry is never serialized; re-injected at deserialization time via `deserializeSimulation`.
+ */
+export type PredicateRegistry = Record<PredicateType, Predicate>;
+
+/**
+ * Defines a named predicate with its implementation.
+ * Registered in `sim.predicates` via `registerPredicate`.
+ */
+export interface PredicateDefinition<
+  K extends PredicateType = PredicateType,
+  T extends StateData = StateData,
+> {
+  /** Unique identifier for this predicate */
+  type: K;
+
+  /** The predicate function that filters store items */
+  predicate: Predicate<T>;
+}
+
 /**
  * Object used to create new stores in the simulation.
- * Stores enable (possibly blocking) coordination between processes via `get`/`put` operations.
+ * Stores enable (possibly blocking) coordination between processes via `get`/`put`/`getWhere` operations.
  * Defaults to blocking operations with capacity for one single item.
  * Capacity determines how many items the store can hold before `put` operations block.
  * Blocking operations use `EventState.Waiting` to pause processes until conditions resolve.
- * Stores default to LIFO discipline for their queues, meaning the most recently added event will be the first to be processed when conditions allow.
+ * Stores default to `LIFO` discipline. Custom disciplines must be registered in `sim.disciplines`.
  */
 export interface CreateStoreOptions {
   /** Optional store ID for deterministic typing/registration */
@@ -446,6 +560,9 @@ export interface CreateStoreOptions {
   /** Controls whether the store enables synchronous (blocking) or asynchronous coordination */
   blocking?: boolean;
 
-  /** Discipline for managing the order of events in the store's queues */
-  discipline?: QueueDiscipline;
+  /**
+   * Discipline key controlling selection order among available items.
+   * Must be registered in `sim.disciplines` using `registerDiscipline`. Defaults to `LIFO`.
+   */
+  discipline?: DisciplineType;
 }

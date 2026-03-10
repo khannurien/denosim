@@ -1,4 +1,4 @@
-import { ProcessDefinition, StateData } from "../src/model.ts";
+import type { ProcessDefinition, StateData } from "../src/model.ts";
 import { get, initializeStore, put, registerStore } from "../src/resources.ts";
 import { runSimulation } from "../src/runner.ts";
 import {
@@ -73,7 +73,7 @@ if (import.meta.main) {
     },
   };
 
-  sim.registry = registerProcess(sim, prod);
+  sim.processes = registerProcess(sim, prod);
 
   const cons: ProcessDefinition<{
     start: FooData;
@@ -132,7 +132,7 @@ if (import.meta.main) {
     },
   };
 
-  sim.registry = registerProcess(sim, cons);
+  sim.processes = registerProcess(sim, cons);
 
   const e1 = createEvent({
     scheduledAt: 0,

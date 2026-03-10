@@ -1,12 +1,12 @@
-import {
-  createDelta,
-  DeltaEncodedSimulation,
-  pruneWorkingState,
-} from "./memory.ts";
-import {
+import type { DeltaEncodedSimulation } from "./memory.ts";
+import { createDelta, pruneWorkingState } from "./memory.ts";
+import type {
+  DisciplineRegistry,
   Event,
   EventID,
   EventState,
+  PredicateRegistry,
+  ProcessRegistry,
   RunSimulationOptions,
   Simulation,
   SimulationResult,
@@ -325,7 +325,9 @@ export async function reconstructFullCurrent(
     checkpoints.map(async (checkpoint) => {
       const states = deserializeSimulation(
         await Deno.readTextFile(checkpoint),
-        tail.registry,
+        tail.processes,
+        tail.disciplines,
+        tail.predicates,
       );
       return states[states.length - 1];
     }),
@@ -342,6 +344,70 @@ export async function reconstructFullCurrent(
   );
 
   return mergeReplayState(full, tail);
+}
+
+/**
+ * Reconstructs the full sequence of intermediate simulation states from the dump files written by a previous `runSimulationWithDeltas` run.
+ * Each dump file is a self-contained delta-encoded checkpoint window. This function loads them in sequence order, reconstructs the intermediate states within each window, and stitches the windows into a single chronological array, giving the same scrub-able history that would be available from `reconstructFromDeltas` on a run that fit entirely in memory.
+ * The base of each subsequent window is skipped during stitching: it is the pruned snapshot used as a memory-management boundary, not a new simulation step, so it would otherwise duplicate the final time of the preceding window.
+ * Limitation: events processed after the last dump (the final in-memory window that did not reach the dump threshold) are not on disk and therefore not included in the returned array.
+ * FIXME: Always dump on simulation end?
+ * To cover the full run, include the states from the in-memory tail manually if they are still available at the call site.
+ */
+export async function loadRunHistory(
+  runDirectory: string,
+  processes: ProcessRegistry,
+  disciplines: DisciplineRegistry,
+  predicates: PredicateRegistry,
+): Promise<Simulation[]> {
+  // Read the manifest to find the dump directory
+  // May differ from the default if the run was initialized with a custom path
+  const manifestPath = `${runDirectory}/run.json`;
+  const manifest = await readManifest(manifestPath);
+  const dumpDir = manifest.dump?.directory ??
+    `${runDirectory}/${DEFAULT_DUMP_DIR}`;
+
+  // Collect all dump files
+  const files: string[] = [];
+  try {
+    for await (const entry of Deno.readDir(dumpDir)) {
+      if (entry.isFile && entry.name.endsWith(".json")) {
+        files.push(`${dumpDir}/${entry.name}`);
+      }
+    }
+  } catch (err) {
+    if (err instanceof Deno.errors.NotFound) return [];
+    throw err;
+  }
+
+  if (files.length === 0) return [];
+
+  // Sort by the monotonic sequence prefix (e.g. "2-t400.json" -> 2)
+  // parseInt stops at the first non-digit character, so no explicit split needed
+  files.sort((a, b) => {
+    const nameA = a.split("/").pop()!;
+    const nameB = b.split("/").pop()!;
+    return parseInt(nameA, 10) - parseInt(nameB, 10);
+  });
+
+  const allStates: Simulation[] = [];
+  for (const file of files) {
+    const json = await Deno.readTextFile(file);
+    const states = deserializeSimulation(
+      json,
+      processes,
+      disciplines,
+      predicates,
+    );
+    if (allStates.length === 0) {
+      allStates.push(...states);
+    } else {
+      // states[0] (pruned base of this window) == last entry of the previous window
+      allStates.push(...states.slice(1));
+    }
+  }
+
+  return allStates;
 }
 
 /**

@@ -1,4 +1,8 @@
 {
+  "name": "@khannurien/denosim",
+  "version": "0.1.0",
+  "license": "MIT",
+  "exports": "./mod.ts",
   "permissions": {
     "test": {
       "read": ["runs"],

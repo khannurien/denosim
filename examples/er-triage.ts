@@ -1,11 +1,12 @@
 import { randomIntegerBetween, randomSeeded } from "@std/random";
 
-import {
+import type {
+  DisciplineType,
   Event,
   ProcessDefinition,
-  QueueDiscipline,
   StateData,
 } from "../src/model.ts";
+import { QueueDiscipline } from "../src/model.ts";
 import { get, initializeStore, put, registerStore } from "../src/resources.ts";
 import { runSimulation } from "../src/runner.ts";
 import {
@@ -65,7 +66,7 @@ function percentile(values: number[], p: number): number {
 }
 
 interface ScenarioStats {
-  discipline: QueueDiscipline;
+  discipline: DisciplineType;
   endedAt: number;
   finished: number;
   urgentFinished: number;
@@ -119,28 +120,28 @@ function assert(condition: boolean, msg: string) {
 }
 
 async function runScenario(
-  discipline: QueueDiscipline,
+  discipline: DisciplineType,
   seed: bigint,
   verbose: boolean = false,
 ): Promise<ScenarioStats> {
   const prng = randomSeeded(seed);
   const sim = initializeSimulation();
 
-  const urgentPool = initializeStore<DoctorToken, typeof URGENT_POOL_ID>({
+  const urgentPool = initializeStore({
     id: URGENT_POOL_ID,
     blocking: false,
     capacity: URGENT_DOCTORS,
     discipline: QueueDiscipline.FIFO,
   });
-  const generalPool = initializeStore<DoctorToken, typeof GENERAL_POOL_ID>({
+  const generalPool = initializeStore({
     id: GENERAL_POOL_ID,
     blocking: false,
     capacity: GENERAL_DOCTORS,
     discipline,
   });
 
-  sim.stores = registerStore(sim, urgentPool);
-  sim.stores = registerStore(sim, generalPool);
+  sim.stores = registerStore<DoctorToken>(sim, urgentPool);
+  sim.stores = registerStore<DoctorToken>(sim, generalPool);
 
   for (let i = 0; i < URGENT_DOCTORS; i += 1) {
     const token: DoctorToken = {
@@ -322,8 +323,8 @@ async function runScenario(
     },
   };
 
-  sim.registry = registerProcess(sim, patient);
-  sim.registry = registerProcess(sim, arrivals);
+  sim.processes = registerProcess(sim, patient);
+  sim.processes = registerProcess(sim, arrivals);
 
   const start = createEvent({
     scheduledAt: 0,

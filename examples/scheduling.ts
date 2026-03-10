@@ -1,4 +1,4 @@
-import { Event, ProcessDefinition, StateData } from "../src/model.ts";
+import type { Event, ProcessDefinition, StateData } from "../src/model.ts";
 import { runSimulation } from "../src/runner.ts";
 import {
   createEvent,
@@ -53,7 +53,7 @@ if (import.meta.main) {
     },
   };
 
-  sim.registry = registerProcess(sim, fooCb);
+  sim.processes = registerProcess(sim, fooCb);
 
   const barCb: ProcessDefinition<{
     start: TimeoutData;
@@ -140,7 +140,7 @@ if (import.meta.main) {
     },
   };
 
-  sim.registry = registerProcess(sim, barCb);
+  sim.processes = registerProcess(sim, barCb);
 
   const step1Cb: ProcessDefinition<{
     start: TimeoutData;
@@ -222,7 +222,7 @@ if (import.meta.main) {
     },
   };
 
-  sim.registry = registerProcess(sim, step1Cb);
+  sim.processes = registerProcess(sim, step1Cb);
 
   const step2Cb: ProcessDefinition<{
     none: StateData;
@@ -242,7 +242,7 @@ if (import.meta.main) {
     },
   };
 
-  sim.registry = registerProcess(sim, step2Cb);
+  sim.processes = registerProcess(sim, step2Cb);
 
   const bazCb: ProcessDefinition<{
     start: TimeoutData;
@@ -329,7 +329,7 @@ if (import.meta.main) {
     },
   };
 
-  sim.registry = registerProcess(sim, bazCb);
+  sim.processes = registerProcess(sim, bazCb);
 
   const e1 = createEvent({
     scheduledAt: 10,

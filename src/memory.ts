@@ -1,7 +1,6 @@
-import {
+import type {
   Event,
   EventID,
-  EventState,
   EventTransition,
   ProcessState,
   Simulation,
@@ -9,6 +8,7 @@ import {
   StoreID,
   Timestamp,
 } from "./model.ts";
+import { EventState } from "./model.ts";
 
 /** Delta operations for events */
 type EventDeltaOp = { op: "set"; key: EventID; event: Event };
@@ -150,8 +150,9 @@ function diffState(
 }
 
 /**
- * Algorithm to compute the difference between two store objects, identifying modified, new, or deleted stores based on their keys and values.
- * This allows generating a list of operations that can be applied to update the previous stores to match the current ones, capturing only the necessary changes while also handling deletions.
+ * Algorithm to compute the difference between two store objects, identifying modified or new stores based on their keys and values.
+ * This allows generating a list of operations that can be applied to update the previous stores to match the current ones, capturing only the necessary changes.
+ * Note: stores are never deleted mid-run, so no delete operation is needed or produced.
  */
 function diffStores(
   prev: Record<StoreID, Store>,
@@ -173,7 +174,7 @@ function diffStores(
 
 /**
  * Apply a given delta to a base simulation state to produce an updated simulation state that reflects the changes captured in the delta.
- * This involves processing event operations (additions and updates), state operations (modifications), and store operations (additions, modifications, and deletions) to reconstruct the current simulation state from the base state and the provided delta.
+ * This involves processing event operations (additions and updates), state operations (modifications), and store operations (additions and modifications) to reconstruct the current simulation state from the base state and the provided delta.
  */
 export function applyDelta(
   base: Simulation,

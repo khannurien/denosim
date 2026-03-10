@@ -7,14 +7,13 @@ import {
   pruneWorkingState,
   reconstructFromDeltas,
 } from "../src/memory.ts";
-import {
+import type {
   Event,
-  EventState,
   EventTransition,
   ProcessDefinition,
-  QueueDiscipline,
   StateData,
 } from "../src/model.ts";
+import { EventState, QueueDiscipline } from "../src/model.ts";
 import { registerStore } from "../src/resources.ts";
 import { runSimulationWithDeltas } from "../src/runner.ts";
 import {
@@ -54,7 +53,7 @@ Deno.test("createDelta captures status transition and state mutations", async ()
       run: (_sim, _event, state) => ({ state, next: [] }),
     },
   };
-  sim.registry = registerProcess(sim, traced);
+  sim.processes = registerProcess(sim, traced);
 
   const e = createEvent({
     scheduledAt: 0,
@@ -112,6 +111,7 @@ Deno.test("applyDelta applies store set operations", () => {
       buffer: [],
       getRequests: [req],
       putRequests: [],
+      filteredGetRequests: [],
     },
   };
 
@@ -133,6 +133,7 @@ Deno.test("applyDelta applies store set operations", () => {
           buffer: [],
           getRequests: [],
           putRequests: [],
+          filteredGetRequests: [],
         },
       },
     ],
@@ -360,6 +361,7 @@ Deno.test("checkpoints preserve full replay state by default", async () => {
     buffer: [],
     getRequests: [req1],
     putRequests: [req2],
+    filteredGetRequests: [],
   });
   const e1 = createEvent({ scheduledAt: 0 });
   const e2 = createEvent({ scheduledAt: 1 });

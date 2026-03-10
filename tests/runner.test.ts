@@ -1,10 +1,12 @@
 import { assert, assertEquals, assertRejects } from "@std/assert";
 
-import { DeltaEncodedSimulation } from "../src/memory.ts";
-import { EventState, ProcessDefinition, StateData } from "../src/model.ts";
+import type { DeltaEncodedSimulation } from "../src/memory.ts";
+import type { ProcessDefinition, Simulation, StateData } from "../src/model.ts";
+import { EventState } from "../src/model.ts";
 import {
   dumpToDisk,
   initializeRun,
+  loadRunHistory,
   reconstructFullCurrent,
   runSimulation,
   runSimulationWithDeltas,
@@ -127,7 +129,7 @@ Deno.test("reconstructFullCurrent merges checkpoint files with in-memory state",
     },
   };
 
-  sim.registry = registerProcess(sim, simpleProcess);
+  sim.processes = registerProcess(sim, simpleProcess);
 
   // Create and run first checkpoint
   const e1 = createEvent({
@@ -152,7 +154,7 @@ Deno.test("reconstructFullCurrent merges checkpoint files with in-memory state",
 
   // Create in-memory tail with additional events
   const tailSim = initializeSimulation();
-  tailSim.registry = sim.registry;
+  tailSim.processes = sim.processes;
   const e2 = createEvent({
     scheduledAt: 1,
     process: { type: "reconstruct-test" },
@@ -184,4 +186,170 @@ Deno.test("reconstructFullCurrent handles empty checkpoints", async () => {
 
   // Should return the tail unchanged
   assertEquals(reconstructed, tail);
+});
+
+// ── loadRunHistory ────────────────────────────────────────────────────────────
+
+interface CounterState extends StateData {
+  count: number;
+}
+
+/**
+ * Builds a simulation with a counter process that ticks at t=1, 2, ..., endTime.
+ * Each tick schedules the next event at currentTime+1 until endTime is reached.
+ */
+function buildCounterSim(endTime: number): Simulation {
+  const sim = initializeSimulation();
+
+  const counter: ProcessDefinition<{ tick: CounterState }> = {
+    type: "counter",
+    initial: "tick",
+    steps: {
+      tick(sim, event, state) {
+        const count = state.data.count + 1;
+        const nextAt = sim.currentTime + 1;
+        return {
+          state: { ...state, data: { count } },
+          next: nextAt <= endTime
+            ? [createEvent({
+              parent: event.id,
+              scheduledAt: nextAt,
+              process: { type: "counter", inheritStep: true, data: { count } },
+            })]
+            : [],
+        };
+      },
+    },
+  };
+
+  sim.processes = registerProcess(sim, counter);
+  sim.timeline = scheduleEvent(
+    sim,
+    createEvent({
+      scheduledAt: 1,
+      process: { type: "counter", data: { count: 0 } },
+    }),
+  );
+
+  return sim;
+}
+
+Deno.test("loadRunHistory returns empty array when run directory does not exist", async () => {
+  const sim = initializeSimulation();
+  const states = await loadRunHistory(
+    `runs/test/nonexistent-${crypto.randomUUID()}`,
+    sim.processes,
+    sim.disciplines,
+    sim.predicates,
+  );
+  assertEquals(states, []);
+});
+
+Deno.test("loadRunHistory returns empty array when no dump files exist", async () => {
+  const dir = "runs/test/load-history-no-dumps";
+  await Deno.remove(dir, { recursive: true }).catch(() => {});
+
+  // initializeRun creates run.json and the dumps/ dir, but no dump files yet.
+  await initializeRun({ runDirectory: dir });
+
+  const sim = initializeSimulation();
+  const states = await loadRunHistory(
+    dir,
+    sim.processes,
+    sim.disciplines,
+    sim.predicates,
+  );
+  assertEquals(states, []);
+
+  await Deno.remove(dir, { recursive: true });
+});
+
+Deno.test("loadRunHistory reconstructs states from a single dump file", async () => {
+  const dir = "runs/test/load-history-single-dump";
+  await Deno.remove(dir, { recursive: true }).catch(() => {});
+
+  // 3 events at t=1,2,3; dumpInterval=2 fires after t=2 → one dump file (0-t2.json).
+  // The event at t=3 lands in the final in-memory window and is NOT on disk —
+  // that is the documented limitation of loadRunHistory.
+  const sim = buildCounterSim(3);
+  await runSimulationWithDeltas(sim, { runDirectory: dir, dumpInterval: 2 });
+
+  const states = await loadRunHistory(
+    dir,
+    sim.processes,
+    sim.disciplines,
+    sim.predicates,
+  );
+
+  // base(ct=0) + event at t=1 + event at t=2 = 3 states.
+  // ct=3 is absent: it was in the tail window that never reached the dump threshold.
+  assertEquals(states.length, 3);
+  assertEquals(states[0].currentTime, 0);
+  assertEquals(states[1].currentTime, 1);
+  assertEquals(states[2].currentTime, 2);
+
+  await Deno.remove(dir, { recursive: true });
+});
+
+Deno.test("loadRunHistory stitches multiple dump windows without duplicating boundary times", async () => {
+  const dir = "runs/test/load-history-multi-dump";
+  await Deno.remove(dir, { recursive: true }).catch(() => {});
+
+  // 6 events at t=1..6; dumpInterval=3 fires after t=3 and again after t=6.
+  // Dump 0 (0-t3.json): base(ct=0) + deltas for t=1,2,3 → states [ct=0,1,2,3].
+  // Dump 1 (1-t6.json): base=pruned(ct=3) + deltas for t=4,5,6 → states [ct=3,4,5,6].
+  // When stitching, states[0] of dump 1 (the pruned ct=3 boundary) is skipped
+  // so ct=3 appears exactly once in the result (from dump 0).
+  const sim = buildCounterSim(6);
+  await runSimulationWithDeltas(sim, { runDirectory: dir, dumpInterval: 3 });
+
+  const states = await loadRunHistory(
+    dir,
+    sim.processes,
+    sim.disciplines,
+    sim.predicates,
+  );
+
+  assertEquals(states.length, 7);
+  assertEquals(
+    states.map((s) => s.currentTime),
+    [0, 1, 2, 3, 4, 5, 6],
+  );
+
+  await Deno.remove(dir, { recursive: true });
+});
+
+Deno.test("loadRunHistory sorts dump files by sequence number, not lexicographically", async () => {
+  const dir = "runs/test/load-history-sort";
+  await Deno.remove(dir, { recursive: true }).catch(() => {});
+
+  // 22 events at t=1..22; dumpInterval=2 produces 11 dump files (0-t2.json … 10-t22.json).
+  // A lexicographic sort would place "10-t22.json" between "1-t4.json" and "2-t6.json",
+  // corrupting the state sequence. The correct sort uses the integer sequence prefix.
+  const sim = buildCounterSim(22);
+  await runSimulationWithDeltas(sim, { runDirectory: dir, dumpInterval: 2 });
+
+  const states = await loadRunHistory(
+    dir,
+    sim.processes,
+    sim.disciplines,
+    sim.predicates,
+  );
+
+  // With correct sort the last state must be ct=22.
+  // With lexicographic sort "10" sorts before "2", so the last processed window
+  // would be "9-t20.json" and the last state would be ct=20 instead.
+  assertEquals(states[states.length - 1].currentTime, 22);
+
+  // All times must be monotonically non-decreasing.
+  for (let i = 1; i < states.length; i++) {
+    assert(
+      states[i].currentTime >= states[i - 1].currentTime,
+      `time went backward at index ${i}: ${states[i - 1].currentTime} → ${
+        states[i].currentTime
+      }`,
+    );
+  }
+
+  await Deno.remove(dir, { recursive: true });
 });
