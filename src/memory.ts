@@ -139,6 +139,7 @@ function diffState(
 
   // Modified or new state
   Object.keys(current).forEach((key) => {
+    if (prev[key] === current[key]) return; // Structural sharing: identical reference, skip
     if (
       !prev[key] || JSON.stringify(prev[key]) !== JSON.stringify(current[key])
     ) {
@@ -162,6 +163,7 @@ function diffStores(
 
   // Modified or new stores
   Object.keys(current).forEach((key) => {
+    if (prev[key] === current[key]) return; // Structural sharing: identical reference, skip
     if (
       !prev[key] || JSON.stringify(prev[key]) !== JSON.stringify(current[key])
     ) {

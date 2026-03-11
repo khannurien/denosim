@@ -1,3 +1,4 @@
+export * from "./src/heap.ts";
 export * from "./src/memory.ts";
 export * from "./src/model.ts";
 export * from "./src/resources.ts";

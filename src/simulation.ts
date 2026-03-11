@@ -19,6 +19,7 @@ import type {
   Timeline,
 } from "./model.ts";
 import { EventState, QueueDiscipline } from "./model.ts";
+import { type EventHeap, heapPop } from "./heap.ts";
 
 /**
  * Initializes a new simulation instance with:
@@ -99,32 +100,28 @@ export function shouldTerminate(
 }
 
 /**
- * Returns the next simulation state after processing the current event.
+ * Returns the next simulation state after processing the earliest scheduled event.
  * Returns a boolean indicating whether the simulation should continue.
  * Simulation should continue if there are more events to process in queue.
  */
-export function run(current: Simulation): [Simulation, boolean] {
-  // Get all scheduled events that haven't been processed yet,
-  // sorted in descending order so we can efficiently pop the earliest event
-  const pending = Object.values(current.timeline.events).filter((event) =>
-    (event.scheduledAt >= current.currentTime) &&
-    (current.timeline.status[event.id] === EventState.Scheduled)
-  ).sort((a, b) => {
-    return a.scheduledAt !== b.scheduledAt
-      ? b.scheduledAt - a.scheduledAt
-      : b.priority - a.priority;
-  });
+export function run(
+  current: Simulation,
+  heap: EventHeap,
+): [Simulation, boolean] {
+  while (true) {
+    const event = heapPop(heap);
 
-  // The global event queue is not modified in place
-  const event = pending.pop();
+    if (!event) {
+      return [current, false]; // No more events to process
+    }
 
-  if (!event) {
-    return [current, false]; // No more events to process
+    // Only handle `Scheduled` events: lazily skip `Waiting` ones
+    if (current.timeline.status[event.id] === EventState.Scheduled) {
+      const next = step(current, current.timeline.events[event.id]);
+
+      return [next, true];
+    }
   }
-
-  const next = step(current, event);
-
-  return [next, true];
 }
 
 /**
@@ -138,22 +135,12 @@ export function run(current: Simulation): [Simulation, boolean] {
 function step(sim: Simulation, event: Event): Simulation {
   // Advance simulation time to this event's scheduled time
   // Start with a shallow copy of the timeline; finishEvent and scheduleEvent will do deep copies
+  // Shallow-copy the stores registry; store objects are copied on write by put/get
   const nextSim: Simulation = {
     ...sim,
     currentTime: event.scheduledAt,
     state: { ...sim.state },
-    stores: Object.fromEntries(
-      Object.entries(sim.stores).map(([id, store]) => [
-        id,
-        {
-          ...store,
-          buffer: [...store.buffer],
-          getRequests: [...store.getRequests],
-          putRequests: [...store.putRequests],
-          filteredGetRequests: [...store.filteredGetRequests],
-        },
-      ]),
-    ),
+    stores: { ...sim.stores },
   };
 
   // Handle the event by executing its process, which may yield new events to schedule and old events to finish

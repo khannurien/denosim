@@ -4,14 +4,15 @@ import type {
   DisciplineRegistry,
   Event,
   EventID,
-  EventState,
   PredicateRegistry,
   ProcessRegistry,
   RunSimulationOptions,
   Simulation,
   SimulationResult,
 } from "./model.ts";
+import { EventState } from "./model.ts";
 import { deserializeSimulation, serializeSimulation } from "./serialize.ts";
+import { buildHeap, heapPush } from "./heap.ts";
 import { run, shouldTerminate } from "./simulation.ts";
 
 /**
@@ -251,15 +252,32 @@ export async function runSimulationWithDeltas(
   };
   const checkpoints: string[] = [];
 
+  // Initialize heap from starting simulation state
+  const heap = buildHeap(init);
+
   // Main simulation loop
   const start = performance.now();
   while (true) {
-    const [next, continuation] = run(encoded.current);
+    const [next, continuation] = run(encoded.current, heap);
     if (!continuation) break;
 
     // Record the diff from the previous state to the next and advance the current pointer
-    encoded.deltas.push(createDelta(encoded.current, next));
+    const delta = createDelta(encoded.current, next);
+    encoded.deltas.push(delta);
     encoded.current = next;
+
+    // Push newly scheduled events onto the heap
+    // delta.e contains events added this step; Waiting events are excluded (not yet schedulable)
+    for (const op of delta.e) {
+      if (next.timeline.status[op.key] === EventState.Scheduled) {
+        const event = next.timeline.events[op.key];
+        heapPush(heap, {
+          scheduledAt: event.scheduledAt,
+          priority: event.priority,
+          id: op.key,
+        });
+      }
+    }
 
     if (options?.rate) await delay(options.rate);
     if (options && shouldTerminate(encoded.current, options)) break;
@@ -280,6 +298,11 @@ export async function runSimulationWithDeltas(
       encoded.base = compacted;
       encoded.deltas = [];
       encoded.current = compacted;
+
+      // Rebuild heap from pruned state: finished events are gone, stale entries discarded
+      const fresh = buildHeap(compacted);
+      heap.entries = fresh.entries;
+      heap.seq = fresh.seq;
     }
   }
 
