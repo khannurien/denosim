@@ -190,7 +190,7 @@ Deno.test("multiple consumers with single producer", () => {
   const waitB = get(sim, consumerB, store.id);
   assert(waitA.step.waiting);
   assert(waitB.step.waiting);
-  assertEquals(sim.stores[store.id].getRequests.length, 2);
+  assertEquals(sim.stores[store.id].getRequests.entries.length, 2);
 
   const producer = createEvent<FooData>({
     scheduledAt: 1,
@@ -201,7 +201,7 @@ Deno.test("multiple consumers with single producer", () => {
   assert(putResult.resume);
   assert(putResult.resume[0]);
   assertEquals(putResult.resume[0].parent, consumerA.id);
-  assertEquals(sim.stores[store.id].getRequests.length, 1);
+  assertEquals(sim.stores[store.id].getRequests.entries.length, 1);
 });
 
 Deno.test("multiple producers with delayed consumers", () => {
@@ -225,7 +225,7 @@ Deno.test("multiple producers with delayed consumers", () => {
   const blockedB = put(sim, producerB, store.id, { store: store.id, foo: "B" });
   assert(blockedA.step.waiting);
   assert(blockedB.step.waiting);
-  assertEquals(sim.stores[store.id].putRequests.length, 2);
+  assertEquals(sim.stores[store.id].putRequests.entries.length, 2);
 
   const consumer = createEvent<FooData>({
     scheduledAt: 1,
@@ -237,7 +237,7 @@ Deno.test("multiple producers with delayed consumers", () => {
   assert(getResult.resume[0]);
   assertEquals(getResult.step.process.data?.["foo"], "A");
   assertEquals(getResult.resume[0].process.data?.["foo"], "A");
-  assertEquals(sim.stores[store.id].putRequests.length, 1);
+  assertEquals(sim.stores[store.id].putRequests.entries.length, 1);
 });
 
 Deno.test("non-blocking store with capacity > 1", () => {
@@ -268,8 +268,8 @@ Deno.test("non-blocking store with capacity > 1", () => {
   assert(!r1.step.waiting);
   assert(!r2.step.waiting);
   assert(r3.step.waiting);
-  assertEquals(sim.stores[store.id].buffer.length, 2);
-  assertEquals(sim.stores[store.id].putRequests.length, 1);
+  assertEquals(sim.stores[store.id].buffer.entries.length, 2);
+  assertEquals(sim.stores[store.id].putRequests.entries.length, 1);
 });
 
 Deno.test("blocking store with unlimited capacity behavior", () => {
@@ -287,8 +287,8 @@ Deno.test("blocking store with unlimited capacity behavior", () => {
   const result = put(sim, producer, store.id, { store: store.id, foo: "A" });
 
   assert(result.step.waiting);
-  assertEquals(sim.stores[store.id].putRequests.length, 1);
-  assertEquals(sim.stores[store.id].buffer.length, 0);
+  assertEquals(sim.stores[store.id].putRequests.entries.length, 1);
+  assertEquals(sim.stores[store.id].buffer.entries.length, 0);
 });
 
 Deno.test("non-blocking store with capacity 0 (requests will block)", () => {
@@ -306,8 +306,8 @@ Deno.test("non-blocking store with capacity 0 (requests will block)", () => {
   const result = put(sim, producer, store.id, { store: store.id, foo: "A" });
 
   assert(result.step.waiting);
-  assertEquals(sim.stores[store.id].putRequests.length, 1);
-  assertEquals(sim.stores[store.id].buffer.length, 0);
+  assertEquals(sim.stores[store.id].putRequests.entries.length, 1);
+  assertEquals(sim.stores[store.id].buffer.entries.length, 0);
 });
 
 Deno.test("non-blocking store basic put/get operations", () => {
@@ -334,7 +334,7 @@ Deno.test("non-blocking store basic put/get operations", () => {
   });
   const getResult = get(sim, consumer, store.id);
   assertEquals(getResult.step.process.data?.["foo"], "A");
-  assertEquals(sim.stores[store.id].buffer.length, 0);
+  assertEquals(sim.stores[store.id].buffer.entries.length, 0);
 });
 
 Deno.test("non-blocking store LIFO behavior", () => {
@@ -540,9 +540,9 @@ Deno.test("store initialization defaults", () => {
   const store1 = initializeStore({});
   assertEquals(store1.blocking, true);
   assertEquals(store1.capacity, 1);
-  assertEquals(store1.buffer.length, 0);
-  assertEquals(store1.getRequests.length, 0);
-  assertEquals(store1.putRequests.length, 0);
+  assertEquals(store1.buffer.entries.length, 0);
+  assertEquals(store1.getRequests.entries.length, 0);
+  assertEquals(store1.putRequests.entries.length, 0);
 
   // Test explicit values override defaults
   const store2 = initializeStore({
@@ -581,7 +581,10 @@ Deno.test("get throws when resumed blocked put has no payload", () => {
     waiting: true,
     process: { type: "none" },
   });
-  sim.stores[store.id].putRequests = [missingPayloadPut];
+  sim.stores[store.id].putRequests = {
+    entries: [{ event: missingPayloadPut, seq: 0 }],
+    seq: 1,
+  };
 
   const consumer = createEvent<FooData>({
     scheduledAt: 1,
@@ -607,7 +610,10 @@ Deno.test("get throws when buffered item has no payload", () => {
     scheduledAt: 0,
     process: { type: "none" },
   });
-  sim.stores[store.id].buffer = [missingPayloadBuffered];
+  sim.stores[store.id].buffer = {
+    entries: [{ event: missingPayloadBuffered, seq: 0 }],
+    seq: 1,
+  };
 
   const consumer = createEvent<FooData>({
     scheduledAt: 1,
@@ -797,7 +803,7 @@ Deno.test("blocked puts resume in FIFO order", () => {
   assert(result.resume);
   assertEquals(result.resume[0].parent, producerA.id);
   assertEquals(result.step.process.data?.["foo"], "A");
-  assertEquals(sim.stores[store.id].putRequests.length, 1);
+  assertEquals(sim.stores[store.id].putRequests.entries.length, 1);
 });
 
 Deno.test("blocked puts resume in LIFO order", () => {
@@ -832,7 +838,7 @@ Deno.test("blocked puts resume in LIFO order", () => {
   assert(result.resume);
   assertEquals(result.resume[0].parent, producerB.id);
   assertEquals(result.step.process.data?.["foo"], "B");
-  assertEquals(sim.stores[store.id].putRequests.length, 1);
+  assertEquals(sim.stores[store.id].putRequests.entries.length, 1);
 });
 
 Deno.test("non-blocking store get on empty buffer blocks", () => {
@@ -848,7 +854,7 @@ Deno.test("non-blocking store get on empty buffer blocks", () => {
 
   assert(result.step.waiting);
   assertEquals(result.resume, undefined);
-  assertEquals(sim.stores[store.id].getRequests.length, 1);
+  assertEquals(sim.stores[store.id].getRequests.entries.length, 1);
 });
 
 Deno.test("finished waiting placeholder is marked Finished after unblocking", async () => {
@@ -955,7 +961,7 @@ Deno.test("getWhere matches blocked producer in putRequests immediately", () => 
     process: { type: "none", data: { store: store.id, foo: "hello" } },
   });
   put(sim, producer, store.id, { store: store.id, foo: "hello" });
-  assertEquals(sim.stores[store.id].putRequests.length, 1);
+  assertEquals(sim.stores[store.id].putRequests.entries.length, 1);
 
   const waiter = createEvent<FooData>({
     scheduledAt: 1,
@@ -967,7 +973,7 @@ Deno.test("getWhere matches blocked producer in putRequests immediately", () => 
   assertEquals(result.step.process.data?.["foo"], "hello");
   assert(result.resume);
   assertEquals(result.finish?.length, 1);
-  assertEquals(sim.stores[store.id].putRequests.length, 0);
+  assertEquals(sim.stores[store.id].putRequests.entries.length, 0);
 });
 
 Deno.test("getWhere skips non-matching putRequests and blocks", () => {
@@ -992,7 +998,7 @@ Deno.test("getWhere skips non-matching putRequests and blocks", () => {
   assert(result.step.waiting);
   assertEquals(sim.stores[store.id].filteredGetRequests.length, 1);
   // non-matching producer still in putRequests
-  assertEquals(sim.stores[store.id].putRequests.length, 1);
+  assertEquals(sim.stores[store.id].putRequests.entries.length, 1);
 });
 
 Deno.test("getWhere matches item in non-blocking buffer immediately", () => {
@@ -1011,7 +1017,7 @@ Deno.test("getWhere matches item in non-blocking buffer immediately", () => {
   });
   put(sim, p1, store.id, { store: store.id }); // no foo — won't match
   put(sim, p2, store.id, { store: store.id, foo: "buffered" }); // matches
-  assertEquals(sim.stores[store.id].buffer.length, 2);
+  assertEquals(sim.stores[store.id].buffer.entries.length, 2);
 
   const waiter = createEvent<FooData>({
     scheduledAt: 1,
@@ -1023,7 +1029,7 @@ Deno.test("getWhere matches item in non-blocking buffer immediately", () => {
   assertEquals(result.step.process.data?.["foo"], "buffered");
   assertEquals(result.resume, undefined);
   // the matching item was consumed, only the non-matching one remains
-  assertEquals(sim.stores[store.id].buffer.length, 1);
+  assertEquals(sim.stores[store.id].buffer.entries.length, 1);
 });
 
 Deno.test("getWhere skips non-matching buffer items and blocks", () => {
@@ -1046,7 +1052,7 @@ Deno.test("getWhere skips non-matching buffer items and blocks", () => {
 
   assert(result.step.waiting);
   assertEquals(sim.stores[store.id].filteredGetRequests.length, 1);
-  assertEquals(sim.stores[store.id].buffer.length, 1); // item still buffered
+  assertEquals(sim.stores[store.id].buffer.entries.length, 1); // item still buffered
 });
 
 Deno.test("put resolves a matching filteredGetRequests waiter", () => {
@@ -1101,7 +1107,7 @@ Deno.test("put buffers when filteredGetRequests waiter predicate does not match"
   // non-matching put still goes to buffer (non-blocking store with capacity)
   assert(!result.step.waiting);
   assertEquals(result.resume, undefined);
-  assertEquals(sim.stores[store.id].buffer.length, 1);
+  assertEquals(sim.stores[store.id].buffer.entries.length, 1);
   assertEquals(sim.stores[store.id].filteredGetRequests.length, 1); // waiter still waiting
 });
 
@@ -1302,8 +1308,6 @@ Deno.test("getWhere integration: full round-trip through runSimulation", async (
   );
 });
 
-// ── registerDiscipline ────────────────────────────────────────────────────────
-
 Deno.test("registerDiscipline: custom EDF comparator controls get order", () => {
   interface EdfData extends StateData {
     deadline: number;
@@ -1346,7 +1350,6 @@ Deno.test("registerDiscipline: custom EDF comparator controls get order", () => 
   assertEquals(r3.step.process.data?.["deadline"], 30);
 });
 
-// ── hasStorePayload guard in `get` ────────────────────────────────────────────
 // `get` uses selectFromQueue without a predicate, so events with undefined data
 // are selectable. Both the putRequests and buffer paths must throw TypeError.
 
@@ -1363,9 +1366,9 @@ Deno.test("get throws TypeError when putRequest has no payload", () => {
       capacity: 1,
       blocking: true,
       discipline: QueueDiscipline.LIFO,
-      buffer: [],
-      getRequests: [],
-      putRequests: [noDataEvent],
+      buffer: { entries: [], seq: 0 },
+      getRequests: { entries: [], seq: 0 },
+      putRequests: { entries: [{ event: noDataEvent, seq: 0 }], seq: 1 },
       filteredGetRequests: [],
     },
   };
@@ -1391,9 +1394,9 @@ Deno.test("get throws TypeError when buffered item has no payload", () => {
       capacity: 1,
       blocking: false,
       discipline: QueueDiscipline.LIFO,
-      buffer: [noDataEvent],
-      getRequests: [],
-      putRequests: [],
+      buffer: { entries: [{ event: noDataEvent, seq: 0 }], seq: 1 },
+      getRequests: { entries: [], seq: 0 },
+      putRequests: { entries: [], seq: 0 },
       filteredGetRequests: [],
     },
   };
@@ -1403,5 +1406,292 @@ Deno.test("get throws TypeError when buffered item has no payload", () => {
     () => get(sim, consumer, "s"),
     TypeError,
     "Store payload is missing for buffered item",
+  );
+});
+
+Deno.test("put throws when discipline is not registered", () => {
+  const sim = initializeSimulation();
+  const store = initializeStore({ discipline: "unregistered" });
+  sim.stores = registerStore(sim, store);
+
+  const event = createEvent<FooData>({
+    scheduledAt: 0,
+    process: { type: "none", data: { store: store.id } },
+  });
+
+  assertThrows(
+    () => put(sim, event, store.id, { store: store.id }),
+    RangeError,
+    "Discipline definition not found in registry: unregistered",
+  );
+});
+
+Deno.test("get throws when discipline is not registered", () => {
+  const sim = initializeSimulation();
+  const store = initializeStore({ discipline: "unregistered" });
+  sim.stores = registerStore(sim, store);
+
+  const event = createEvent<FooData>({
+    scheduledAt: 0,
+    process: { type: "none", data: { store: store.id } },
+  });
+
+  assertThrows(
+    () => get(sim, event, store.id),
+    RangeError,
+    "Discipline definition not found in registry: unregistered",
+  );
+});
+
+Deno.test("getWhere throws when discipline is not registered", () => {
+  const sim = initializeSimulation();
+  const store = initializeStore({ discipline: "unregistered" });
+  sim.stores = registerStore(sim, store);
+  sim.predicates["any"] = () => true;
+
+  const event = createEvent<FooData>({
+    scheduledAt: 0,
+    process: { type: "none", data: { store: store.id } },
+  });
+
+  assertThrows(
+    () => getWhere(sim, event, store.id, "any"),
+    RangeError,
+    "Discipline definition not found in registry: unregistered",
+  );
+});
+
+Deno.test("put with custom discipline serves filteredGetRequests in custom sort order", () => {
+  // Exercises the sort() branch (non-FIFO/LIFO discipline) in the filteredGetRequests scan.
+  interface DeadlineData extends StateData {
+    deadline: number;
+    store: StoreID;
+  }
+
+  const sim = initializeSimulation();
+  sim.disciplines = registerDiscipline(sim, {
+    type: "edf-fgr" as const,
+    comparator: (a, b) =>
+      ((a.event.process.data as DeadlineData).deadline) -
+      ((b.event.process.data as DeadlineData).deadline),
+  });
+
+  const store = initializeStore({ discipline: "edf-fgr" });
+  sim.stores = registerStore(sim, store);
+  sim.predicates["anyDeadline"] = () => true;
+
+  // Two filteredGetRequest waiters with different deadlines; EDF should serve tighter first.
+  const waiterA = createEvent<DeadlineData>({
+    scheduledAt: 0,
+    waiting: true,
+    process: { type: "none", data: { store: store.id, deadline: 20 } },
+  });
+  const waiterB = createEvent<DeadlineData>({
+    scheduledAt: 0,
+    waiting: true,
+    process: { type: "none", data: { store: store.id, deadline: 10 } },
+  });
+
+  sim.stores[store.id].filteredGetRequests = [
+    { event: waiterA, predicateType: "anyDeadline" },
+    { event: waiterB, predicateType: "anyDeadline" },
+  ];
+
+  const producer = createEvent<DeadlineData>({
+    scheduledAt: 1,
+    process: { type: "none", data: { store: store.id, deadline: 0 } },
+  });
+  const result = put(sim, producer, store.id, { store: store.id, deadline: 0 });
+
+  // waiterB (deadline 10) must be served first.
+  assert(result.resume);
+  assertEquals(result.finish?.[0].id, waiterB.id);
+  assertEquals(sim.stores[store.id].filteredGetRequests.length, 1);
+  assertEquals(
+    sim.stores[store.id].filteredGetRequests[0].event.id,
+    waiterA.id,
+  );
+});
+
+Deno.test("multi-store simulation: two stores interact in a single run", async () => {
+  // Pipeline: producer → storeA → relay → storeB → consumer
+  // The relay process gets from storeA, then puts to storeB.
+  // Verifies that independent stores in the same simulation coordinate correctly.
+  const sim = initializeSimulation();
+
+  const storeA = initializeStore({ blocking: false, capacity: 1 });
+  const storeB = initializeStore({ blocking: false, capacity: 1 });
+  sim.stores = registerStore(sim, storeA);
+  sim.stores = registerStore(sim, storeB);
+
+  interface PipeData extends StateData {
+    storeA: StoreID;
+    storeB: StoreID;
+    value?: number;
+  }
+
+  const producer: ProcessDefinition<{ start: PipeData; done: PipeData }> = {
+    type: "producer",
+    initial: "start",
+    steps: {
+      start(sim, event, state) {
+        const { step, resume, finish } = put(
+          sim,
+          event,
+          state.data["storeA"],
+          { ...state.data, value: 42 },
+        );
+        return {
+          state: { ...state, step: "done" },
+          next: resume ? [step, ...resume] : [step],
+          finish: finish ?? [],
+        };
+      },
+      done(_sim, _event, state) {
+        return { state, next: [] };
+      },
+    },
+  };
+
+  const relay: ProcessDefinition<
+    { take: PipeData; give: PipeData; done: PipeData }
+  > = {
+    type: "relay",
+    initial: "take",
+    steps: {
+      take(sim, event, state) {
+        const { step, resume, finish } = get(sim, event, state.data["storeA"]);
+        return {
+          state: {
+            ...state,
+            data: { ...step.process.data ?? state.data },
+            step: "give",
+          },
+          next: resume ? [step, ...resume] : [step],
+          finish: finish ?? [],
+        };
+      },
+      give(sim, event, state) {
+        const { step, resume, finish } = put(
+          sim,
+          event,
+          state.data["storeB"],
+          state.data,
+        );
+        return {
+          state: { ...state, step: "done" },
+          next: resume ? [step, ...resume] : [step],
+          finish: finish ?? [],
+        };
+      },
+      done(_sim, _event, state) {
+        return { state, next: [] };
+      },
+    },
+  };
+
+  const consumer: ProcessDefinition<{ start: PipeData; done: PipeData }> = {
+    type: "consumer",
+    initial: "start",
+    steps: {
+      start(sim, event, state) {
+        const { step, resume, finish } = get(sim, event, state.data["storeB"]);
+        return {
+          state: {
+            ...state,
+            data: { ...step.process.data ?? state.data },
+            step: "done",
+          },
+          next: resume ? [step, ...resume] : [step],
+          finish: finish ?? [],
+        };
+      },
+      done(_sim, _event, state) {
+        return { state, next: [] };
+      },
+    },
+  };
+
+  sim.processes = registerProcess(sim, producer);
+  sim.processes = registerProcess(sim, relay);
+  sim.processes = registerProcess(sim, consumer);
+
+  const data: PipeData = { storeA: storeA.id, storeB: storeB.id };
+
+  const prodEvent = createEvent<PipeData>({
+    scheduledAt: 0,
+    process: { type: "producer", data },
+  });
+  const relayEvent = createEvent<PipeData>({
+    scheduledAt: 1,
+    process: { type: "relay", data },
+  });
+  const consEvent = createEvent<PipeData>({
+    scheduledAt: 2,
+    process: { type: "consumer", data },
+  });
+
+  sim.timeline = scheduleEvent(sim, prodEvent);
+  sim.timeline = scheduleEvent(sim, relayEvent);
+  sim.timeline = scheduleEvent(sim, consEvent);
+
+  const { result } = await runSimulation(sim);
+
+  // All events finish successfully.
+  assert(
+    Object.values(result.timeline.events).every(
+      (e) => result.timeline.status[e.id] === EventState.Finished,
+    ),
+  );
+
+  // The consumer received the value that the producer originally put into storeA.
+  const consStatus = [...result.timeline.transitions]
+    .reverse()
+    .find((t) => t.id === consEvent.id && t.state === EventState.Finished);
+  assert(consStatus);
+
+  // storeA and storeB are both drained (no buffered items remain).
+  assertEquals(result.stores[storeA.id].buffer.entries.length, 0);
+  assertEquals(result.stores[storeB.id].buffer.entries.length, 0);
+});
+
+Deno.test("getWhere skips non-matching putRequests and returns the first match", () => {
+  // Exercises the re-insertion loop in storeQueuePopWhere: when the discipline-best
+  // entry does not satisfy the predicate it is set aside; after a matching entry is
+  // found the rejected entries are re-inserted back into the heap.
+  const sim = initializeSimulation();
+  const store = initializeStore({
+    blocking: true,
+    discipline: QueueDiscipline.FIFO,
+  });
+  sim.stores = registerStore(sim, store);
+  sim.predicates["isMatch"] = (d) => d["foo"] === "match";
+
+  const prodA = createEvent<FooData>({
+    scheduledAt: 0,
+    process: { type: "none", data: { store: store.id, foo: "skip" } },
+  });
+  const prodB = createEvent<FooData>({
+    scheduledAt: 1,
+    process: { type: "none", data: { store: store.id, foo: "match" } },
+  });
+
+  put(sim, prodA, store.id, { store: store.id, foo: "skip" });
+  put(sim, prodB, store.id, { store: store.id, foo: "match" });
+
+  const consumer = createEvent<FooData>({
+    scheduledAt: 2,
+    process: { type: "none", data: { store: store.id } },
+  });
+  const result = getWhere(sim, consumer, store.id, "isMatch");
+
+  // prodB matched; prodA was rejected and re-inserted.
+  assert(!result.step.waiting);
+  assertEquals(result.step.process.data?.["foo"], "match");
+  assert(result.resume);
+  assertEquals(sim.stores[store.id].putRequests.entries.length, 1);
+  assertEquals(
+    sim.stores[store.id].putRequests.entries[0].event.process.data?.["foo"],
+    "skip",
   );
 });

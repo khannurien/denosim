@@ -125,7 +125,7 @@ export interface EventTransition {
  * Event definitions are immutable; lifecycle progression is represented through `EventTransition` entries.
  * Events can have parent-child relationships in the context of their process.
  * Events can be created with a `waiting` attribute that places them directly in `EventState.Waiting`, preventing their execution until they are explicitly resumed.
- * Events scheduled at the same timestamp will be selected based on their priority (the lower the value, the higher the priority). In case of a tie, the scheduler dequeues events in a LIFO fashion.
+ * Events scheduled at the same timestamp will be selected based on their priority (the lower the value, the higher the priority). In case of a tie, the scheduler dequeues events in FIFO order (first scheduled, first served).
  */
 export interface Event<T extends StateData = StateData> {
   /** Unique identifier for the event */
@@ -158,6 +158,42 @@ export interface Event<T extends StateData = StateData> {
 }
 
 /**
+ * An entry in a heap-backed store request queue.
+ * `seq` is a monotonically increasing insertion counter, semantically identical to the `DisciplineEntry.index` field, so FIFO/LIFO comparators work correctly with it.
+ */
+export interface StoreQueueEntry<T extends StateData = StateData> {
+  /** The stored event */
+  event: Event<T>;
+
+  /** Monotonic insertion counter for arrival-order semantics, stamped to the entry */
+  seq: number;
+}
+
+/**
+ * Heap-backed queue for store request tracking (`buffer`, `getRequests`, `putRequests`).
+ * Enables O(log N) enqueue and dequeue per store operation.
+ */
+export interface StoreQueue<T extends StateData = StateData> {
+  /** The stored entry */
+  entries: StoreQueueEntry<T>[];
+
+  /** Monotonically increasing insertion counter */
+  seq: number;
+}
+
+/**
+ * An entry in `filteredGetRequests`: a blocked event paired with the predicate key used to look up the predicate function in `sim.predicates` at runtime.
+ * Stored as a string key (not the function itself) so entries survive JSON serialization.
+ */
+export interface FilteredGetRequest<T extends StateData = StateData> {
+  /** The blocked request */
+  event: Event<T>;
+
+  /** A condition that must be satisfied to unblock the request */
+  predicateType: PredicateType;
+}
+
+/**
  * Shared data structure used for coordinating processes.
  * Stores are used through `get`, `put`, and `getWhere` primitives.
  * Used for inter-process synchronization, producer-consumer patterns, resource sharing, etc.
@@ -180,26 +216,26 @@ export interface Store<
 
   /**
    * Discipline key for managing the selection order among available items.
-   * Must be registered in `sim.disciplines`. Defaults to `LIFO`.
+   * Must be registered in `sim.disciplines`. Defaults to `FIFO`.
    * Built-in keys `FIFO` and `LIFO` are always available.
    */
   discipline: DisciplineType;
 
   /** Items currently stored by non-blocking `put` operations and awaiting consumption */
-  buffer: Event<T>[];
+  buffer: StoreQueue<T>;
 
   /** Processes blocked waiting to get items */
-  getRequests: Event<T>[];
+  getRequests: StoreQueue<T>;
 
   /** Processes blocked waiting to put items */
-  putRequests: Event<T>[];
+  putRequests: StoreQueue<T>;
 
   /**
    * Processes blocked on a `getWhere` call, waiting for an item that satisfies their predicate.
    * Each entry pairs the waiting event with the predicate key used to look up the predicate function in `sim.predicates`.
-   * `predicateType` is a plain string and is fully JSON-serializable. The predicate function is resolved from `predicates` at runtime; checkpoints capture the key correctly and resume correctly as long as the same `predicates` registry is supplied to `deserializeSimulation`.
+   * `predicateType` is a plain string and is fully JSON-serializable. The predicate function is resolved from `predicates` at runtime.
    */
-  filteredGetRequests: { event: Event<T>; predicateType: PredicateType }[];
+  filteredGetRequests: FilteredGetRequest<T>[];
 }
 
 /**
@@ -548,7 +584,7 @@ export interface PredicateDefinition<
  * Defaults to blocking operations with capacity for one single item.
  * Capacity determines how many items the store can hold before `put` operations block.
  * Blocking operations use `EventState.Waiting` to pause processes until conditions resolve.
- * Stores default to `LIFO` discipline. Custom disciplines must be registered in `sim.disciplines`.
+ * Stores default to `FIFO` discipline. Custom disciplines must be registered in `sim.disciplines`.
  */
 export interface CreateStoreOptions {
   /** Optional store ID for deterministic typing/registration */
@@ -562,7 +598,7 @@ export interface CreateStoreOptions {
 
   /**
    * Discipline key controlling selection order among available items.
-   * Must be registered in `sim.disciplines` using `registerDiscipline`. Defaults to `LIFO`.
+   * Must be registered in `sim.disciplines` using `registerDiscipline`. Defaults to `FIFO`.
    */
   discipline?: DisciplineType;
 }

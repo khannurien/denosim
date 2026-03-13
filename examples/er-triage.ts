@@ -7,7 +7,13 @@ import type {
   StateData,
 } from "../src/model.ts";
 import { QueueDiscipline } from "../src/model.ts";
-import { get, initializeStore, put, registerStore } from "../src/resources.ts";
+import {
+  continueEvent,
+  get,
+  initializeStore,
+  put,
+  registerStore,
+} from "../src/resources.ts";
 import { runSimulation } from "../src/runner.ts";
 import {
   createEvent,
@@ -213,14 +219,7 @@ async function runScenario(
         return {
           state: { ...state, step: "treat", data: updated },
           next: [
-            createEvent({
-              parent: event.id,
-              scheduledAt: sim.currentTime + updated.serviceTime,
-              process: {
-                ...event.process,
-                inheritStep: true,
-              },
-            }),
+            continueEvent(event, sim.currentTime + updated.serviceTime),
           ],
         };
       },
@@ -302,16 +301,7 @@ async function runScenario(
         const nextAt = sim.currentTime + interArrival;
         if (nextAt <= SIM_TIME) {
           events.push(
-            createEvent({
-              parent: event.id,
-              scheduledAt: nextAt,
-              priority: -1,
-              process: {
-                type: "arrivals",
-                inheritStep: true,
-                data: { nextId },
-              },
-            }),
+            continueEvent(event, nextAt, { nextId }, { priority: -1 }),
           );
         }
 

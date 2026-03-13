@@ -8,6 +8,7 @@ import type {
 } from "../src/model.ts";
 import { EventState, QueueDiscipline } from "../src/model.ts";
 import {
+  continueEvent,
   getWhere,
   initializeStore,
   put,
@@ -41,17 +42,9 @@ const counter: ProcessDefinition<{
         return { state, next: [] };
       }
 
-      const next = createEvent({
-        parent: event.id,
-        scheduledAt: sim.currentTime + 1,
-        process: {
-          type: "counter",
-          inheritStep: true,
-          data: {
-            count: state.data.count + 1,
-            limit: state.data.limit,
-          },
-        },
+      const next = continueEvent(event, sim.currentTime + 1, {
+        count: state.data.count + 1,
+        limit: state.data.limit,
       });
 
       return { state, next: [next] };
@@ -293,9 +286,12 @@ Deno.test("store state survives serialization roundtrip", async () => {
     capacity: 3,
     blocking: false,
     discipline: QueueDiscipline.LIFO,
-    buffer: [bufA, bufB],
-    getRequests: [],
-    putRequests: [],
+    buffer: {
+      entries: [{ event: bufA, seq: 0 }, { event: bufB, seq: 1 }],
+      seq: 2,
+    },
+    getRequests: { entries: [], seq: 0 },
+    putRequests: { entries: [], seq: 0 },
     filteredGetRequests: [],
   };
 
@@ -311,9 +307,9 @@ Deno.test("store state survives serialization roundtrip", async () => {
   );
   const stop = recovered[recovered.length - 1];
 
-  assertEquals(stop.stores["tag-store"].buffer.length, 2);
-  const tags = stop.stores["tag-store"].buffer
-    .map((e) => e.process.data?.["tag"])
+  assertEquals(stop.stores["tag-store"].buffer.entries.length, 2);
+  const tags = stop.stores["tag-store"].buffer.entries
+    .map(({ event: e }) => e.process.data?.["tag"])
     .sort();
   assertEquals(tags, ["alpha", "beta"]);
 });
@@ -368,9 +364,9 @@ Deno.test("filteredGetRequests survives serialization roundtrip", async () => {
     capacity: 1,
     blocking: true,
     discipline: QueueDiscipline.LIFO,
-    buffer: [],
-    getRequests: [],
-    putRequests: [],
+    buffer: { entries: [], seq: 0 },
+    getRequests: { entries: [], seq: 0 },
+    putRequests: { entries: [], seq: 0 },
     filteredGetRequests: [{ event: waiterEvent, predicateType: "myPredicate" }],
   };
 

@@ -2,6 +2,7 @@ import { randomIntegerBetween, randomSeeded } from "@std/random";
 
 import type { ProcessDefinition, StateData } from "../src/model.ts";
 import {
+  continueEvent,
   get,
   getWhere,
   initializeStore,
@@ -140,11 +141,7 @@ if (import.meta.main) {
         const nextId = state.data.nextId + 1;
         const nextAt = sim.currentTime + randomIntegerBetween(2, 5, { prng });
         const nextArrival = nextAt <= SIM_TIME
-          ? [createEvent({
-            parent: event.id,
-            scheduledAt: nextAt,
-            process: { type: "generator", inheritStep: true, data: { nextId } },
-          })]
+          ? [continueEvent(event, nextAt, { nextId })]
           : [];
 
         return {

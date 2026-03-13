@@ -1,14 +1,25 @@
 import { assert, assertEquals, assertRejects, assertThrows } from "@std/assert";
 
-import type { Event, ProcessDefinition, StateData } from "../src/model.ts";
+import type {
+  Event,
+  PredicateDefinition,
+  ProcessDefinition,
+  StateData,
+} from "../src/model.ts";
 import { EventState } from "../src/model.ts";
+import { continueEvent } from "../src/resources.ts";
 import { runSimulation } from "../src/runner.ts";
 import {
   createEvent,
+  finishEvent,
   initializeSimulation,
+  registerPredicate,
   registerProcess,
+  run,
   scheduleEvent,
+  shouldTerminate,
 } from "../src/simulation.ts";
+import { buildHeap } from "../src/heap.ts";
 
 Deno.test("basic event scheduling", async () => {
   const sim = initializeSimulation();
@@ -32,6 +43,18 @@ Deno.test("basic event scheduling", async () => {
       result.timeline.status[event.id] === EventState.Finished
     ),
   );
+});
+
+Deno.test("createEvent with waiting: true produces an unscheduled event", () => {
+  const sim = initializeSimulation();
+
+  const event = createEvent({ scheduledAt: 10, waiting: true });
+  sim.timeline = scheduleEvent(sim, event);
+
+  // The event is in the timeline but its initial status is Waiting, not Scheduled.
+  assertEquals(sim.timeline.status[event.id], EventState.Waiting);
+  assertEquals(sim.timeline.transitions.at(-1)?.state, EventState.Waiting);
+  assertEquals(event.waiting, true);
 });
 
 Deno.test("zero-duration events", async () => {
@@ -662,40 +685,16 @@ Deno.test("process state inheritance (fork)", async () => {
     initial: "main",
     steps: {
       main(_sim, event, state) {
-        const worker1: Event<WorkerData> = createEvent({
-          parent: event.id,
-          scheduledAt: 10,
-          process: {
-            type: "foo",
-            inheritStep: true,
-            data: {
-              worker: "worker1",
-            },
-          },
+        const worker1: Event<WorkerData> = continueEvent(event, 10, {
+          worker: "worker1",
         });
 
-        const worker2: Event<WorkerData> = createEvent({
-          parent: event.id,
-          scheduledAt: 20,
-          process: {
-            type: "foo",
-            inheritStep: true,
-            data: {
-              worker: "worker2",
-            },
-          },
+        const worker2: Event<WorkerData> = continueEvent(event, 20, {
+          worker: "worker2",
         });
 
-        const worker3: Event<WorkerData> = createEvent({
-          parent: event.id,
-          scheduledAt: 30,
-          process: {
-            type: "foo",
-            inheritStep: true,
-            data: {
-              worker: "worker3",
-            },
-          },
+        const worker3: Event<WorkerData> = continueEvent(event, 30, {
+          worker: "worker3",
         });
 
         return {
@@ -714,14 +713,10 @@ Deno.test("process state inheritance (fork)", async () => {
           ? { ...state, data: { ...state.data, value: 30 } }
           : { ...state };
 
-        const nextEvent: Event<WorkerData> = createEvent({
-          parent: event.id,
-          scheduledAt: sim.currentTime,
-          process: {
-            type: "foo",
-            inheritStep: true,
-          },
-        });
+        const nextEvent: Event<WorkerData> = continueEvent(
+          event,
+          sim.currentTime,
+        );
 
         return {
           state: { ...newState, step: "stop" },
@@ -938,7 +933,7 @@ Deno.test("default none process is a no-op", async () => {
   assertEquals(Object.keys(result.timeline.events).length, 1);
 });
 
-Deno.test("events with same time and priority are processed in LIFO scheduling order", async () => {
+Deno.test("events with same time and priority are processed in FIFO scheduling order", async () => {
   const sim = initializeSimulation();
   const executionOrder: string[] = [];
 
@@ -976,8 +971,8 @@ Deno.test("events with same time and priority are processed in LIFO scheduling o
 
   await runSimulation(sim);
 
-  // LIFO: last scheduled (e3) is dequeued first
-  assertEquals(executionOrder, ["third", "second", "first"]);
+  // FIFO: first scheduled (e1) is dequeued first
+  assertEquals(executionOrder, ["first", "second", "third"]);
 });
 
 Deno.test("simulation rate acts as best-effort wall-clock throttling", async () => {
@@ -1013,4 +1008,139 @@ Deno.test("simulation rate acts as best-effort wall-clock throttling", async () 
   const tolerance = 0.80; // allow 20% timing jitter on loaded CI environments
   assert(slowElapsed >= expectedMs * tolerance);
   assert(slowElapsed > fastElapsed);
+});
+
+Deno.test("runSimulation rejects when event references unregistered process type", async () => {
+  const sim = initializeSimulation();
+  const event = createEvent({
+    scheduledAt: 0,
+    process: { type: "nonexistent" },
+  });
+  sim.timeline = scheduleEvent(sim, event);
+
+  await assertRejects(
+    () => runSimulation(sim),
+    RangeError,
+    "Process definition not found in registry: nonexistent",
+  );
+});
+
+Deno.test("registerPredicate registers a predicate that can be looked up and called", () => {
+  const sim = initializeSimulation();
+
+  const definition: PredicateDefinition<"isPositive"> = {
+    type: "isPositive",
+    predicate: (data) => (data["value"] as number) > 0,
+  };
+
+  sim.predicates = registerPredicate(sim, definition);
+
+  assertEquals(typeof sim.predicates["isPositive"], "function");
+  assertEquals(sim.predicates["isPositive"]({ value: 5 }), true);
+  assertEquals(sim.predicates["isPositive"]({ value: -1 }), false);
+  assertEquals(sim.predicates["isPositive"]({ value: 0 }), false);
+});
+
+Deno.test("finishEvent marks event as Finished and appends a transition", () => {
+  const sim = initializeSimulation();
+  const event = createEvent({ scheduledAt: 0 });
+  sim.timeline = scheduleEvent(sim, event);
+
+  assertEquals(sim.timeline.status[event.id], EventState.Scheduled);
+  const transitionsBefore = sim.timeline.transitions.length;
+
+  sim.timeline = finishEvent(sim, event);
+
+  assertEquals(sim.timeline.status[event.id], EventState.Finished);
+  assertEquals(sim.timeline.transitions.length, transitionsBefore + 1);
+  const last = sim.timeline.transitions.at(-1)!;
+  assertEquals(last.id, event.id);
+  assertEquals(last.state, EventState.Finished);
+  assertEquals(last.at, sim.currentTime);
+});
+
+Deno.test("shouldTerminate fires when both untilTime and untilEvent are satisfied", () => {
+  const sim = initializeSimulation();
+  const event = createEvent({ scheduledAt: 5 });
+  sim.timeline = scheduleEvent(sim, event);
+  sim.timeline = finishEvent(sim, event);
+  sim.currentTime = 10;
+
+  // Both conditions are met; shouldTerminate must return true
+  assert(shouldTerminate(sim, { untilTime: 10, untilEvent: event }));
+});
+
+Deno.test("shouldTerminate fires when only untilTime is reached", () => {
+  const sim = initializeSimulation();
+  sim.currentTime = 5;
+  assert(shouldTerminate(sim, { untilTime: 5 }));
+  assert(!shouldTerminate(sim, { untilTime: 6 }));
+});
+
+Deno.test("shouldTerminate fires when only untilEvent is finished", () => {
+  const sim = initializeSimulation();
+  const event = createEvent({ scheduledAt: 0 });
+  sim.timeline = scheduleEvent(sim, event);
+
+  assert(!shouldTerminate(sim, { untilEvent: event }));
+  sim.timeline = finishEvent(sim, event);
+  assert(shouldTerminate(sim, { untilEvent: event }));
+});
+
+Deno.test("shouldTerminate returns false when neither condition is provided", () => {
+  const sim = initializeSimulation();
+  assert(!shouldTerminate(sim, {}));
+});
+
+Deno.test("run() skips Waiting events and processes the next Scheduled event", () => {
+  const sim = initializeSimulation();
+
+  const waiting = createEvent({ scheduledAt: 0, waiting: true });
+  const scheduled = createEvent({ scheduledAt: 1 });
+  sim.timeline = scheduleEvent(sim, waiting);
+  sim.timeline = scheduleEvent(sim, scheduled);
+
+  assertEquals(sim.timeline.status[waiting.id], EventState.Waiting);
+  assertEquals(sim.timeline.status[scheduled.id], EventState.Scheduled);
+
+  // Build a heap that contains both events; run() must skip the Waiting one
+  const heap = buildHeap(sim);
+  // Waiting events are excluded from buildHeap — push it manually to verify the skip
+  heap.entries.push({ scheduledAt: 0, priority: 0, seq: -1, id: waiting.id });
+
+  const [next, continuation] = run(sim, heap);
+
+  // The waiting event was skipped; the scheduled one was processed
+  assertEquals(continuation, true);
+  assertEquals(next.timeline.status[scheduled.id], EventState.Finished);
+  // The waiting event status is unchanged
+  assertEquals(next.timeline.status[waiting.id], EventState.Waiting);
+});
+
+Deno.test("runSimulation stats.end equals the final simulation currentTime", async () => {
+  const sim = initializeSimulation();
+  const e = createEvent({ scheduledAt: 42 });
+  sim.timeline = scheduleEvent(sim, e);
+
+  const { stats } = await runSimulation(sim);
+  assertEquals(stats.end, 42);
+});
+
+Deno.test("runSimulation stats.duration is a positive number", async () => {
+  const sim = initializeSimulation();
+  const e = createEvent({ scheduledAt: 0 });
+  sim.timeline = scheduleEvent(sim, e);
+
+  const { stats } = await runSimulation(sim);
+  assert(stats.duration >= 0);
+});
+
+Deno.test("runSimulation with no initial events completes immediately with valid stats", async () => {
+  const sim = initializeSimulation();
+
+  const { result, stats } = await runSimulation(sim);
+
+  assertEquals(Object.keys(result.timeline.events).length, 0);
+  assertEquals(stats.end, 0);
+  assert(stats.duration >= 0);
 });

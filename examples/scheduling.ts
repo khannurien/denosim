@@ -1,4 +1,5 @@
 import type { Event, ProcessDefinition, StateData } from "../src/model.ts";
+import { continueEvent } from "../src/resources.ts";
 import { runSimulation } from "../src/runner.ts";
 import {
   createEvent,
@@ -76,14 +77,7 @@ if (import.meta.main) {
             },
           },
           next: [
-            createEvent({
-              parent: event.id,
-              scheduledAt: sim.currentTime,
-              process: {
-                type: "bar",
-                inheritStep: true, // Continue from parent's state
-              },
-            }),
+            continueEvent(event, sim.currentTime),
           ],
         };
       },
@@ -115,14 +109,10 @@ if (import.meta.main) {
           };
         } else {
           // Still waiting
-          const nextEvent: Event<TimeoutData> = createEvent({
-            parent: event.id,
-            scheduledAt: targetTime, // Schedule exactly at completion time
-            process: {
-              type: "bar",
-              inheritStep: true, // Continue from parent's state
-            },
-          });
+          const nextEvent: Event<TimeoutData> = continueEvent(
+            event,
+            targetTime,
+          );
 
           return {
             state: { ...state, step: "wait" },
@@ -163,14 +153,7 @@ if (import.meta.main) {
             },
           },
           next: [
-            createEvent({
-              parent: event.id,
-              scheduledAt: sim.currentTime,
-              process: {
-                type: "step1",
-                inheritStep: true, // Continue from parent's state
-              },
-            }),
+            continueEvent(event, sim.currentTime),
           ],
         };
       },
@@ -198,14 +181,7 @@ if (import.meta.main) {
           };
         } else {
           // Still waiting
-          const nextEvent = createEvent({
-            parent: event.id,
-            scheduledAt: targetTime,
-            process: {
-              type: "step1",
-              inheritStep: true, // Continue from parent's state
-            },
-          });
+          const nextEvent = continueEvent(event, targetTime);
 
           return {
             state: { ...state, step: "wait" },
@@ -264,16 +240,7 @@ if (import.meta.main) {
               startedAt: sim.currentTime,
             },
           },
-          next: [createEvent(
-            {
-              parent: event.id,
-              scheduledAt: sim.currentTime,
-              process: {
-                type: "baz",
-                inheritStep: true, // Continue from parent's state
-              },
-            },
-          )],
+          next: [continueEvent(event, sim.currentTime)],
         };
       },
       wait(sim, event, state) {
@@ -303,15 +270,9 @@ if (import.meta.main) {
             ],
           };
         } else {
-          const nextEvent: Event<TimeoutData> = createEvent(
-            {
-              parent: event.id,
-              scheduledAt: targetTime,
-              process: {
-                type: "baz",
-                inheritStep: true, // Continue from parent's state
-              },
-            },
+          const nextEvent: Event<TimeoutData> = continueEvent(
+            event,
+            targetTime,
           );
 
           return {

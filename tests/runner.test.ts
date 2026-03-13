@@ -13,6 +13,7 @@ import {
   shouldDump,
 } from "../src/runner.ts";
 import { serializeSimulation } from "../src/serialize.ts";
+import { continueEvent } from "../src/resources.ts";
 import {
   createEvent,
   initializeSimulation,
@@ -188,8 +189,6 @@ Deno.test("reconstructFullCurrent handles empty checkpoints", async () => {
   assertEquals(reconstructed, tail);
 });
 
-// ── loadRunHistory ────────────────────────────────────────────────────────────
-
 interface CounterState extends StateData {
   count: number;
 }
@@ -211,11 +210,7 @@ function buildCounterSim(endTime: number): Simulation {
         return {
           state: { ...state, data: { count } },
           next: nextAt <= endTime
-            ? [createEvent({
-              parent: event.id,
-              scheduledAt: nextAt,
-              process: { type: "counter", inheritStep: true, data: { count } },
-            })]
+            ? [continueEvent(event, nextAt, { count })]
             : [],
         };
       },
@@ -350,6 +345,54 @@ Deno.test("loadRunHistory sorts dump files by sequence number, not lexicographic
       }`,
     );
   }
+
+  await Deno.remove(dir, { recursive: true });
+});
+
+Deno.test("loadRunHistory rethrows errors other than NotFound", async () => {
+  // The catch block in loadRunHistory only suppresses Deno.errors.NotFound.
+  // Any other error (e.g. NotADirectory when the dump path is a file) must be re-thrown.
+  const dir = `runs/test/load-history-rethrow-${crypto.randomUUID()}`;
+  await Deno.mkdir(dir, { recursive: true });
+
+  // No run.json → readManifest returns {} → dumpDir defaults to "${dir}/dumps".
+  // Create a plain FILE at that path so readDir throws a non-NotFound error.
+  await Deno.writeTextFile(`${dir}/dumps`, "not a directory");
+
+  const sim = initializeSimulation();
+  await assertRejects(
+    () => loadRunHistory(dir, sim.processes, sim.disciplines, sim.predicates),
+  );
+
+  await Deno.remove(dir, { recursive: true });
+});
+
+Deno.test("shouldDump returns false when deltas array is empty", () => {
+  const sim = initializeSimulation();
+  const deltaEncoded: DeltaEncodedSimulation = {
+    base: sim,
+    deltas: [],
+    current: sim,
+  };
+  assertEquals(shouldDump(deltaEncoded, 1), false);
+});
+
+Deno.test("initializeRun merges runMetadata into the manifest", async () => {
+  const dir = "runs/test/run-metadata-test";
+  await Deno.remove(dir, { recursive: true }).catch(() => {});
+
+  const context = await initializeRun({
+    runDirectory: dir,
+    runMetadata: { env: "ci", version: 42 },
+  });
+
+  assertEquals(context.manifest.metadata?.["env"], "ci");
+  assertEquals(context.manifest.metadata?.["version"], 42);
+
+  // Verify the metadata was persisted to disk
+  const raw = JSON.parse(await Deno.readTextFile(context.manifestPath));
+  assertEquals(raw.metadata?.["env"], "ci");
+  assertEquals(raw.metadata?.["version"], 42);
 
   await Deno.remove(dir, { recursive: true });
 });

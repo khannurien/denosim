@@ -1,4 +1,5 @@
 import type {
+  CreateEventOptions,
   CreateStoreOptions,
   DisciplineDefinition,
   Event,
@@ -8,10 +9,13 @@ import type {
   Store,
   StoreDefinitions,
   StoreID,
+  StoreQueue,
+  StoreQueueEntry,
   StoreRegistry,
   StoreResult,
+  Timestamp,
 } from "./model.ts";
-import { QueueDiscipline } from "./model.ts";
+import { heapPopWith, heapPushWith } from "./heap.ts";
 import { createEvent } from "./simulation.ts";
 
 /**
@@ -25,39 +29,113 @@ function hasStorePayload<T extends StateData>(
 }
 
 /**
- * Selects the best candidate from a queue according to the given discipline definition.
- * An optional predicate filters candidates before discipline ranking is applied.
- * Returns `[selectedEvent, remainingQueue]`, or `null` if no candidate matches the predicate.
+ * Returns the comparator to use for a `StoreQueue` heap, wrapping the discipline comparator so that `StoreQueueEntry.seq` maps to `DisciplineEntry.index` (arrival order).
  */
-function selectFromQueue<T extends StateData>(
-  queue: Event<T>[],
-  definition: DisciplineDefinition,
-  predicate?: (data: T) => boolean,
-): [Event<T>, Event<T>[]] | null {
-  // Pair candidates with their original queue index
-  // FIFO: lowest index wins; LIFO: highest index wins (even when filtering)
-  const entries = queue.map((event, index) => ({ event, index }));
+function disciplineToQueueComparator<T extends StateData>(
+  discipline: DisciplineDefinition,
+): (a: StoreQueueEntry<T>, b: StoreQueueEntry<T>) => number {
+  return (a, b) =>
+    discipline.comparator({ event: a.event, index: a.seq }, {
+      event: b.event,
+      index: b.seq,
+    });
+}
 
-  const candidates = predicate
-    ? entries.filter(({ event }) => {
-      const data = event.process.data;
-      return data !== undefined && predicate(data);
-    })
-    : entries;
+/**
+ * Enqueues `event` onto a `StoreQueue` heap in `O(log N)`.
+ * Returns a new `StoreQueue` with the event inserted and the `seq` counter incremented.
+ */
+function storeQueuePush<T extends StateData>(
+  queue: StoreQueue<T>,
+  event: Event<T>,
+  discipline: DisciplineDefinition,
+): StoreQueue<T> {
+  const entries = [...queue.entries];
+  const entry: StoreQueueEntry<T> = { event, seq: queue.seq };
+  heapPushWith(entries, entry, disciplineToQueueComparator<T>(discipline));
+  return { entries, seq: queue.seq + 1 };
+}
 
-  if (candidates.length === 0) return null;
+/**
+ * Dequeues the discipline-best event from a `StoreQueue` heap in `O(log N)`.
+ * Returns `[event, updatedQueue]` or `null` if the queue is empty.
+ */
+function storeQueuePop<T extends StateData>(
+  queue: StoreQueue<T>,
+  discipline: DisciplineDefinition,
+): [Event<T>, StoreQueue<T>] {
+  const entries = [...queue.entries];
+  const entry = heapPopWith(
+    entries,
+    disciplineToQueueComparator<T>(discipline),
+  )!;
+  return [entry.event, { entries, seq: queue.seq }];
+}
 
-  // Single linear scan to find the minimum-ranked candidate
-  const best = candidates.reduce((bestEntry, entry) =>
-    definition.comparator(entry, bestEntry) < 0 ? entry : bestEntry
-  );
+/**
+ * Dequeues the discipline-best event from a `StoreQueue` that satisfies `predicate`, in `O(k log N)` where `k` is the number of rejections before a match.
+ * Rejected candidates are re-inserted, preserving the heap.
+ * Returns `[event, updatedQueue]` or `null` if no matching event exists.
+ */
+function storeQueuePopWhere<T extends StateData>(
+  queue: StoreQueue<T>,
+  discipline: DisciplineDefinition,
+  predicate: (data: T) => boolean,
+): [Event<T>, StoreQueue<T>] | null {
+  const cmp = disciplineToQueueComparator<T>(discipline);
+  const entries = [...queue.entries];
+  const rejected: StoreQueueEntry<T>[] = [];
 
-  const remaining = [
-    ...queue.slice(0, best.index),
-    ...queue.slice(best.index + 1),
-  ];
+  while (entries.length > 0) {
+    const entry = heapPopWith(entries, cmp)!;
+    const data = entry.event.process.data;
+    if (data !== undefined && predicate(data as T)) {
+      for (const r of rejected) heapPushWith(entries, r, cmp);
+      return [entry.event, { entries, seq: queue.seq }];
+    }
+    rejected.push(entry);
+  }
 
-  return [best.event, remaining];
+  // No match — queue is logically unchanged (caller retains original)
+  return null;
+}
+
+/**
+ * Advances `event` to its next step. `event.id` becomes the parent of the new event.
+ * Pass `data` to replace the payload; use `options` to set `waiting`, `priority`, etc.
+ */
+export function continueEvent<T extends StateData>(
+  event: Event<T>,
+  currentTime: Timestamp,
+  data?: T,
+  options?: Pick<CreateEventOptions, "waiting" | "priority">,
+): Event<T> {
+  return createEvent({
+    parent: event.id,
+    scheduledAt: currentTime,
+    ...options,
+    process: data !== undefined
+      ? { ...event.process, inheritStep: true, data: { ...data } }
+      : { ...event.process, inheritStep: true },
+  });
+}
+
+/**
+ * Resumes a waiting event with new data. `blocked.parent` becomes the parent of the new event.
+ * Used when a producer delivers to a blocked consumer, or vice-versa: the blocked event provides the process step to resume; the data comes from the other side.
+ */
+export function resumeEvent<T extends StateData>(
+  blocked: Event<StateData>,
+  currentTime: Timestamp,
+  data: T,
+  options?: Pick<CreateEventOptions, "priority">,
+): Event<T> {
+  return createEvent({
+    parent: blocked.parent,
+    scheduledAt: currentTime,
+    ...options,
+    process: { ...blocked.process, inheritStep: true, data: { ...data } },
+  });
 }
 
 /**
@@ -65,7 +143,7 @@ function selectFromQueue<T extends StateData>(
  * - Unique ID
  * - Optional capacity (defaults to 1)
  * - Blocking or non-blocking behavior (defaults to `true`)
- * - A queue discipline key (defaults to `LIFO`)
+ * - A queue discipline key (defaults to `FIFO`)
  * All queues (`buffer`, `getRequests`, `putRequests`, `filteredGetRequests`) start empty.
  * The returned store must be registered with `registerStore` before use in a simulation.
  */
@@ -76,10 +154,10 @@ export function initializeStore<T extends StateData = StateData>(
     id: options.id ?? crypto.randomUUID(),
     capacity: options.capacity ?? 1,
     blocking: options.blocking ?? true,
-    discipline: options.discipline ?? QueueDiscipline.LIFO,
-    buffer: [],
-    getRequests: [],
-    putRequests: [],
+    discipline: options.discipline ?? "FIFO",
+    buffer: { entries: [], seq: 0 },
+    getRequests: { entries: [], seq: 0 },
+    putRequests: { entries: [], seq: 0 },
     filteredGetRequests: [],
   };
 }
@@ -138,50 +216,33 @@ export function put<
   }
 
   // Check for unconditional pending get requests
-  if (store.getRequests.length > 0) {
-    const result = selectFromQueue(store.getRequests, discipline);
-    const [getRequest, remaining] = result!;
+  if (store.getRequests.entries.length > 0) {
+    const [getRequest, remaining] = storeQueuePop(
+      store.getRequests,
+      discipline,
+    );
 
     sim.stores = {
       ...sim.stores,
       [store.id]: { ...store, getRequests: remaining },
     };
 
-    const updatedGet: Event<T> = createEvent({
-      parent: getRequest.parent,
-      scheduledAt: sim.currentTime,
-      process: {
-        ...getRequest.process,
-        inheritStep: true,
-        data: { ...data },
-      },
-    });
-
-    const updatedPut: Event<T> = createEvent({
-      parent: event.id,
-      scheduledAt: sim.currentTime,
-      process: { ...event.process, inheritStep: true },
-    });
+    const updatedGet = resumeEvent(getRequest, sim.currentTime, data);
+    const updatedPut = continueEvent(event, sim.currentTime);
 
     return { step: updatedPut, resume: [updatedGet], finish: [getRequest] };
   }
 
   // Check for filtered get requests (getWhere waiters)
-  // Iterate waiters in discipline order; serve the first whose predicate accepts the data
+  // Single reduce pass in discipline order — same pattern as selectFromArray
   if (store.filteredGetRequests.length > 0) {
-    const entries = store.filteredGetRequests.map((req, index) => ({
-      req,
-      index,
-    }));
+    let best: {
+      req: { event: Event<StateData>; predicateType: PredicateType };
+      index: number;
+    } | null = null;
 
-    const sorted = [...entries].sort((a, b) =>
-      discipline.comparator(
-        { event: a.req.event, index: a.index },
-        { event: b.req.event, index: b.index },
-      )
-    );
-
-    const matched = sorted.find(({ req }) => {
+    for (let i = 0; i < store.filteredGetRequests.length; i++) {
+      const req = store.filteredGetRequests[i];
       const predicate = sim.predicates[req.predicateType];
       if (!predicate) {
         throw new RangeError(
@@ -189,14 +250,22 @@ export function put<
             ` (scheduled at: ${event.scheduledAt}; current time: ${sim.currentTime})`,
         );
       }
+      if (!predicate(data)) continue;
+      if (
+        !best ||
+        discipline.comparator(
+            { event: req.event, index: i },
+            { event: best.req.event, index: best.index },
+          ) < 0
+      ) {
+        best = { req, index: i };
+      }
+    }
 
-      return predicate(data);
-    });
-
-    if (matched) {
+    if (best) {
       const remaining = [
-        ...store.filteredGetRequests.slice(0, matched.index),
-        ...store.filteredGetRequests.slice(matched.index + 1),
+        ...store.filteredGetRequests.slice(0, best.index),
+        ...store.filteredGetRequests.slice(best.index + 1),
       ];
 
       sim.stores = {
@@ -204,48 +273,28 @@ export function put<
         [store.id]: { ...store, filteredGetRequests: remaining },
       };
 
-      const updatedGet: Event<T> = createEvent({
-        parent: matched.req.event.parent,
-        scheduledAt: sim.currentTime,
-        process: {
-          ...matched.req.event.process,
-          inheritStep: true,
-          data: { ...data },
-        },
-      });
-
-      const updatedPut: Event<T> = createEvent({
-        parent: event.id,
-        scheduledAt: sim.currentTime,
-        process: { ...event.process, inheritStep: true },
-      });
+      const updatedGet = resumeEvent(best.req.event, sim.currentTime, data);
+      const updatedPut = continueEvent(event, sim.currentTime);
 
       return {
         step: updatedPut,
         resume: [updatedGet],
-        finish: [matched.req.event],
+        finish: [best.req.event],
       };
     }
   }
 
   // Blocking store or non-blocking store without pending get request: block put
-  if (store.blocking || store.buffer.length >= store.capacity) {
-    const blockedPut: Event<T> = createEvent({
-      parent: event.id,
+  if (store.blocking || store.buffer.entries.length >= store.capacity) {
+    const blockedPut = continueEvent(event, sim.currentTime, data, {
       waiting: true,
-      scheduledAt: sim.currentTime,
-      process: {
-        ...event.process,
-        inheritStep: true,
-        data: { ...data },
-      },
     });
 
     sim.stores = {
       ...sim.stores,
       [store.id]: {
         ...store,
-        putRequests: [...store.putRequests, blockedPut],
+        putRequests: storeQueuePush(store.putRequests, blockedPut, discipline),
       },
     };
 
@@ -253,19 +302,14 @@ export function put<
   }
 
   // Non-blocking store with capacity available: use buffer
-  const updatedPut: Event<T> = createEvent({
-    parent: event.id,
-    scheduledAt: sim.currentTime,
-    process: {
-      ...event.process,
-      inheritStep: true,
-      data: { ...data },
-    },
-  });
+  const updatedPut = continueEvent(event, sim.currentTime, data);
 
   sim.stores = {
     ...sim.stores,
-    [store.id]: { ...store, buffer: [...store.buffer, updatedPut] },
+    [store.id]: {
+      ...store,
+      buffer: storeQueuePush(store.buffer, updatedPut, discipline),
+    },
   };
 
   return { step: updatedPut };
@@ -286,12 +330,10 @@ function tryGetImmediate<T extends StateData>(
   const id = store.id;
 
   // Scan putRequests for a matching blocked producer
-  if (store.putRequests.length > 0) {
-    const result = selectFromQueue(
-      store.putRequests,
-      discipline,
-      predicate,
-    );
+  if (store.putRequests.entries.length > 0) {
+    const result = predicate
+      ? storeQueuePopWhere(store.putRequests, discipline, predicate)
+      : storeQueuePop(store.putRequests, discipline);
 
     if (result !== null) {
       const [putRequest, remaining] = result;
@@ -309,33 +351,18 @@ function tryGetImmediate<T extends StateData>(
         );
       }
 
-      const updatedPut: Event<T> = createEvent({
-        parent: putRequest.parent,
-        scheduledAt: sim.currentTime,
-        process: {
-          ...putRequest.process,
-          inheritStep: true,
-          data: { ...payload },
-        },
-      });
-
-      const updatedGet: Event<T> = createEvent({
-        parent: event.id,
-        scheduledAt: sim.currentTime,
-        process: { ...event.process, inheritStep: true, data: { ...payload } },
-      });
+      const updatedPut = resumeEvent(putRequest, sim.currentTime, payload);
+      const updatedGet = continueEvent(event, sim.currentTime, payload);
 
       return { step: updatedGet, resume: [updatedPut], finish: [putRequest] };
     }
   }
 
   // Non-blocking stores: scan buffer
-  if (!store.blocking && store.buffer.length > 0) {
-    const result = selectFromQueue(
-      store.buffer,
-      discipline,
-      predicate,
-    );
+  if (!store.blocking && store.buffer.entries.length > 0) {
+    const result = predicate
+      ? storeQueuePopWhere(store.buffer, discipline, predicate)
+      : storeQueuePop(store.buffer, discipline);
 
     if (result !== null) {
       const [buffered, remaining] = result;
@@ -350,11 +377,7 @@ function tryGetImmediate<T extends StateData>(
         );
       }
 
-      const updatedGet: Event<T> = createEvent({
-        parent: event.id,
-        scheduledAt: sim.currentTime,
-        process: { ...event.process, inheritStep: true, data: { ...payload } },
-      });
+      const updatedGet = continueEvent(event, sim.currentTime, payload);
 
       return { step: updatedGet };
     }
@@ -405,16 +428,16 @@ export function get<
   if (immediate) return immediate;
 
   // No data available: block get
-  const blockedGet = createEvent({
-    parent: event.id,
-    scheduledAt: sim.currentTime,
+  const blockedGet = continueEvent(event, sim.currentTime, undefined, {
     waiting: true,
-    process: { ...event.process, inheritStep: true },
   });
 
   sim.stores = {
     ...sim.stores,
-    [store.id]: { ...store, getRequests: [...store.getRequests, blockedGet] },
+    [store.id]: {
+      ...store,
+      getRequests: storeQueuePush(store.getRequests, blockedGet, discipline),
+    },
   };
 
   return { step: blockedGet };
@@ -469,11 +492,8 @@ export function getWhere<
   if (immediate) return immediate;
 
   // No match: block get
-  const blockedGet = createEvent({
-    parent: event.id,
-    scheduledAt: sim.currentTime,
+  const blockedGet = continueEvent(event, sim.currentTime, undefined, {
     waiting: true,
-    process: { ...event.process, inheritStep: true },
   });
 
   sim.stores = {

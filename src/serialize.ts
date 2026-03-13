@@ -15,7 +15,7 @@ import type {
 export function serializeSimulation(
   deltaEncoded: DeltaEncodedSimulation,
 ): string {
-  return JSON.stringify(deltaEncoded, null, 2);
+  return JSON.stringify(deltaEncoded);
 }
 
 /**

@@ -23,6 +23,25 @@ import {
   scheduleEvent,
 } from "../src/simulation.ts";
 
+Deno.test("createDelta emits no state delta when state is reconstructed with identical content", () => {
+  // Cover the JSON-equality branch in diffState: prev[key] exists and has the same
+  // serialized content as current[key], but the two are different object references.
+  // The reference-equality fast-path won't fire, but the JSON comparison must suppress
+  // the delta op so that no spurious "set" is emitted.
+  const sim1 = initializeSimulation();
+  const sim2 = initializeSimulation();
+
+  const eventId = crypto.randomUUID();
+  const stateA = { type: "proc", step: "step1", data: { x: 42 } };
+  const stateB = { type: "proc", step: "step1", data: { x: 42 } }; // same content, new object
+
+  sim1.state = { [eventId]: stateA };
+  sim2.state = { [eventId]: stateB };
+
+  const delta = createDelta(sim1, sim2);
+  assertEquals(delta.s.length, 0);
+});
+
 Deno.test("createDelta captures new events and their initial status", () => {
   const sim1 = initializeSimulation();
   const e1 = createEvent({ scheduledAt: 0 });
@@ -108,9 +127,9 @@ Deno.test("applyDelta applies store set operations", () => {
       capacity: 1,
       blocking: true,
       discipline: QueueDiscipline.LIFO,
-      buffer: [],
-      getRequests: [req],
-      putRequests: [],
+      buffer: { entries: [], seq: 0 },
+      getRequests: { entries: [{ event: req, seq: 0 }], seq: 1 },
+      putRequests: { entries: [], seq: 0 },
       filteredGetRequests: [],
     },
   };
@@ -130,9 +149,9 @@ Deno.test("applyDelta applies store set operations", () => {
           capacity: 2,
           blocking: false,
           discipline: QueueDiscipline.FIFO,
-          buffer: [],
-          getRequests: [],
-          putRequests: [],
+          buffer: { entries: [], seq: 0 },
+          getRequests: { entries: [], seq: 0 },
+          putRequests: { entries: [], seq: 0 },
           filteredGetRequests: [],
         },
       },
@@ -358,9 +377,9 @@ Deno.test("checkpoints preserve full replay state by default", async () => {
     capacity: 1,
     blocking: true,
     discipline: QueueDiscipline.FIFO,
-    buffer: [],
-    getRequests: [req1],
-    putRequests: [req2],
+    buffer: { entries: [], seq: 0 },
+    getRequests: { entries: [{ event: req1, seq: 0 }], seq: 1 },
+    putRequests: { entries: [{ event: req2, seq: 0 }], seq: 1 },
     filteredGetRequests: [],
   });
   const e1 = createEvent({ scheduledAt: 0 });
@@ -418,4 +437,47 @@ Deno.test("checkpoints keep untilEvent semantics with full replay state", async 
   assert(remaining);
   assertEquals(stop.timeline.status[remaining.id], EventState.Scheduled);
   await Deno.remove(dir, { recursive: true });
+});
+
+Deno.test("reconstructFromDeltas with empty deltas returns array containing only the base", () => {
+  const sim = initializeSimulation();
+  sim.currentTime = 7;
+
+  const result = reconstructFromDeltas(sim, []);
+
+  assertEquals(result.length, 1);
+  assertEquals(result[0].currentTime, 7);
+});
+
+Deno.test("pruneWorkingState preserves stores, processes, disciplines, and predicates unchanged", () => {
+  const sim = initializeSimulation();
+
+  const e = createEvent({ scheduledAt: 0 });
+  sim.timeline = scheduleEvent(sim, e);
+  sim.timeline.status[e.id] = EventState.Finished;
+
+  // Attach a store so we can assert it survives pruning
+  const storeId = "s1";
+  sim.stores = {
+    [storeId]: {
+      id: storeId,
+      capacity: 1,
+      blocking: true,
+      discipline: "LIFO",
+      buffer: { entries: [], seq: 0 },
+      getRequests: { entries: [], seq: 0 },
+      putRequests: { entries: [], seq: 0 },
+      filteredGetRequests: [],
+    },
+  };
+
+  const pruned = pruneWorkingState(sim);
+
+  // Stores are passed through by reference (no copy)
+  assertEquals(pruned.stores, sim.stores);
+
+  // Process, discipline, and predicate registries are preserved
+  assertEquals(pruned.processes, sim.processes);
+  assertEquals(pruned.disciplines, sim.disciplines);
+  assertEquals(pruned.predicates, sim.predicates);
 });

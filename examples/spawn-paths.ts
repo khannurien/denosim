@@ -1,4 +1,5 @@
 import type { Event, ProcessDefinition, StateData } from "../src/model.ts";
+import { continueEvent } from "../src/resources.ts";
 import { runSimulation } from "../src/runner.ts";
 import {
   createEvent,
@@ -33,14 +34,9 @@ const driver: ProcessDefinition<{
       const nextShared = 42;
 
       // 1) CONTINUATION (fork-like): same process type + inheritStep=true
-      const continuation: Event<DriverData> = createEvent({
-        parent: event.id,
-        scheduledAt: 1,
-        process: {
-          type: "driver",
-          inheritStep: true,
-          data: { shared: nextShared, tag: "continued" },
-        },
+      const continuation: Event<DriverData> = continueEvent(event, 1, {
+        shared: nextShared,
+        tag: "continued",
       });
 
       // 2) NEW PROCESS WITH PARENT DATA (exec-like): parent linked, fresh initial step
