@@ -594,7 +594,7 @@ Deno.test("get throws when resumed blocked put has no payload", () => {
   assertThrows(
     () => get(sim, consumer, store.id),
     TypeError,
-    "Store payload is missing for resumed put request",
+    "Store payload is missing for event:",
   );
 });
 
@@ -623,7 +623,7 @@ Deno.test("get throws when buffered item has no payload", () => {
   assertThrows(
     () => get(sim, consumer, store.id),
     TypeError,
-    "Store payload is missing for buffered item",
+    "Store payload is missing for event:",
   );
 });
 
@@ -902,7 +902,8 @@ Deno.test("getWhere blocks when store is empty", () => {
   const sim = initializeSimulation();
   const store = initializeStore({ blocking: true });
   sim.stores = registerStore(sim, store);
-  sim.predicates["hasFoo"] = (d) => typeof d["foo"] === "string";
+  sim.predicates["hasFoo"] = (event) =>
+    typeof event.process?.data?.["foo"] === "string";
 
   const waiter = createEvent<FooData>({
     scheduledAt: 0,
@@ -921,7 +922,8 @@ Deno.test("getWhere blocks when store is empty", () => {
 
 Deno.test("getWhere errors on missing store", () => {
   const sim = initializeSimulation();
-  sim.predicates["hasFoo"] = (d) => typeof d["foo"] === "string";
+  sim.predicates["hasFoo"] = (event) =>
+    typeof event.process?.data?.["foo"] === "string";
 
   const waiter = createEvent<FooData>({
     scheduledAt: 0,
@@ -954,7 +956,8 @@ Deno.test("getWhere matches blocked producer in putRequests immediately", () => 
   const sim = initializeSimulation();
   const store = initializeStore({ blocking: true });
   sim.stores = registerStore(sim, store);
-  sim.predicates["hasFoo"] = (d) => typeof d["foo"] === "string";
+  sim.predicates["hasFoo"] = (event) =>
+    typeof event.process?.data?.["foo"] === "string";
 
   const producer = createEvent<FooData>({
     scheduledAt: 0,
@@ -981,7 +984,7 @@ Deno.test("getWhere skips non-matching putRequests and blocks", () => {
   const store = initializeStore({ blocking: true });
   sim.stores = registerStore(sim, store);
   // predicate requires foo === "bar"
-  sim.predicates["isBar"] = (d) => d["foo"] === "bar";
+  sim.predicates["isBar"] = (event) => event.process?.data?.["foo"] === "bar";
 
   const producer = createEvent<FooData>({
     scheduledAt: 0,
@@ -1005,7 +1008,8 @@ Deno.test("getWhere matches item in non-blocking buffer immediately", () => {
   const sim = initializeSimulation();
   const store = initializeStore({ blocking: false, capacity: 3 });
   sim.stores = registerStore(sim, store);
-  sim.predicates["hasFoo"] = (d) => typeof d["foo"] === "string";
+  sim.predicates["hasFoo"] = (event) =>
+    typeof event.process?.data?.["foo"] === "string";
 
   const p1 = createEvent<FooData>({
     scheduledAt: 0,
@@ -1036,7 +1040,7 @@ Deno.test("getWhere skips non-matching buffer items and blocks", () => {
   const sim = initializeSimulation();
   const store = initializeStore({ blocking: false, capacity: 2 });
   sim.stores = registerStore(sim, store);
-  sim.predicates["isBar"] = (d) => d["foo"] === "bar";
+  sim.predicates["isBar"] = (event) => event.process?.data?.["foo"] === "bar";
 
   const p = createEvent<FooData>({
     scheduledAt: 0,
@@ -1059,7 +1063,8 @@ Deno.test("put resolves a matching filteredGetRequests waiter", () => {
   const sim = initializeSimulation();
   const store = initializeStore({ blocking: true });
   sim.stores = registerStore(sim, store);
-  sim.predicates["hasFoo"] = (d) => typeof d["foo"] === "string";
+  sim.predicates["hasFoo"] = (event) =>
+    typeof event.process?.data?.["foo"] === "string";
 
   const waiter = createEvent<FooData>({
     scheduledAt: 0,
@@ -1087,7 +1092,7 @@ Deno.test("put buffers when filteredGetRequests waiter predicate does not match"
   const sim = initializeSimulation();
   const store = initializeStore({ blocking: false, capacity: 3 });
   sim.stores = registerStore(sim, store);
-  sim.predicates["isBar"] = (d) => d["foo"] === "bar";
+  sim.predicates["isBar"] = (event) => event.process?.data?.["foo"] === "bar";
 
   const waiter = createEvent<FooData>({
     scheduledAt: 0,
@@ -1116,7 +1121,8 @@ Deno.test("put with unregistered predicate key in filteredGetRequests throws", (
   const store = initializeStore({ blocking: true });
   sim.stores = registerStore(sim, store);
   // register predicate to call getWhere, then remove it to simulate corruption
-  sim.predicates["hasFoo"] = (d) => typeof d["foo"] === "string";
+  sim.predicates["hasFoo"] = (event) =>
+    typeof event.process?.data?.["foo"] === "string";
 
   const waiter = createEvent<FooData>({
     scheduledAt: 0,
@@ -1143,7 +1149,8 @@ Deno.test("getWhere FIFO: first matching waiter is served first by put", () => {
     discipline: QueueDiscipline.FIFO,
   });
   sim.stores = registerStore(sim, store);
-  sim.predicates["hasFoo"] = (d) => typeof d["foo"] === "string";
+  sim.predicates["hasFoo"] = (event) =>
+    typeof event.process?.data?.["foo"] === "string";
 
   const w1 = createEvent<FooData>({
     scheduledAt: 0,
@@ -1176,7 +1183,8 @@ Deno.test("getWhere LIFO: last matching waiter is served first by put", () => {
     discipline: QueueDiscipline.LIFO,
   });
   sim.stores = registerStore(sim, store);
-  sim.predicates["hasFoo"] = (d) => typeof d["foo"] === "string";
+  sim.predicates["hasFoo"] = (event) =>
+    typeof event.process?.data?.["foo"] === "string";
 
   const w1 = createEvent<FooData>({
     scheduledAt: 0,
@@ -1210,7 +1218,8 @@ Deno.test("getWhere integration: full round-trip through runSimulation", async (
   const TASK_STORE = "tasks" as const;
 
   const sim = initializeSimulation();
-  sim.predicates["isUrgent"] = (d) => d["urgent"] === true;
+  sim.predicates["isUrgent"] = (event) =>
+    event.process?.data?.["urgent"] === true;
 
   const store = initializeStore({
     id: TASK_STORE,
@@ -1377,7 +1386,7 @@ Deno.test("get throws TypeError when putRequest has no payload", () => {
   assertThrows(
     () => get(sim, consumer, "s"),
     TypeError,
-    "Store payload is missing for resumed put request",
+    "Store payload is missing for event:",
   );
 });
 
@@ -1405,7 +1414,7 @@ Deno.test("get throws TypeError when buffered item has no payload", () => {
   assertThrows(
     () => get(sim, consumer, "s"),
     TypeError,
-    "Store payload is missing for buffered item",
+    "Store payload is missing for event:",
   );
 });
 
@@ -1665,7 +1674,8 @@ Deno.test("getWhere skips non-matching putRequests and returns the first match",
     discipline: QueueDiscipline.FIFO,
   });
   sim.stores = registerStore(sim, store);
-  sim.predicates["isMatch"] = (d) => d["foo"] === "match";
+  sim.predicates["isMatch"] = (event) =>
+    event.process?.data?.["foo"] === "match";
 
   const prodA = createEvent<FooData>({
     scheduledAt: 0,

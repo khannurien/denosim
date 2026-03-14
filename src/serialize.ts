@@ -1,5 +1,5 @@
 import type { DeltaEncodedSimulation } from "./memory.ts";
-import { applyAllDeltas, reconstructFromDeltas } from "./memory.ts";
+import { applyDeltas, reconstructFromDeltas } from "./memory.ts";
 import type {
   DisciplineRegistry,
   PredicateRegistry,
@@ -16,6 +16,14 @@ export function serializeSimulation(
   deltaEncoded: DeltaEncodedSimulation,
 ): string {
   return JSON.stringify(deltaEncoded);
+}
+
+/**
+ * Serializes only the base and deltas for on-disk dump files.
+ * `current` is always reconstructable from `base + deltas` and is omitted to reduce file size.
+ */
+export function serializeForDump(encoded: DeltaEncodedSimulation): string {
+  return JSON.stringify({ base: encoded.base, deltas: encoded.deltas });
 }
 
 /**
@@ -52,7 +60,7 @@ export function deserializeLastSimulation(
   predicates: PredicateRegistry,
 ): Simulation {
   const deltaEncoded: DeltaEncodedSimulation = JSON.parse(data);
-  const sim = applyAllDeltas(deltaEncoded.base, deltaEncoded.deltas);
+  const sim = applyDeltas(deltaEncoded.base, deltaEncoded.deltas);
   sim.processes = processes;
   sim.predicates = predicates;
   sim.disciplines = disciplines;

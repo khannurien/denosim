@@ -265,11 +265,11 @@ export function registerDiscipline<
  * Returns the updated predicate registry.
  */
 export function registerPredicate<
-  K extends PredicateType,
   T extends StateData = StateData,
+  K extends PredicateType = PredicateType,
 >(
   sim: Simulation,
-  definition: PredicateDefinition<K, T>,
+  definition: PredicateDefinition<T, K>,
 ): PredicateRegistry {
   return {
     ...sim.predicates,

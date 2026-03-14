@@ -554,7 +554,9 @@ export const enum QueueDiscipline {
 export type PredicateType = string;
 
 /** Predicate function for store filtering over store elements */
-export type Predicate<T extends StateData = StateData> = (item: T) => boolean;
+export type Predicate<T extends StateData = StateData> = (
+  event: Event<T>,
+) => boolean;
 
 /**
  * Registry mapping predicate keys to their implementations.
@@ -568,8 +570,8 @@ export type PredicateRegistry = Record<PredicateType, Predicate>;
  * Registered in `sim.predicates` via `registerPredicate`.
  */
 export interface PredicateDefinition<
-  K extends PredicateType = PredicateType,
   T extends StateData = StateData,
+  K extends PredicateType = PredicateType,
 > {
   /** Unique identifier for this predicate */
   type: K;

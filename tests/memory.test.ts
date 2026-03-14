@@ -1,8 +1,7 @@
 import { assert, assertEquals } from "@std/assert";
 
 import {
-  applyAllDeltas,
-  applyDelta,
+  applyDeltas,
   createDelta,
   createDeltaEncodedSimulation,
   pruneWorkingState,
@@ -57,10 +56,10 @@ Deno.test("createDelta captures new events and their initial status", () => {
   assertEquals(delta.c, 2);
   // e2 is new in sim2 → captured in e ops
   assertEquals(delta.e.length, 1);
-  assert(delta.e.some((op) => op.op === "set" && op.key === e2.id));
+  assert(delta.e.some((op) => op.key === e2.id));
   // e2's Scheduled status is also new → captured in es ops
   assertEquals(delta.es.length, 1);
-  assert(delta.es.some((op) => op.op === "set" && op.key === e2.id));
+  assert(delta.es.some((op) => op.key === e2.id));
 });
 
 Deno.test("createDelta captures status transition and state mutations", async () => {
@@ -135,7 +134,7 @@ Deno.test("applyDelta applies store set operations", () => {
     },
   };
 
-  const result = applyDelta(base, {
+  const result = applyDeltas(base, [{
     c: 1,
     e: [],
     es: [],
@@ -143,30 +142,23 @@ Deno.test("applyDelta applies store set operations", () => {
     s: [],
     st: [
       {
-        op: "set",
         key: "s2",
-        value: {
-          id: "s2",
-          capacity: 2,
-          blocking: false,
-          discipline: QueueDiscipline.FIFO,
-          buffer: { entries: [], seq: 0 },
-          getRequests: { entries: [], seq: 0 },
-          putRequests: { entries: [], seq: 0 },
-          filteredGetRequests: [],
-        },
+        buffer: { entries: [], seq: 0 },
+        getRequests: { entries: [], seq: 0 },
+        putRequests: { entries: [], seq: 0 },
+        filteredGetRequests: [],
       },
     ],
-  });
+  }]);
 
   assertEquals(result.currentTime, 1);
   assert(result.stores["s2"]);
 });
 
-Deno.test("applyAllDeltas applies store set operations across multiple deltas", () => {
+Deno.test("applyDeltas applies store set operations across multiple deltas", () => {
   const base = initializeSimulation();
 
-  const result = applyAllDeltas(base, [
+  const result = applyDeltas(base, [
     {
       c: 1,
       e: [],
@@ -175,18 +167,11 @@ Deno.test("applyAllDeltas applies store set operations across multiple deltas", 
       s: [],
       st: [
         {
-          op: "set",
           key: "s1",
-          value: {
-            id: "s1",
-            capacity: 1,
-            blocking: true,
-            discipline: QueueDiscipline.FIFO,
-            buffer: { entries: [], seq: 0 },
-            getRequests: { entries: [], seq: 0 },
-            putRequests: { entries: [], seq: 0 },
-            filteredGetRequests: [],
-          },
+          buffer: { entries: [], seq: 0 },
+          getRequests: { entries: [], seq: 0 },
+          putRequests: { entries: [], seq: 0 },
+          filteredGetRequests: [],
         },
       ],
     },
@@ -198,18 +183,11 @@ Deno.test("applyAllDeltas applies store set operations across multiple deltas", 
       s: [],
       st: [
         {
-          op: "set",
           key: "s2",
-          value: {
-            id: "s2",
-            capacity: 2,
-            blocking: false,
-            discipline: QueueDiscipline.LIFO,
-            buffer: { entries: [], seq: 0 },
-            getRequests: { entries: [], seq: 0 },
-            putRequests: { entries: [], seq: 0 },
-            filteredGetRequests: [],
-          },
+          buffer: { entries: [], seq: 0 },
+          getRequests: { entries: [], seq: 0 },
+          putRequests: { entries: [], seq: 0 },
+          filteredGetRequests: [],
         },
       ],
     },
@@ -218,6 +196,43 @@ Deno.test("applyAllDeltas applies store set operations across multiple deltas", 
   assertEquals(result.currentTime, 2);
   assert(result.stores["s1"]);
   assert(result.stores["s2"]);
+});
+
+Deno.test("diffStores emits only changed queue fields, not the full store", () => {
+  const shared = { entries: [], seq: 0 };
+  const newGetRequests = { entries: [], seq: 1 };
+
+  const prev = initializeSimulation();
+  prev.stores = {
+    s1: {
+      id: "s1",
+      capacity: 1,
+      blocking: true,
+      discipline: QueueDiscipline.FIFO,
+      buffer: shared,
+      getRequests: shared,
+      putRequests: shared,
+      filteredGetRequests: [],
+    },
+  };
+
+  const current = initializeSimulation();
+  current.stores = {
+    s1: {
+      ...prev.stores.s1,
+      getRequests: newGetRequests,
+    },
+  };
+
+  const delta = createDelta(prev, current);
+  assertEquals(delta.st.length, 1);
+
+  const op = delta.st[0];
+  assertEquals(op.key, "s1");
+  assertEquals(op.getRequests, newGetRequests);
+  assert(!("buffer" in op));
+  assert(!("putRequests" in op));
+  assert(!("filteredGetRequests" in op));
 });
 
 Deno.test("runSimulation records only real steps and keeps full final state after dumps", async () => {

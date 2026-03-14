@@ -1028,17 +1028,41 @@ Deno.test("runSimulation rejects when event references unregistered process type
 Deno.test("registerPredicate registers a predicate that can be looked up and called", () => {
   const sim = initializeSimulation();
 
-  const definition: PredicateDefinition<"isPositive"> = {
+  const definition: PredicateDefinition = {
     type: "isPositive",
-    predicate: (data) => (data["value"] as number) > 0,
+    predicate: (event) => ((event.process?.data?.["value"] as number) ?? 0) > 0,
   };
 
   sim.predicates = registerPredicate(sim, definition);
 
   assertEquals(typeof sim.predicates["isPositive"], "function");
-  assertEquals(sim.predicates["isPositive"]({ value: 5 }), true);
-  assertEquals(sim.predicates["isPositive"]({ value: -1 }), false);
-  assertEquals(sim.predicates["isPositive"]({ value: 0 }), false);
+  assertEquals(
+    sim.predicates["isPositive"](
+      createEvent({
+        scheduledAt: 0,
+        process: { type: "t", data: { value: 5 } },
+      }),
+    ),
+    true,
+  );
+  assertEquals(
+    sim.predicates["isPositive"](
+      createEvent({
+        scheduledAt: 0,
+        process: { type: "t", data: { value: -1 } },
+      }),
+    ),
+    false,
+  );
+  assertEquals(
+    sim.predicates["isPositive"](
+      createEvent({
+        scheduledAt: 0,
+        process: { type: "t", data: { value: 0 } },
+      }),
+    ),
+    false,
+  );
 });
 
 Deno.test("finishEvent marks event as Finished and appends a transition", () => {

@@ -1,6 +1,6 @@
 import { randomIntegerBetween, randomSeeded } from "@std/random";
 
-import type { ProcessDefinition, StateData } from "../src/model.ts";
+import type { Event, ProcessDefinition, StateData } from "../src/model.ts";
 import {
   continueEvent,
   get,
@@ -93,7 +93,7 @@ if (import.meta.main) {
 
   sim.predicates = registerPredicate(sim, {
     type: IS_SYNC,
-    predicate: (d: Task) => d.kind === "sync",
+    predicate: (event: Event<Task>) => event.process?.data?.kind === "sync",
   });
 
   // Shared task queue: non-blocking, EDF

@@ -1,6 +1,7 @@
 import { assert, assertEquals } from "@std/assert";
 
 import type {
+  Event,
   ProcessDefinition,
   Simulation,
   StateData,
@@ -446,7 +447,7 @@ Deno.test("pause/resume correctly resolves getWhere waiter after deserialization
   };
 
   const predicateRegistry = {
-    [PREDICATE_KEY]: (d: StateData) => d["urgent"] === true,
+    [PREDICATE_KEY]: (event: Event) => event.process?.data?.["urgent"] === true,
   };
 
   // First run: stop after t=0 so the scheduler blocks; producer (t=1) has not yet fired.

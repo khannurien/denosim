@@ -4,8 +4,10 @@ import type {
   DisciplineRegistry,
   Event,
   EventID,
+  EventTransition,
   PredicateRegistry,
   ProcessRegistry,
+  ProcessState,
   RunSimulationOptions,
   Simulation,
   SimulationResult,
@@ -14,7 +16,7 @@ import { EventState } from "./model.ts";
 import {
   deserializeLastSimulation,
   deserializeSimulation,
-  serializeSimulation,
+  serializeForDump,
 } from "./serialize.ts";
 import { buildHeap, heapPush } from "./heap.ts";
 import { run, shouldTerminate } from "./simulation.ts";
@@ -289,7 +291,7 @@ export async function runSimulationWithDeltas(
     if (shouldDump(encoded, context.manifest.dump.interval)) {
       // Flush accumulated deltas to disk and record the checkpoint path
       const dump = await dumpToDisk(
-        serializeSimulation(encoded),
+        serializeForDump(encoded),
         encoded.current.currentTime,
         context,
       );
@@ -316,7 +318,7 @@ export async function runSimulationWithDeltas(
   // Also skipped when the loop exited exactly on a dump boundary (deltas already flushed)
   if (checkpoints.length > 0 && encoded.deltas.length > 0) {
     const dump = await dumpToDisk(
-      serializeSimulation(encoded),
+      serializeForDump(encoded),
       encoded.current.currentTime,
       context,
     );
@@ -384,13 +386,24 @@ export async function reconstructFullCurrent(
     return tail;
   }
 
-  const [first, ...rest] = snapshots;
-  const full = rest.reduce(
-    (acc, current) => mergeReplayState(acc, current),
-    first,
-  );
+  // Single-pass merge across all checkpoint snapshots and the in-memory tail
+  const events: Record<string, Event> = {};
+  const status: Record<EventID, EventState> = {};
+  const transitions: EventTransition[] = [];
+  const state: Record<string, ProcessState> = {};
 
-  return mergeReplayState(full, tail);
+  for (const snap of [...snapshots, tail]) {
+    Object.assign(events, snap.timeline.events);
+    Object.assign(status, snap.timeline.status);
+    for (const t of snap.timeline.transitions) transitions.push(t);
+    Object.assign(state, snap.state);
+  }
+
+  return {
+    ...tail,
+    timeline: { ...tail.timeline, events, status, transitions },
+    state,
+  };
 }
 
 /**
@@ -412,11 +425,11 @@ export async function loadRunHistory(
     `${runDirectory}/${DEFAULT_DUMP_DIR}`;
 
   // Collect all dump files
-  const files: string[] = [];
+  const dumps: string[] = [];
   try {
     for await (const entry of Deno.readDir(dumpDir)) {
       if (entry.isFile && entry.name.endsWith(".json")) {
-        files.push(`${dumpDir}/${entry.name}`);
+        dumps.push(`${dumpDir}/${entry.name}`);
       }
     }
   } catch (err) {
@@ -424,18 +437,18 @@ export async function loadRunHistory(
     throw err;
   }
 
-  if (files.length === 0) return [];
+  if (dumps.length === 0) return [];
 
   // Sort by the monotonic sequence prefix (e.g. "2-t400.json" -> 2)
   // parseInt stops at the first non-digit character, so no explicit split needed
-  files.sort((a, b) => {
+  dumps.sort((a, b) => {
     const nameA = a.split("/").pop()!;
     const nameB = b.split("/").pop()!;
     return parseInt(nameA, 10) - parseInt(nameB, 10);
   });
 
   const allStates: Simulation[] = [];
-  for (const file of files) {
+  for (const file of dumps) {
     const json = await Deno.readTextFile(file);
     const states = deserializeSimulation(
       json,
@@ -452,49 +465,4 @@ export async function loadRunHistory(
   }
 
   return allStates;
-}
-
-/**
- * Merges two simulation states for full-history reconstruction after a run with checkpoints.
- * Used to fold checkpoint snapshots together with the in-memory tail into a single replay-complete simulation state.
- * Events and statuses from `current` take precedence over `previous`; transitions are concatenated in chronological order.
- */
-function mergeReplayState(
-  previous: Simulation,
-  current: Simulation,
-): Simulation {
-  const eventsById: Record<string, Event> = {
-    ...previous.timeline.events,
-  };
-
-  for (const [id, event] of Object.entries(current.timeline.events)) {
-    eventsById[id] = event;
-  }
-
-  const statusById: Record<EventID, EventState> = {
-    ...previous.timeline.status,
-  };
-
-  for (const [id, status] of Object.entries(current.timeline.status)) {
-    statusById[id] = status;
-  }
-
-  const transitions = [
-    ...previous.timeline.transitions,
-    ...current.timeline.transitions,
-  ];
-
-  return {
-    ...current,
-    timeline: {
-      ...current.timeline,
-      events: eventsById,
-      status: statusById,
-      transitions,
-    },
-    state: {
-      ...previous.state,
-      ...current.state,
-    },
-  };
 }
