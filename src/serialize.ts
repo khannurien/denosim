@@ -1,5 +1,5 @@
 import type { DeltaEncodedSimulation } from "./memory.ts";
-import { reconstructFromDeltas } from "./memory.ts";
+import { applyAllDeltas, reconstructFromDeltas } from "./memory.ts";
 import type {
   DisciplineRegistry,
   PredicateRegistry,
@@ -19,9 +19,8 @@ export function serializeSimulation(
 }
 
 /**
- * Read simulation states from a JSON string.
- * This is the reverse operation of `serializeSimulation`.
- * It will restore the simulation state, including all functions.
+ * Restores simulation states from a JSON string produced by `serializeSimulation`.
+ * Registries that are initialized in user code must be passed to the function. 
  * The simulation can then be resumed from the point where it was serialized.
  */
 export function deserializeSimulation(
@@ -40,4 +39,22 @@ export function deserializeSimulation(
   }
 
   return states;
+}
+
+/**
+ * Like `deserializeSimulation` but returns only the final reconstructed state.
+ * Use when intermediate states are not needed (e.g. checkpoint resume in reconstructFullCurrent).
+ */
+export function deserializeLastSimulation(
+  data: string,
+  processes: ProcessRegistry,
+  disciplines: DisciplineRegistry,
+  predicates: PredicateRegistry,
+): Simulation {
+  const deltaEncoded: DeltaEncodedSimulation = JSON.parse(data);
+  const sim = applyAllDeltas(deltaEncoded.base, deltaEncoded.deltas);
+  sim.processes = processes;
+  sim.predicates = predicates;
+  sim.disciplines = disciplines;
+  return sim;
 }

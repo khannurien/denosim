@@ -263,9 +263,10 @@ Deno.test("loadRunHistory reconstructs states from a single dump file", async ()
   const dir = "runs/test/load-history-single-dump";
   await Deno.remove(dir, { recursive: true }).catch(() => {});
 
-  // 3 events at t=1,2,3; dumpInterval=2 fires after t=2 → one dump file (0-t2.json).
-  // The event at t=3 lands in the final in-memory window and is NOT on disk —
-  // that is the documented limitation of loadRunHistory.
+  // 3 events at t=1,2,3; dumpInterval=2.
+  // Dump 0 (0-t2.json): base(ct=0) + deltas for t=1,2 → states [ct=0,1,2].
+  // Dump 1 (1-t3.json): final flush, base=pruned(ct=2) + delta for t=3 → states [ct=2,3].
+  // Stitched (states[0] of dump 1 skipped as pruned boundary): [ct=0,1,2,3].
   const sim = buildCounterSim(3);
   await runSimulationWithDeltas(sim, { runDirectory: dir, dumpInterval: 2 });
 
@@ -276,12 +277,11 @@ Deno.test("loadRunHistory reconstructs states from a single dump file", async ()
     sim.predicates,
   );
 
-  // base(ct=0) + event at t=1 + event at t=2 = 3 states.
-  // ct=3 is absent: it was in the tail window that never reached the dump threshold.
-  assertEquals(states.length, 3);
+  assertEquals(states.length, 4);
   assertEquals(states[0].currentTime, 0);
   assertEquals(states[1].currentTime, 1);
   assertEquals(states[2].currentTime, 2);
+  assertEquals(states[3].currentTime, 3);
 
   await Deno.remove(dir, { recursive: true });
 });

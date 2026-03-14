@@ -276,11 +276,43 @@ export function reconstructFromDeltas(
   base: Simulation,
   deltas: SimulationDelta[],
 ): Simulation[] {
-  return deltas.reduce<Simulation[]>((states, delta) => {
-    const previous = states[states.length - 1];
-    const current = applyDelta(previous, delta);
-    return [...states, current];
-  }, [base]);
+  const states: Simulation[] = [base];
+  for (const delta of deltas) {
+    states.push(applyDelta(states[states.length - 1], delta));
+  }
+
+  return states;
+}
+
+/**
+ * Applies all deltas to `base` and returns only the final state.
+ * Use when intermediate states are not needed (e.g. checkpoint resume).
+ */
+export function applyAllDeltas(
+  base: Simulation,
+  deltas: SimulationDelta[],
+): Simulation {
+  const sim: Simulation = {
+    ...base,
+    timeline: {
+      events: { ...base.timeline.events },
+      status: { ...base.timeline.status },
+      transitions: [...base.timeline.transitions],
+    },
+    state: { ...base.state },
+    stores: { ...base.stores },
+  };
+
+  for (const delta of deltas) {
+    sim.currentTime = delta.c;
+    for (const op of delta.e) { sim.timeline.events[op.key] = op.event; }
+    for (const op of delta.es) { sim.timeline.status[op.key] = op.status; }
+    for (const op of delta.et) { sim.timeline.transitions.push(op.transition); }
+    for (const op of delta.s) { sim.state[op.key] = op.value; }
+    for (const op of delta.st) { sim.stores[op.key] = op.value; }
+  }
+
+  return sim;
 }
 
 /**

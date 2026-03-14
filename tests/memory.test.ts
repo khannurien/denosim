@@ -191,8 +191,10 @@ Deno.test("runSimulation records only real steps and keeps full final state afte
 
   const dump0 = await Deno.stat(`${dir}/dumps/0-t1.json`);
   const dump1 = await Deno.stat(`${dir}/dumps/1-t3.json`);
+  const dump2 = await Deno.stat(`${dir}/dumps/2-t4.json`);
   assert(dump0.isFile);
   assert(dump1.isFile);
+  assert(dump2.isFile);
 
   await Deno.remove(dir, { recursive: true });
 });

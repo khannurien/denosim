@@ -11,7 +11,11 @@ import type {
   SimulationResult,
 } from "./model.ts";
 import { EventState } from "./model.ts";
-import { deserializeSimulation, serializeSimulation } from "./serialize.ts";
+import {
+  deserializeLastSimulation,
+  deserializeSimulation,
+  serializeSimulation,
+} from "./serialize.ts";
 import { buildHeap, heapPush } from "./heap.ts";
 import { run, shouldTerminate } from "./simulation.ts";
 
@@ -306,6 +310,27 @@ export async function runSimulationWithDeltas(
     }
   }
 
+  // Flush any remaining deltas so loadRunHistory sees the complete history
+  // Only fires when there are prior periodic checkpoints to stitch with
+  // If no periodic dumps occurred the run is purely in-memory and the delta encoding is intact
+  // Also skipped when the loop exited exactly on a dump boundary (deltas already flushed)
+  if (checkpoints.length > 0 && encoded.deltas.length > 0) {
+    const dump = await dumpToDisk(
+      serializeSimulation(encoded),
+      encoded.current.currentTime,
+      context,
+    );
+    checkpoints.push(dump.path);
+    context.manifest = dump.manifest;
+
+    // Prune so the tail passed to reconstructFullCurrent doesn't overlap with the checkpoint
+    // Mirrors the periodic dump path: history is on disk, drop it from the working state
+    const compacted = pruneWorkingState(encoded.current);
+    encoded.base = compacted;
+    encoded.deltas = [];
+    encoded.current = compacted;
+  }
+
   const stop = performance.now();
   if (checkpoints.length > 0) {
     // Produce a full-history view of the run
@@ -345,15 +370,14 @@ export async function reconstructFullCurrent(
   tail: Simulation,
 ): Promise<Simulation> {
   const snapshots = await Promise.all(
-    checkpoints.map(async (checkpoint) => {
-      const states = deserializeSimulation(
+    checkpoints.map(async (checkpoint) =>
+      deserializeLastSimulation(
         await Deno.readTextFile(checkpoint),
         tail.processes,
         tail.disciplines,
         tail.predicates,
-      );
-      return states[states.length - 1];
-    }),
+      )
+    ),
   );
 
   if (snapshots.length === 0) {
@@ -373,9 +397,6 @@ export async function reconstructFullCurrent(
  * Reconstructs the full sequence of intermediate simulation states from the dump files written by a previous `runSimulationWithDeltas` run.
  * Each dump file is a self-contained delta-encoded checkpoint window. This function loads them in sequence order, reconstructs the intermediate states within each window, and stitches the windows into a single chronological array, giving the same scrub-able history that would be available from `reconstructFromDeltas` on a run that fit entirely in memory.
  * The base of each subsequent window is skipped during stitching: it is the pruned snapshot used as a memory-management boundary, not a new simulation step, so it would otherwise duplicate the final time of the preceding window.
- * Limitation: events processed after the last dump (the final in-memory window that did not reach the dump threshold) are not on disk and therefore not included in the returned array.
- * FIXME: Always dump on simulation end?
- * To cover the full run, include the states from the in-memory tail manually if they are still available at the call site.
  */
 export async function loadRunHistory(
   runDirectory: string,
