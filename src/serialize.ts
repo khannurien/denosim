@@ -20,7 +20,7 @@ export function serializeSimulation(
 
 /**
  * Restores simulation states from a JSON string produced by `serializeSimulation`.
- * Registries that are initialized in user code must be passed to the function. 
+ * Registries that are initialized in user code must be passed to the function.
  * The simulation can then be resumed from the point where it was serialized.
  */
 export function deserializeSimulation(

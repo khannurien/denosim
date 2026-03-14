@@ -1,6 +1,7 @@
 import { assert, assertEquals } from "@std/assert";
 
 import {
+  applyAllDeltas,
   applyDelta,
   createDelta,
   createDeltaEncodedSimulation,
@@ -159,6 +160,63 @@ Deno.test("applyDelta applies store set operations", () => {
   });
 
   assertEquals(result.currentTime, 1);
+  assert(result.stores["s2"]);
+});
+
+Deno.test("applyAllDeltas applies store set operations across multiple deltas", () => {
+  const base = initializeSimulation();
+
+  const result = applyAllDeltas(base, [
+    {
+      c: 1,
+      e: [],
+      es: [],
+      et: [],
+      s: [],
+      st: [
+        {
+          op: "set",
+          key: "s1",
+          value: {
+            id: "s1",
+            capacity: 1,
+            blocking: true,
+            discipline: QueueDiscipline.FIFO,
+            buffer: { entries: [], seq: 0 },
+            getRequests: { entries: [], seq: 0 },
+            putRequests: { entries: [], seq: 0 },
+            filteredGetRequests: [],
+          },
+        },
+      ],
+    },
+    {
+      c: 2,
+      e: [],
+      es: [],
+      et: [],
+      s: [],
+      st: [
+        {
+          op: "set",
+          key: "s2",
+          value: {
+            id: "s2",
+            capacity: 2,
+            blocking: false,
+            discipline: QueueDiscipline.LIFO,
+            buffer: { entries: [], seq: 0 },
+            getRequests: { entries: [], seq: 0 },
+            putRequests: { entries: [], seq: 0 },
+            filteredGetRequests: [],
+          },
+        },
+      ],
+    },
+  ]);
+
+  assertEquals(result.currentTime, 2);
+  assert(result.stores["s1"]);
   assert(result.stores["s2"]);
 });
 

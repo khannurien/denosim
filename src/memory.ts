@@ -305,11 +305,11 @@ export function applyAllDeltas(
 
   for (const delta of deltas) {
     sim.currentTime = delta.c;
-    for (const op of delta.e) { sim.timeline.events[op.key] = op.event; }
-    for (const op of delta.es) { sim.timeline.status[op.key] = op.status; }
-    for (const op of delta.et) { sim.timeline.transitions.push(op.transition); }
-    for (const op of delta.s) { sim.state[op.key] = op.value; }
-    for (const op of delta.st) { sim.stores[op.key] = op.value; }
+    for (const op of delta.e) sim.timeline.events[op.key] = op.event;
+    for (const op of delta.es) sim.timeline.status[op.key] = op.status;
+    for (const op of delta.et) sim.timeline.transitions.push(op.transition);
+    for (const op of delta.s) sim.state[op.key] = op.value;
+    for (const op of delta.st) sim.stores[op.key] = op.value;
   }
 
   return sim;
