@@ -85,7 +85,7 @@ Deno.test("buildHeap produces correct min-heap order from simulation state", () 
 Deno.test("buildHeap returns empty heap when no Scheduled events exist", () => {
   const sim = initializeSimulation();
 
-  // Add a Waiting event — buildHeap must skip it
+  // Add a Waiting event; buildHeap must skip it
   const e = createEvent({ scheduledAt: 10, waiting: true });
   sim.timeline = scheduleEvent(sim, e);
   assertEquals(sim.timeline.status[e.id], EventState.Waiting);

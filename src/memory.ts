@@ -160,7 +160,7 @@ function diffState(
 
 /**
  * Algorithm to compute the difference between two store objects at field level.
- * Uses reference equality per queue field — if references are equal the field is unchanged.
+ * Uses reference equality per queue field; if references are equal, the field is unchanged.
  * Only changed fields are included in each op, minimizing serialization cost.
  * Note: stores are never deleted mid-run, so no delete operation is needed or produced.
  */

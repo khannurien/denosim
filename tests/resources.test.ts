@@ -1019,7 +1019,7 @@ Deno.test("getWhere matches item in non-blocking buffer immediately", () => {
     scheduledAt: 0,
     process: { type: "none", data: { store: store.id, foo: "buffered" } },
   });
-  put(sim, p1, store.id, { store: store.id }); // no foo — won't match
+  put(sim, p1, store.id, { store: store.id }); // no foo: won't match
   put(sim, p2, store.id, { store: store.id, foo: "buffered" }); // matches
   assertEquals(sim.stores[store.id].buffer.entries.length, 2);
 

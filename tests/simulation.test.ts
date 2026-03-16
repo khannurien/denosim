@@ -1129,7 +1129,7 @@ Deno.test("run() skips Waiting events and processes the next Scheduled event", (
 
   // Build a heap that contains both events; run() must skip the Waiting one
   const heap = buildHeap(sim);
-  // Waiting events are excluded from buildHeap — push it manually to verify the skip
+  // Waiting events are excluded from buildHeap: push it manually to verify the skip
   heap.entries.push({ scheduledAt: 0, priority: 0, seq: -1, id: waiting.id });
 
   const [next, continuation] = run(sim, heap);

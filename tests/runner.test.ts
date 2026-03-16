@@ -166,7 +166,7 @@ Deno.test("reconstructFullCurrent merges checkpoint files with in-memory state",
   // Reconstruct full current state from checkpoints and tail
   const reconstructed = await reconstructFullCurrent(checkpointFiles, result);
 
-  // e1 comes from the checkpoint file, e2 from the tail — both must be present
+  // e1 comes from the checkpoint file, e2 from the tail; both must be present
   assert(
     reconstructed.timeline.events[e1.id],
     "e1 from checkpoint must be present",

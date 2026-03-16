@@ -88,7 +88,7 @@ function storeQueuePopWhere<T extends StateData>(
     rejectedEntries.push(entry);
   }
 
-  // No match — queue is logically unchanged (caller retains original)
+  // No match: queue is logically unchanged (caller retains original)
   return null;
 }
 

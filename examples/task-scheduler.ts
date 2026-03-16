@@ -67,12 +67,12 @@ interface CompletedTask {
 
 function mean(xs: number[]): string {
   return xs.length === 0
-    ? "—"
+    ? "-"
     : (xs.reduce((a, b) => a + b, 0) / xs.length).toFixed(1);
 }
 
 function pct(xs: number[], p: number): string {
-  if (xs.length === 0) return "—";
+  if (xs.length === 0) return "-";
   const s = [...xs].sort((a, b) => a - b);
   return s[Math.max(0, Math.ceil((p / 100) * s.length) - 1)].toFixed(1);
 }
