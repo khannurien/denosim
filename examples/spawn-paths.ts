@@ -1,6 +1,7 @@
-import { Event, ProcessDefinition, StateData } from "../src/model.ts";
+import type { Event, ProcessDefinition, StateData } from "../src/model.ts";
 import { runSimulation } from "../src/runner.ts";
 import {
+  continueEvent,
   createEvent,
   initializeSimulation,
   registerProcess,
@@ -32,33 +33,28 @@ const driver: ProcessDefinition<{
       );
       const nextShared = 42;
 
-      // 1) CONTINUATION (fork-like): same process type + inheritStep=true
-      const continuation: Event<DriverData> = createEvent({
-        parent: event.id,
-        scheduledAt: 1,
-        process: {
-          type: "driver",
-          inheritStep: true,
-          data: { shared: nextShared, tag: "continued" },
-        },
+      // 1) CONTINUATION: same process type + continues=true
+      const continuation: Event<DriverData> = continueEvent(event, 1, {
+        shared: nextShared,
+        tag: "continued",
       });
 
-      // 2) NEW PROCESS WITH PARENT DATA (exec-like): parent linked, fresh initial step
+      // 2) SPAWN: new process with parent data, parent linked, fresh initial step
       const inheritedSpawn: Event<WorkerData> = createEvent({
         parent: event.id,
         scheduledAt: 2,
         process: {
           type: "worker",
-          data: { own: "exec-like" },
+          data: { own: "spawned" },
         },
       });
 
-      // 3) BRAND NEW PROCESS (execve-like): no parent, only explicit input data
+      // 3) ROOT PROCESS: no parent, only explicit input data
       const freshSpawn: Event<WorkerData> = createEvent({
         scheduledAt: 3,
         process: {
           type: "worker",
-          data: { own: "execve-like" },
+          data: { own: "root" },
         },
       });
 
@@ -97,8 +93,8 @@ const worker: ProcessDefinition<{
 
 if (import.meta.main) {
   const sim = initializeSimulation();
-  sim.registry = registerProcess(sim, driver);
-  sim.registry = registerProcess(sim, worker);
+  sim.processes = registerProcess(sim, driver);
+  sim.processes = registerProcess(sim, worker);
 
   const root = createEvent({
     scheduledAt: 0,
@@ -113,8 +109,8 @@ if (import.meta.main) {
 
   // Expected:
   // - continuation keeps driver progress and sees shared=42
-  // - exec-like worker inherits parent shared=42
-  // - execve-like worker has no inherited shared
+  // - spawned worker inherits parent shared=42
+  // - root worker has no inherited shared
   for (const line of observations) {
     console.log(line);
   }

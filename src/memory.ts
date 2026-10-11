@@ -1,29 +1,40 @@
-import {
+import type {
   Event,
   EventID,
-  EventState,
   EventTransition,
+  GetWhereRequest,
   ProcessState,
   Simulation,
   Store,
   StoreID,
+  StoreQueue,
   Timestamp,
 } from "./model.ts";
+import { EventStatus } from "./model.ts";
 
 /** Delta operations for events */
-type EventDeltaOp = { op: "set"; key: EventID; event: Event };
+type EventDeltaOp = { key: EventID; event: Event };
 
 /** Delta operations for status */
-type StatusDeltaOp = { op: "set"; key: EventID; status: EventState };
+type StatusDeltaOp = { key: EventID; status: EventStatus };
 
 /** Delta operations for transitions */
-type TransitionDeltaOp = { op: "add"; transition: EventTransition };
+type TransitionDeltaOp = { transition: EventTransition };
 
 /** Delta operations for state */
-type StateDeltaOp = { op: "set"; key: EventID; value: ProcessState };
+type StateDeltaOp = { key: EventID; value: ProcessState };
 
-/** Delta operations for stores */
-type StoreDeltaOp = { op: "set"; key: StoreID; value: Store };
+/**
+ * Delta operations for stores.
+ * Only carry the fields that changed.
+ */
+type StoreDeltaOp = {
+  key: StoreID;
+  buffer?: StoreQueue;
+  getRequests?: StoreQueue;
+  putRequests?: StoreQueue;
+  getWhereRequests?: GetWhereRequest[];
+};
 
 /** Compact delta representation between simulation states */
 export interface SimulationDelta {
@@ -74,7 +85,7 @@ export function createDelta(
       prev.timeline.transitions,
       current.timeline.transitions,
     ),
-    s: diffState(prev.state, current.state),
+    s: diffState(prev.states, current.states),
     st: diffStores(prev.stores, current.stores),
   };
 }
@@ -90,7 +101,7 @@ function diffEvents(
   for (const [id, event] of Object.entries(current)) {
     const prevEvent = prev[id];
     if (!prevEvent) {
-      ops.push({ op: "set", key: id, event });
+      ops.push({ key: id, event });
     }
   }
 
@@ -98,14 +109,14 @@ function diffEvents(
 }
 
 function diffStatus(
-  prev: Record<EventID, EventState>,
-  current: Record<EventID, EventState>,
+  prev: Record<EventID, EventStatus>,
+  current: Record<EventID, EventStatus>,
 ): StatusDeltaOp[] {
   const ops: StatusDeltaOp[] = [];
   for (const [id, status] of Object.entries(current)) {
     const prevStatus = prev[id];
     if (prevStatus !== status) {
-      ops.push({ op: "set", key: id, status });
+      ops.push({ key: id, status });
     }
   }
 
@@ -121,10 +132,7 @@ function diffTransitions(
 ): TransitionDeltaOp[] {
   if (current.length <= prev.length) return [];
 
-  return current.slice(prev.length).map((transition) => ({
-    op: "add",
-    transition,
-  }));
+  return current.slice(prev.length).map((transition) => ({ transition }));
 }
 
 /**
@@ -139,10 +147,11 @@ function diffState(
 
   // Modified or new state
   Object.keys(current).forEach((key) => {
+    if (prev[key] === current[key]) return; // Structural sharing: identical reference, skip
     if (
       !prev[key] || JSON.stringify(prev[key]) !== JSON.stringify(current[key])
     ) {
-      ops.push({ op: "set", key, value: current[key] });
+      ops.push({ key, value: current[key] });
     }
   });
 
@@ -150,8 +159,10 @@ function diffState(
 }
 
 /**
- * Algorithm to compute the difference between two store objects, identifying modified, new, or deleted stores based on their keys and values.
- * This allows generating a list of operations that can be applied to update the previous stores to match the current ones, capturing only the necessary changes while also handling deletions.
+ * Algorithm to compute the difference between two store objects at field level.
+ * Uses reference equality per queue field; if references are equal, the field is unchanged.
+ * Only changed fields are included in each op, minimizing serialization cost.
+ * Note: stores are never deleted mid-run, so no delete operation is needed or produced.
  */
 function diffStores(
   prev: Record<StoreID, Store>,
@@ -159,94 +170,20 @@ function diffStores(
 ): StoreDeltaOp[] {
   const ops: StoreDeltaOp[] = [];
 
-  // Modified or new stores
-  Object.keys(current).forEach((key) => {
-    if (
-      !prev[key] || JSON.stringify(prev[key]) !== JSON.stringify(current[key])
-    ) {
-      ops.push({ op: "set", key, value: current[key] });
+  for (const key of Object.keys(current)) {
+    if (prev[key] === current[key]) continue; // Structural sharing: whole store unchanged
+    const p = prev[key], c = current[key];
+    const op: StoreDeltaOp = { key };
+    if (!p || p.buffer !== c.buffer) op.buffer = c.buffer;
+    if (!p || p.getRequests !== c.getRequests) op.getRequests = c.getRequests;
+    if (!p || p.putRequests !== c.putRequests) op.putRequests = c.putRequests;
+    if (!p || p.getWhereRequests !== c.getWhereRequests) {
+      op.getWhereRequests = c.getWhereRequests;
     }
-  });
+    ops.push(op);
+  }
 
   return ops;
-}
-
-/**
- * Apply a given delta to a base simulation state to produce an updated simulation state that reflects the changes captured in the delta.
- * This involves processing event operations (additions and updates), state operations (modifications), and store operations (additions, modifications, and deletions) to reconstruct the current simulation state from the base state and the provided delta.
- */
-export function applyDelta(
-  base: Simulation,
-  delta: SimulationDelta,
-): Simulation {
-  const result: Simulation = {
-    ...base,
-    currentTime: delta.c,
-    timeline: {
-      events: { ...base.timeline.events },
-      status: { ...base.timeline.status },
-      transitions: [...base.timeline.transitions],
-    },
-    state: { ...base.state },
-    stores: { ...base.stores },
-  };
-
-  // Apply event operations
-  if (delta.e) {
-    delta.e.forEach((op) => {
-      switch (op.op) {
-        case "set":
-          result.timeline.events[op.key] = op.event;
-          break;
-      }
-    });
-  }
-
-  // Apply status operations
-  if (delta.es) {
-    delta.es.forEach((op) => {
-      switch (op.op) {
-        case "set":
-          result.timeline.status[op.key] = op.status;
-          break;
-      }
-    });
-  }
-
-  // Apply transition operations
-  if (delta.et) {
-    delta.et.forEach((op) => {
-      switch (op.op) {
-        case "add":
-          result.timeline.transitions.push(op.transition);
-          break;
-      }
-    });
-  }
-
-  // Apply state operations
-  if (delta.s) {
-    delta.s.forEach((op) => {
-      switch (op.op) {
-        case "set":
-          result.state[op.key] = op.value;
-          break;
-      }
-    });
-  }
-
-  // Apply store operations
-  if (delta.st) {
-    delta.st.forEach((op) => {
-      switch (op.op) {
-        case "set":
-          result.stores[op.key] = op.value;
-          break;
-      }
-    });
-  }
-
-  return result;
 }
 
 /**
@@ -273,33 +210,66 @@ export function reconstructFromDeltas(
   base: Simulation,
   deltas: SimulationDelta[],
 ): Simulation[] {
-  return deltas.reduce<Simulation[]>((states, delta) => {
-    const previous = states[states.length - 1];
-    const current = applyDelta(previous, delta);
-    return [...states, current];
-  }, [base]);
+  const states: Simulation[] = [base];
+  for (const delta of deltas) {
+    states.push(applyDeltas(states[states.length - 1], [delta]));
+  }
+
+  return states;
 }
 
 /**
- * Prunes finished and unreachable working data after a checkpoint to reduce memory usage mid-run.
- * Full replay remains available through persisted checkpoint files.
+ * Applies deltas to `base` and returns only the final state.
+ * Use when intermediate states are not needed (e.g. resuming from a dump).
+ */
+export function applyDeltas(
+  base: Simulation,
+  deltas: SimulationDelta[],
+): Simulation {
+  const sim: Simulation = {
+    ...base,
+    timeline: {
+      events: { ...base.timeline.events },
+      status: { ...base.timeline.status },
+      transitions: [...base.timeline.transitions],
+    },
+    states: { ...base.states },
+    stores: { ...base.stores },
+  };
+  for (const delta of deltas) {
+    sim.currentTime = delta.c;
+    for (const op of delta.e) sim.timeline.events[op.key] = op.event;
+    for (const op of delta.es) sim.timeline.status[op.key] = op.status;
+    for (const op of delta.et) sim.timeline.transitions.push(op.transition);
+    for (const op of delta.s) sim.states[op.key] = op.value;
+    for (const op of delta.st) {
+      const { key, ...fields } = op;
+      sim.stores[key] = { ...sim.stores[key], ...fields };
+    }
+  }
+  return sim;
+}
+
+/**
+ * Prunes finished and unreachable working data after a dump to reduce memory usage mid-run.
+ * Full replay remains available through persisted dump files.
  */
 export function pruneWorkingState(sim: Simulation): Simulation {
   const events = Object.fromEntries(
     Object.entries(sim.timeline.events).filter(([_id, event]) =>
-      sim.timeline.status[event.id] !== EventState.Finished
+      sim.timeline.status[event.id] !== EventStatus.Finished
     ),
   );
 
   const status = Object.fromEntries(
     Object.entries(sim.timeline.status).filter(([id, status]) =>
-      events[id] !== undefined && status !== EventState.Finished
+      events[id] !== undefined && status !== EventStatus.Finished
     ),
   );
 
   const transitions = sim.timeline.transitions.filter((transition) =>
     events[transition.id] !== undefined &&
-    status[transition.id] !== EventState.Finished
+    status[transition.id] !== EventStatus.Finished
   );
 
   const referencedState = new Set<string>();
@@ -316,8 +286,8 @@ export function pruneWorkingState(sim: Simulation): Simulation {
       status: { ...status },
       transitions: [...transitions],
     },
-    state: Object.fromEntries(
-      Object.entries(sim.state).filter(([id]) => referencedState.has(id)),
+    states: Object.fromEntries(
+      Object.entries(sim.states).filter(([id]) => referencedState.has(id)),
     ),
     stores: sim.stores,
   };

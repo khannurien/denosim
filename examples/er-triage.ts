@@ -1,14 +1,16 @@
 import { randomIntegerBetween, randomSeeded } from "@std/random";
 
-import {
+import type {
+  DisciplineType,
   Event,
   ProcessDefinition,
-  QueueDiscipline,
   StateData,
 } from "../src/model.ts";
-import { get, initializeStore, put, registerStore } from "../src/resources.ts";
+import { QueueDiscipline } from "../src/model.ts";
+import { get, initializeStore, put, registerStore } from "../src/stores.ts";
 import { runSimulation } from "../src/runner.ts";
 import {
+  continueEvent,
   createEvent,
   initializeSimulation,
   registerProcess,
@@ -65,7 +67,7 @@ function percentile(values: number[], p: number): number {
 }
 
 interface ScenarioStats {
-  discipline: QueueDiscipline;
+  discipline: DisciplineType;
   endedAt: number;
   finished: number;
   urgentFinished: number;
@@ -119,28 +121,26 @@ function assert(condition: boolean, msg: string) {
 }
 
 async function runScenario(
-  discipline: QueueDiscipline,
+  discipline: DisciplineType,
   seed: bigint,
   verbose: boolean = false,
 ): Promise<ScenarioStats> {
   const prng = randomSeeded(seed);
   const sim = initializeSimulation();
 
-  const urgentPool = initializeStore<DoctorToken, typeof URGENT_POOL_ID>({
+  const urgentPool = initializeStore({
     id: URGENT_POOL_ID,
-    blocking: false,
     capacity: URGENT_DOCTORS,
     discipline: QueueDiscipline.FIFO,
   });
-  const generalPool = initializeStore<DoctorToken, typeof GENERAL_POOL_ID>({
+  const generalPool = initializeStore({
     id: GENERAL_POOL_ID,
-    blocking: false,
     capacity: GENERAL_DOCTORS,
     discipline,
   });
 
-  sim.stores = registerStore(sim, urgentPool);
-  sim.stores = registerStore(sim, generalPool);
+  sim.stores = registerStore<DoctorToken>(sim, urgentPool);
+  sim.stores = registerStore<DoctorToken>(sim, generalPool);
 
   for (let i = 0; i < URGENT_DOCTORS; i += 1) {
     const token: DoctorToken = {
@@ -212,18 +212,11 @@ async function runScenario(
         return {
           state: { ...state, step: "treat", data: updated },
           next: [
-            createEvent({
-              parent: event.id,
-              scheduledAt: sim.currentTime + updated.serviceTime,
-              process: {
-                ...event.process,
-                inheritStep: true,
-              },
-            }),
+            continueEvent(event, sim.currentTime + updated.serviceTime),
           ],
         };
       },
-      treat(sim, event, state) {
+      treat(sim, _event, state) {
         const { patientId, doctorId, pool } = state.data;
         if (!doctorId) {
           throw new Error(`Missing doctorId for patient ${patientId}`);
@@ -239,18 +232,18 @@ async function runScenario(
           );
         }
 
+        // We only need `resume` (wakeup for a waiting patient) and `finish` (cleanup of its request)
         const releaseEvent = createEvent({
-          parent: event.id,
           scheduledAt: sim.currentTime,
           process: { type: "none" },
         });
-        const { step, resume, finish } = put(sim, releaseEvent, pool, {
+        const { resume, finish } = put(sim, releaseEvent, pool, {
           doctorId,
           pool,
         });
         return {
           state: { ...state, step: "done", data: finished },
-          next: resume ? [step, ...resume] : [step],
+          next: resume ?? [],
           finish: finish ?? [],
         };
       },
@@ -301,16 +294,7 @@ async function runScenario(
         const nextAt = sim.currentTime + interArrival;
         if (nextAt <= SIM_TIME) {
           events.push(
-            createEvent({
-              parent: event.id,
-              scheduledAt: nextAt,
-              priority: -1,
-              process: {
-                type: "arrivals",
-                inheritStep: true,
-                data: { nextId },
-              },
-            }),
+            continueEvent(event, nextAt, { nextId }, { priority: -1 }),
           );
         }
 
@@ -322,8 +306,8 @@ async function runScenario(
     },
   };
 
-  sim.registry = registerProcess(sim, patient);
-  sim.registry = registerProcess(sim, arrivals);
+  sim.processes = registerProcess(sim, patient);
+  sim.processes = registerProcess(sim, arrivals);
 
   const start = createEvent({
     scheduledAt: 0,
@@ -340,7 +324,7 @@ async function runScenario(
   const { result } = await runSimulation(sim, { untilEvent: stop });
 
   const latestByPatient = new Map<number, PatientData>();
-  for (const processState of Object.values(result.state)) {
+  for (const processState of Object.values(result.states)) {
     if (processState.type !== "patient") continue;
     const data = processState.data as Partial<PatientData>;
     if (typeof data.patientId !== "number") continue;

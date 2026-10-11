@@ -1,18 +1,25 @@
-import {
-  createDelta,
-  DeltaEncodedSimulation,
-  pruneWorkingState,
-} from "./memory.ts";
-import {
+import type { DeltaEncodedSimulation } from "./memory.ts";
+import { createDelta, pruneWorkingState } from "./memory.ts";
+import type {
+  DisciplineRegistry,
   Event,
   EventID,
-  EventState,
+  EventTransition,
+  PredicateRegistry,
+  ProcessRegistry,
+  ProcessState,
   RunSimulationOptions,
   Simulation,
   SimulationResult,
 } from "./model.ts";
-import { deserializeSimulation, serializeSimulation } from "./serialize.ts";
-import { run, shouldTerminate } from "./simulation.ts";
+import { EventStatus } from "./model.ts";
+import {
+  deserializeLastSimulation,
+  deserializeSimulation,
+  serializeForDump,
+} from "./serialize.ts";
+import { buildHeap, heapPush } from "./heap.ts";
+import { advance, shouldTerminate } from "./simulation.ts";
 
 /**
  * Dump configuration and mutable state for a simulation run.
@@ -69,10 +76,10 @@ export interface RunContext {
 }
 
 /**
- * Result of a single `dumpToDisk` call: the path of the written checkpoint file and the updated manifest reflecting the incremented dump count and latest file name.
+ * Result of a single `dumpToDisk` call: the path of the written dump file and the updated manifest reflecting the incremented dump count and latest file name.
  */
 export interface DumpWriteResult {
-  /** Absolute or relative path to the checkpoint file just written */
+  /** Absolute or relative path to the dump file just written */
   path: string;
 
   /** Updated manifest after recording this dump; should be persisted to the `RunContext` */
@@ -235,8 +242,8 @@ export async function runSimulation(
 }
 
 /**
- * Runs the simulation and exposes the delta/checkpoint representation.
- * Layers on memory management: delta accumulation, periodic checkpoint dumps, state pruning, and final reconstruction from disk when checkpoints have been written.
+ * Runs the simulation and exposes the delta-encoded representation.
+ * Layers on memory management: delta accumulation, periodic dumps, state pruning, and final reconstruction from disk when dumps have been written.
  */
 export async function runSimulationWithDeltas(
   init: Simulation,
@@ -249,29 +256,46 @@ export async function runSimulationWithDeltas(
     deltas: [],
     current: { ...init },
   };
-  const checkpoints: string[] = [];
+  const dumps: string[] = [];
+
+  // Initialize heap from starting simulation state
+  const heap = buildHeap(init);
 
   // Main simulation loop
   const start = performance.now();
   while (true) {
-    const [next, continuation] = run(encoded.current);
-    if (!continuation) break;
+    const [next, more] = advance(encoded.current, heap);
+    if (!more) break;
 
     // Record the diff from the previous state to the next and advance the current pointer
-    encoded.deltas.push(createDelta(encoded.current, next));
+    const delta = createDelta(encoded.current, next);
+    encoded.deltas.push(delta);
     encoded.current = next;
+
+    // Push newly scheduled events onto the heap
+    // delta.e contains events added this step; Waiting events are excluded (not yet schedulable)
+    for (const op of delta.e) {
+      if (next.timeline.status[op.key] === EventStatus.Scheduled) {
+        const event = next.timeline.events[op.key];
+        heapPush(heap, {
+          scheduledAt: event.scheduledAt,
+          priority: event.priority,
+          id: op.key,
+        });
+      }
+    }
 
     if (options?.rate) await delay(options.rate);
     if (options && shouldTerminate(encoded.current, options)) break;
 
     if (shouldDump(encoded, context.manifest.dump.interval)) {
-      // Flush accumulated deltas to disk and record the checkpoint path
+      // Flush accumulated deltas to disk and record the dump path
       const dump = await dumpToDisk(
-        serializeSimulation(encoded),
+        serializeForDump(encoded),
         encoded.current.currentTime,
         context,
       );
-      checkpoints.push(dump.path);
+      dumps.push(dump.path);
       context.manifest = dump.manifest;
 
       // Compact in-memory state: history is now safely on disk, we can drop it
@@ -280,14 +304,40 @@ export async function runSimulationWithDeltas(
       encoded.base = compacted;
       encoded.deltas = [];
       encoded.current = compacted;
+
+      // Rebuild heap from pruned state: finished events are gone, stale entries discarded
+      const fresh = buildHeap(compacted);
+      heap.entries = fresh.entries;
+      heap.seq = fresh.seq;
     }
   }
 
+  // Flush any remaining deltas so loadRunHistory sees the complete history
+  // Only fires when there are prior periodic dumps to stitch with
+  // If no periodic dumps occurred the run is purely in-memory and the delta encoding is intact
+  // Also skipped when the loop exited exactly on a dump boundary (deltas already flushed)
+  if (dumps.length > 0 && encoded.deltas.length > 0) {
+    const dump = await dumpToDisk(
+      serializeForDump(encoded),
+      encoded.current.currentTime,
+      context,
+    );
+    dumps.push(dump.path);
+    context.manifest = dump.manifest;
+
+    // Prune so the tail passed to reconstructFullCurrent doesn't overlap with the dump
+    // Mirrors the periodic dump path: history is on disk, drop it from the working state
+    const compacted = pruneWorkingState(encoded.current);
+    encoded.base = compacted;
+    encoded.deltas = [];
+    encoded.current = compacted;
+  }
+
   const stop = performance.now();
-  if (checkpoints.length > 0) {
+  if (dumps.length > 0) {
     // Produce a full-history view of the run
-    // Merge all checkpoint files with the in-memory tail
-    const current = await reconstructFullCurrent(checkpoints, encoded.current);
+    // Merge all dump files with the in-memory tail
+    const current = await reconstructFullCurrent(dumps, encoded.current);
     encoded.base = current;
     encoded.deltas = [];
     encoded.current = current;
@@ -314,77 +364,105 @@ function delay(rate: number): Promise<void> {
 }
 
 /**
- * Reconstructs a full current state from checkpoint files and an in-memory tail.
+ * Reconstructs a full current state from dump files and an in-memory tail.
  * This restores replay-complete state for run outputs while allowing in-run pruning.
  */
 export async function reconstructFullCurrent(
-  checkpoints: string[],
+  dumps: string[],
   tail: Simulation,
 ): Promise<Simulation> {
   const snapshots = await Promise.all(
-    checkpoints.map(async (checkpoint) => {
-      const states = deserializeSimulation(
-        await Deno.readTextFile(checkpoint),
-        tail.registry,
-      );
-      return states[states.length - 1];
-    }),
+    dumps.map(async (dump) =>
+      deserializeLastSimulation(
+        await Deno.readTextFile(dump),
+        tail.processes,
+        tail.disciplines,
+        tail.predicates,
+      )
+    ),
   );
 
   if (snapshots.length === 0) {
     return tail;
   }
 
-  const [first, ...rest] = snapshots;
-  const full = rest.reduce(
-    (acc, current) => mergeReplayState(acc, current),
-    first,
-  );
+  // Single-pass merge across all dump snapshots and the in-memory tail
+  const events: Record<string, Event> = {};
+  const status: Record<EventID, EventStatus> = {};
+  const transitions: EventTransition[] = [];
+  const states: Record<string, ProcessState> = {};
 
-  return mergeReplayState(full, tail);
+  for (const snap of [...snapshots, tail]) {
+    Object.assign(events, snap.timeline.events);
+    Object.assign(status, snap.timeline.status);
+    for (const t of snap.timeline.transitions) transitions.push(t);
+    Object.assign(states, snap.states);
+  }
+
+  return {
+    ...tail,
+    timeline: { ...tail.timeline, events, status, transitions },
+    states,
+  };
 }
 
 /**
- * Merges two simulation states for full-history reconstruction after a run with checkpoints.
- * Used to fold checkpoint snapshots together with the in-memory tail into a single replay-complete simulation state.
- * Events and statuses from `current` take precedence over `previous`; transitions are concatenated in chronological order.
+ * Reconstructs the full sequence of intermediate simulation states from the dump files written by a previous `runSimulationWithDeltas` run.
+ * Each dump file is a self-contained delta-encoded window. This function loads them in sequence order, reconstructs the intermediate states within each window, and stitches the windows into a single chronological array, giving the same scrub-able history that would be available from `reconstructFromDeltas` on a run that fit entirely in memory.
+ * The base of each subsequent window is skipped during stitching: it is the pruned snapshot used as a memory-management boundary, not a new simulation step, so it would otherwise duplicate the final time of the preceding window.
  */
-function mergeReplayState(
-  previous: Simulation,
-  current: Simulation,
-): Simulation {
-  const eventsById: Record<string, Event> = {
-    ...previous.timeline.events,
-  };
+export async function loadRunHistory(
+  runDirectory: string,
+  processes: ProcessRegistry,
+  disciplines: DisciplineRegistry,
+  predicates: PredicateRegistry,
+): Promise<Simulation[]> {
+  // Read the manifest to find the dump directory
+  // May differ from the default if the run was initialized with a custom path
+  const manifestPath = `${runDirectory}/run.json`;
+  const manifest = await readManifest(manifestPath);
+  const dumpDir = manifest.dump?.directory ??
+    `${runDirectory}/${DEFAULT_DUMP_DIR}`;
 
-  for (const [id, event] of Object.entries(current.timeline.events)) {
-    eventsById[id] = event;
+  // Collect all dump files
+  const dumps: string[] = [];
+  try {
+    for await (const entry of Deno.readDir(dumpDir)) {
+      if (entry.isFile && entry.name.endsWith(".json")) {
+        dumps.push(`${dumpDir}/${entry.name}`);
+      }
+    }
+  } catch (err) {
+    if (err instanceof Deno.errors.NotFound) return [];
+    throw err;
   }
 
-  const statusById: Record<EventID, EventState> = {
-    ...previous.timeline.status,
-  };
+  if (dumps.length === 0) return [];
 
-  for (const [id, status] of Object.entries(current.timeline.status)) {
-    statusById[id] = status;
+  // Sort by the monotonic sequence prefix (e.g. "2-t400.json" -> 2)
+  // parseInt stops at the first non-digit character, so no explicit split needed
+  dumps.sort((a, b) => {
+    const nameA = a.split("/").pop()!;
+    const nameB = b.split("/").pop()!;
+    return parseInt(nameA, 10) - parseInt(nameB, 10);
+  });
+
+  const allStates: Simulation[] = [];
+  for (const file of dumps) {
+    const json = await Deno.readTextFile(file);
+    const states = deserializeSimulation(
+      json,
+      processes,
+      disciplines,
+      predicates,
+    );
+    if (allStates.length === 0) {
+      allStates.push(...states);
+    } else {
+      // states[0] (pruned base of this window) == last entry of the previous window
+      allStates.push(...states.slice(1));
+    }
   }
 
-  const transitions = [
-    ...previous.timeline.transitions,
-    ...current.timeline.transitions,
-  ];
-
-  return {
-    ...current,
-    timeline: {
-      ...current.timeline,
-      events: eventsById,
-      status: statusById,
-      transitions,
-    },
-    state: {
-      ...previous.state,
-      ...current.state,
-    },
-  };
+  return allStates;
 }

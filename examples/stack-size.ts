@@ -1,6 +1,7 @@
-import { Event, ProcessDefinition, StateData } from "../src/model.ts";
+import type { Event, ProcessDefinition, StateData } from "../src/model.ts";
 import { runSimulation } from "../src/runner.ts";
 import {
+  continueEvent,
   createEvent,
   initializeSimulation,
   registerProcess,
@@ -29,16 +30,12 @@ if (import.meta.main) {
           }; got count = ${state.data["count"]}`,
         );
 
-        const nextEvent: Event<FooData> = createEvent({
-          parent: event.id,
-          scheduledAt: sim.currentTime < state.data["stop"]
+        const nextEvent: Event<FooData> = continueEvent(
+          event,
+          sim.currentTime < state.data["stop"]
             ? sim.currentTime + 1
             : sim.currentTime,
-          process: {
-            type: "foo",
-            inheritStep: true,
-          },
-        });
+        );
 
         return {
           state: {
@@ -64,7 +61,7 @@ if (import.meta.main) {
     },
   };
 
-  sim.registry = registerProcess(sim, foo);
+  sim.processes = registerProcess(sim, foo);
 
   const e1 = createEvent({
     scheduledAt: 0,

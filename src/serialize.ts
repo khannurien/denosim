@@ -1,5 +1,11 @@
-import { DeltaEncodedSimulation, reconstructFromDeltas } from "./memory.ts";
-import { ProcessRegistry, Simulation } from "./model.ts";
+import type { DeltaEncodedSimulation } from "./memory.ts";
+import { applyDeltas, reconstructFromDeltas } from "./memory.ts";
+import type {
+  DisciplineRegistry,
+  PredicateRegistry,
+  ProcessRegistry,
+  Simulation,
+} from "./model.ts";
 
 /**
  * The whole simulation should be completely serializable to JSON.
@@ -9,26 +15,54 @@ import { ProcessRegistry, Simulation } from "./model.ts";
 export function serializeSimulation(
   deltaEncoded: DeltaEncodedSimulation,
 ): string {
-  return JSON.stringify(deltaEncoded, null, 2);
+  return JSON.stringify(deltaEncoded);
 }
 
 /**
- * Read simulation states from a JSON string.
- * This is the reverse operation of `serializeSimulation`.
- * It will restore the simulation state, including all functions.
+ * Serializes only the base and deltas for on-disk dump files.
+ * `current` is always reconstructable from `base + deltas` and is omitted to reduce file size.
+ */
+export function serializeForDump(encoded: DeltaEncodedSimulation): string {
+  return JSON.stringify({ base: encoded.base, deltas: encoded.deltas });
+}
+
+/**
+ * Restores simulation states from a JSON string produced by `serializeSimulation`.
+ * Registries that are initialized in user code must be passed to the function.
  * The simulation can then be resumed from the point where it was serialized.
  */
 export function deserializeSimulation(
   data: string,
-  registry: ProcessRegistry,
+  processes: ProcessRegistry,
+  disciplines: DisciplineRegistry,
+  predicates: PredicateRegistry,
 ): Simulation[] {
   const deltaEncoded: DeltaEncodedSimulation = JSON.parse(data);
   const states = reconstructFromDeltas(deltaEncoded.base, deltaEncoded.deltas);
 
-  if (registry) {
-    for (const sim of states) {
-      sim.registry = registry;
-    }
+  for (const sim of states) {
+    sim.processes = processes;
+    sim.predicates = predicates;
+    sim.disciplines = disciplines;
   }
+
   return states;
+}
+
+/**
+ * Like `deserializeSimulation` but returns only the final reconstructed state.
+ * Use when intermediate states are not needed (e.g. resuming from a dump in reconstructFullCurrent).
+ */
+export function deserializeLastSimulation(
+  data: string,
+  processes: ProcessRegistry,
+  disciplines: DisciplineRegistry,
+  predicates: PredicateRegistry,
+): Simulation {
+  const deltaEncoded: DeltaEncodedSimulation = JSON.parse(data);
+  const sim = applyDeltas(deltaEncoded.base, deltaEncoded.deltas);
+  sim.processes = processes;
+  sim.predicates = predicates;
+  sim.disciplines = disciplines;
+  return sim;
 }

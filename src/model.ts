@@ -2,13 +2,14 @@
  * Core simulation container that maintains:
  * - The current virtual time of the simulation
  * - The simulation timeline (events along with their state transitions)
- * - A process definition registry for all processes available in the simulation
- * - The current state of all running processes
- * - All resource stores registered for use in process handlers
+ * - `processes`: registry of all process definitions available in the simulation
+ * - `disciplines`: registry of queue discipline implementations used by stores
+ * - `predicates`: registry of predicate functions used by `getWhere`
+ * - `states`: process state saved by each handled event
+ * - `stores`: all resource stores registered for use in process handlers
  */
 export interface Simulation<
-  R extends ProcessRegistry = ProcessRegistry,
-  S extends StoreRegistry = StoreRegistry,
+  S extends StoreItemMap = StoreItemMap,
 > {
   /**
    * The current virtual time in the simulation.
@@ -29,48 +30,63 @@ export interface Simulation<
    * Allows dynamic process registration and lookup.
    * Includes a default `none` process for events without associated processes.
    */
-  registry: R;
+  processes: ProcessRegistry;
 
   /**
-   * Current simulation state of all running processes.
-   * Maps processes' event ID to their current state data.
+   * Registry of queue discipline implementations used by stores.
+   * Maps discipline keys to their comparator definitions.
+   * Never serialized; re-injected at deserialization time alongside `processes`.
+   * Pre-populated with `FIFO` and `LIFO` by `initializeSimulation`.
    */
-  state: Record<EventID, ProcessState>;
+  disciplines: DisciplineRegistry;
+
+  /**
+   * Registry of predicate functions used by `getWhere`.
+   * Maps predicate keys to their implementations.
+   * Never serialized; re-injected at deserialization time alongside `processes`.
+   */
+  predicates: PredicateRegistry;
+
+  /**
+   * Process state returned by the handler of each handled event, keyed by event ID.
+   * An event with a `parent` inherits from the state saved under that ID.
+   */
+  states: Record<EventID, ProcessState>;
 
   /**
    * Current state of all stores in the simulation.
    * Stores may be used for inter-process communications (message passing, data sharing, synchronization, etc.).
    */
-  stores: StoreDefinitions<S>;
+  stores: StoreRegistry<S>;
 }
 
 /**
  * Parallel data structures that together describe the full lifecycle of every event:
  * - `events`: immutable event definitions, keyed by ID (what the event is)
- * - `transitions`: append-only log of every state change (when and how it progressed)
- * - `status`: denormalized current-state index derived from `transitions` (fast O(1) lookup)
+ * - `transitions`: append-only log of every status change (when and how it progressed)
+ * - `status`: denormalized current-status index derived from `transitions` (fast O(1) lookup)
  *
  * `transitions` is the source of truth for event progression; `status` is a derived cache.
- * Together they bound each event's lifetime: the first transition records when it was scheduled (or placed in waiting), and subsequent transitions record state changes through to `Finished`.
+ * Together they bound each event's lifetime: the first transition records when it was scheduled (or placed in waiting), and subsequent transitions record status changes through to `Finished`.
  *
- * `transitions` is append-only and grows with the simulation; old entries are pruned at checkpoint boundaries via `pruneWorkingState` while the full history remains on disk.
+ * `transitions` is append-only and grows with the simulation; old entries are pruned at each dump via `pruneWorkingState` while the full history remains on disk.
  */
 export interface Timeline {
   /** Immutable event definitions keyed by event ID */
   events: Record<EventID, Event>;
 
   /** Always reflects the most recent transition for each event ID */
-  status: Record<EventID, EventState>;
+  status: Record<EventID, EventStatus>;
 
   /** Append-only source of truth for event progression */
   transitions: EventTransition[];
 }
 
 /**
- * Lifecycle states for events within the simulation.
- * Events progress through states with possible blocking at Waiting.
+ * Lifecycle statuses for events within the simulation.
+ * An event is either `Scheduled` then `Finished`, or `Waiting` then `Finished`.
  */
-export enum EventState {
+export enum EventStatus {
   /**
    * Event has been scheduled for future processing.
    * Will be executed when simulation time reaches `scheduledAt`.
@@ -78,15 +94,15 @@ export enum EventState {
   Scheduled = "Scheduled",
 
   /**
-   * Event is blocked waiting for external conditions.
+   * Event stands for a blocked process waiting for external conditions; it is never handled.
    * Used by store operations and synchronization primitives.
-   * Events remain in this state until unblocked by another process.
+   * Events keep this status until marked `Finished`; the process is resumed by a new event.
    */
   Waiting = "Waiting",
 
   /**
-   * Final state indicating the event has been fully processed.
-   * Events in this state remain in the system for historical tracking.
+   * Final status indicating the event has been fully processed.
+   * Events with this status remain in the system for historical tracking.
    */
   Finished = "Finished",
 }
@@ -96,8 +112,8 @@ export interface EventTransition {
   /** Event identifier affected by this transition */
   id: EventID;
 
-  /** Lifecycle state reached by the event */
-  state: EventState;
+  /** Lifecycle status reached by the event */
+  status: EventStatus;
 
   /** Simulation timestamp when the transition occurred */
   at: Timestamp;
@@ -108,8 +124,8 @@ export interface EventTransition {
  * Events can be tied to processes, which define their behavior.
  * Event definitions are immutable; lifecycle progression is represented through `EventTransition` entries.
  * Events can have parent-child relationships in the context of their process.
- * Events can be created with a `waiting` attribute that places them directly in `EventState.Waiting`, preventing their execution until they are explicitly resumed.
- * Events scheduled at the same timestamp will be selected based on their priority (the lower the value, the higher the priority). In case of a tie, the scheduler dequeues events in a LIFO fashion.
+ * Events can be created with a `waiting` attribute that places them directly in `EventStatus.Waiting`: they are never handled, and stand for a blocked process until marked `Finished`.
+ * Events scheduled at the same timestamp will be selected based on their priority (the lower the value, the higher the priority). In case of a tie, the scheduler dequeues events in FIFO order (first scheduled, first served).
  */
 export interface Event<T extends StateData = StateData> {
   /** Unique identifier for the event */
@@ -142,8 +158,47 @@ export interface Event<T extends StateData = StateData> {
 }
 
 /**
+ * An entry in a heap-backed store request queue.
+ * Passed as is to discipline comparators, as a `DisciplineEntry`: `seq` is a monotonically increasing insertion counter.
+ */
+export interface StoreQueueEntry<T extends StateData = StateData> {
+  /** The stored event */
+  event: Event<T>;
+
+  /** Monotonic insertion counter for arrival-order semantics, stamped to the entry */
+  seq: number;
+}
+
+/**
+ * Heap-backed queue for store request tracking (`buffer`, `getRequests`, `putRequests`).
+ * Enables O(log N) enqueue and dequeue per store operation.
+ */
+export interface StoreQueue<T extends StateData = StateData> {
+  /** The stored entry */
+  entries: StoreQueueEntry<T>[];
+
+  /** Monotonically increasing insertion counter */
+  seq: number;
+}
+
+/**
+ * An entry in `getWhereRequests`: a blocked event paired with the predicate key used to look up the predicate function in `sim.predicates` at runtime.
+ * Stored as a string key (not the function itself) so entries survive JSON serialization.
+ */
+export interface GetWhereRequest<T extends StateData = StateData> {
+  /** The blocked request */
+  event: Event<T>;
+
+  /** A condition that must be satisfied to unblock the request */
+  predicateType: PredicateType;
+
+  /** Arrival order, stamped from the `getRequests` counter so that both kinds of consumers can be compared */
+  seq: number;
+}
+
+/**
  * Shared data structure used for coordinating processes.
- * Stores are used through `get` and `put` primitives that work in a LIFO fashion.
+ * Stores are used through `get`, `put`, `getWhere` and `cancel` primitives.
  * Used for inter-process synchronization, producer-consumer patterns, resource sharing, etc.
  */
 export interface Store<
@@ -153,45 +208,60 @@ export interface Store<
   /** Unique identifier for this store */
   id: K;
 
-  /** Maximum items the store can hold before `put` operations block; defaults to `1` */
+  /**
+   * Maximum items the store can hold before `put` operations block.
+   * Defaults to `0`: synchronous, a `put` waits for a `get`.
+   */
   capacity: number;
 
   /**
-   * Controls whether the store enables synchronous (blocking) or asynchronous coordination.
-   * Defaults to `true`.
+   * Discipline key for managing the selection order among available items.
+   * Must be registered in `sim.disciplines`. Defaults to `FIFO`.
+   * Built-in keys `FIFO` and `LIFO` are always available.
    */
-  blocking: boolean;
+  discipline: DisciplineType;
 
-  /** Optional discipline for managing the order of events in the store's queues; defaults to LIFO */
-  discipline: QueueDiscipline;
+  /** Items currently held by the store and awaiting consumption */
+  buffer: StoreQueue<T>;
 
-  /** Items currently stored by non-blocking `put` operations and awaiting consumption */
-  buffer: Event<T>[];
-
-  /** Processes blocked waiting to get items */
-  getRequests: Event<T>[];
+  /** Processes blocked waiting to get items; their events carry the consumer's own payload, not an item */
+  getRequests: StoreQueue;
 
   /** Processes blocked waiting to put items */
-  putRequests: Event<T>[];
+  putRequests: StoreQueue<T>;
+
+  /**
+   * Processes blocked on a `getWhere` call, waiting for an item that satisfies their predicate.
+   * Each entry pairs the waiting event with the predicate key used to look up the predicate function in `sim.predicates`.
+   * `predicateType` is a plain string and is fully JSON-serializable. The predicate function is resolved from `predicates` at runtime.
+   */
+  getWhereRequests: GetWhereRequest[];
 }
 
 /**
- * Returned by `get` and `put` store operations to indicate the outcome in terms of continuation and possible resume events.
+ * Returned by store operations to indicate the outcome in terms of continuation and possible resume events.
+ * `step`, `resume` and `finish` are control flow, to be passed on by the handler; `T` is the type of the store's items.
  */
 export interface StoreResult<T extends StateData = StateData> {
   /**
    * Continuation event for the calling process.
    * Must be scheduled by the process handler of the calling event.
    */
-  step: Event<T>;
+  step: Event;
+
+  /**
+   * Item received by a `get` or `getWhere` that completed immediately.
+   * `undefined` when the caller blocks: the item then arrives with the next step, merged into its data.
+   */
+  item?: T;
 
   /**
    * Resume event for the blocked process, if any.
    * Used to resume a process that was blocked by a store operation when the conditions for resumption are met.
-   * This is relevant for blocking stores where processes can be paused until certain conditions are satisfied (e.g., an item is put into the store or space becomes available).
-   * In non-blocking scenarios, this may be `undefined` since the process can continue immediately without waiting for store conditions.
+   * Processes are paused until certain conditions are satisfied (e.g., an item is put into the store or space becomes available).
+   * `undefined` when the operation unblocks no process.
    */
-  resume?: Event<T>[];
+  resume?: Event[];
 
   /**
    * Events to explicitly mark as `Finished` as a side effect of the store operation.
@@ -212,17 +282,20 @@ export type StoreID = string;
 /** Unique, user-defined identifier for a process */
 export type ProcessType = string;
 
+/** Unique identifier for a running process: the ID of the event that started it */
+export type ProcessID = EventID;
+
 /** User-defined identifier for a step within a process. Unique at process level */
 export type StepType = string;
 
 /** Represents any data that can be stored in the simulation state */
 export type StateData = Record<string, unknown>;
 
-/** Maps store IDs to their payload state data types */
-export type StoreRegistry = Record<StoreID, StateData>;
+/** Maps store IDs to their item types */
+export type StoreItemMap = Record<StoreID, StateData>;
 
-/** Dynamically maps store IDs to their corresponding store definitions */
-export type StoreDefinitions<R extends StoreRegistry> = {
+/** Dynamically maps store IDs to their corresponding stores */
+export type StoreRegistry<R extends StoreItemMap> = {
   [K in keyof R]: Store<R[K], Extract<K, StoreID>>;
 };
 
@@ -233,8 +306,11 @@ export type StoreDefinitions<R extends StoreRegistry> = {
 export type StepStateMap = Record<StepType, StateData>;
 
 /** Dynamically maps process steps to their corresponding handlers */
-export type StepsDefinition<M extends StepStateMap> = {
-  [K in keyof M]: ProcessHandler<M, K>;
+export type StepsDefinition<
+  M extends StepStateMap,
+  S extends StoreItemMap = StoreItemMap,
+> = {
+  [K in keyof M]: ProcessHandler<M, K, S>;
 };
 
 /**
@@ -250,8 +326,12 @@ export type ProcessRegistry = Record<
  * Defines a process with a unique type and its state machine behavior.
  * Processes progress through steps, each with specific input/output state types.
  * Used to model workflows, state machines, and temporal patterns in the simulation.
+ * `S` optionally declares the stores used by the process (store ID to item type), so that store operations in its handlers are checked.
  */
-export interface ProcessDefinition<M extends StepStateMap> {
+export interface ProcessDefinition<
+  M extends StepStateMap,
+  S extends StoreItemMap = StoreItemMap,
+> {
   /** Unique identifier for this process type */
   type: ProcessType;
 
@@ -259,22 +339,23 @@ export interface ProcessDefinition<M extends StepStateMap> {
   initial: keyof M;
 
   /** Step handlers defining the process behavior */
-  steps: StepsDefinition<M>;
+  steps: StepsDefinition<M, S>;
 }
 
 /**
  * Attached to an event that will spawn a process when handled.
- * For process state initialization, refer to `handleEvent` implementation.
+ * For process state initialization, refer to `runStep` implementation.
  */
 export interface ProcessCall<T extends StateData = StateData> {
   /** Unique process type identifier */
   type: ProcessType;
 
   /**
-   * Optional flag to control step inheritance from parent events.
-   * When true, the process starts from the parent's current step instead of their definition's initial step.
+   * Optional flag to continue the parent's process instead of starting a new one.
+   * When true, the event keeps the parent's process ID and runs the parent's current step instead of the definition's initial step.
+   * Requires a `parent`.
    */
-  inheritStep?: boolean;
+  continues?: boolean;
 
   /**
    * Optional data that can be passed to the process.
@@ -284,7 +365,7 @@ export interface ProcessCall<T extends StateData = StateData> {
 }
 
 /**
- * Used as the type of the `state` field in `ProcessStep<M>`, ensuring that a handler can only return a state that names a step actually defined in the process and pairs it with the correct data type for that step.
+ * Used as the type of the `state` field in `StepResult<M>`, ensuring that a handler can only return a state that names a step actually defined in the process and pairs it with the correct data type for that step.
  */
 type ProcessStateFor<M extends StepStateMap> = {
   [K in keyof M]: ProcessState<M[K], K & StepType>;
@@ -298,11 +379,12 @@ type ProcessStateFor<M extends StepStateMap> = {
 export type ProcessHandler<
   M extends StepStateMap,
   K extends keyof M,
+  S extends StoreItemMap = StoreItemMap,
 > = (
-  sim: Simulation,
+  sim: Simulation<S>,
   event: Event<M[K]>,
   state: ProcessState<M[K], K & StepType>,
-) => ProcessStep<M>;
+) => StepResult<M>;
 
 /**
  * This is a process-level structure that is used to keep track of a process's progress and data.
@@ -312,10 +394,19 @@ export interface ProcessState<
   T extends StateData = StateData,
   K extends StepType = StepType,
 > {
+  /**
+   * Unique identifier for the process: the ID of the event that started it.
+   * Carried along continuations; forked copies share it.
+   */
+  id: ProcessID;
+
+  /** Identifier of the process that spawned this one, if any */
+  spawner?: ProcessID;
+
   /** Unique process type identifier */
   type: ProcessType;
 
-  /** Current step of the process */
+  /** Step the process is at: the one being run in a handler; in a returned state, the one its next event will run */
   step: K;
 
   /** Current state data for the process */
@@ -326,7 +417,7 @@ export interface ProcessState<
  * This is a scheduler-level data structure that is used to keep track of a process's progress and data.
  * It is returned by the process handler of an event and stored in the simulation state.
  */
-export interface ProcessStep<M extends StepStateMap = StepStateMap> {
+export interface StepResult<M extends StepStateMap = StepStateMap> {
   /** Process handler returns the updated state of the process */
   state: ProcessStateFor<M>;
 
@@ -335,7 +426,7 @@ export interface ProcessStep<M extends StepStateMap = StepStateMap> {
 
   /**
    * Optional events to explicitly mark as `Finished` after this step.
-   * Used when the handler needs to terminate events currently in `EventState.Waiting`.
+   * Used when the handler needs to terminate events currently in `EventStatus.Waiting`.
    */
   finish?: Event[];
 }
@@ -402,8 +493,8 @@ export interface RunSimulationOptions<T extends StateData = StateData> {
  * An event will always trigger a process. If no process is specified, the event will run the `none` process.
  * Optional parent-child relationships enable various inheritance patterns:
  * - No parent: New process with provided process definition;
- * - Parent without `inheritStep`: New process with parent data;
- * - Parent with `inheritStep`: Continue parent's process.
+ * - Parent without `continues`: New process with parent data;
+ * - Parent with `continues`: Continue parent's process.
  */
 export interface CreateEventOptions<T extends StateData = StateData> {
   /** Optional parent event ID for state inheritance patterns */
@@ -422,30 +513,119 @@ export interface CreateEventOptions<T extends StateData = StateData> {
   process?: ProcessCall<T>;
 }
 
-/** Discipline for managing the order of events in a store's queues */
-export enum QueueDiscipline {
+/** Unique, user-defined identifier for a queue discipline */
+export type DisciplineType = string;
+
+/**
+ * An entry presented to a discipline comparator.
+ * `seq` is the entry's arrival order in its queue (lower = arrived earlier); it is not a position.
+ * `event` carries the full event, including `process.data`: the item, or the data of a blocked consumer.
+ *
+ * The `seq` field enables arrival-order policies (FIFO/LIFO).
+ * The `event` field enables data-based policies (priority, EDF, etc.).
+ * Both may be combined, e.g. data-based ordering with FIFO as a tiebreak.
+ */
+export type DisciplineEntry<T extends StateData = StateData> = {
+  readonly event: Event<T>;
+  readonly seq: number;
+};
+
+/**
+ * A ranking function over two queue candidates.
+ * Returns negative if `a` should be selected over `b`, positive for `b` over `a`, zero for a tie.
+ */
+export type DisciplineComparator<T extends StateData = StateData> = (
+  a: DisciplineEntry<T>,
+  b: DisciplineEntry<T>,
+) => number;
+
+/**
+ * Defines a named queue discipline with its comparator implementation.
+ * Registered in `sim.disciplines` via `registerDiscipline`.
+ * `T` narrows the payload type visible inside the comparator, so callers can access `a.event.process.data` without casting.
+ * The registry stores disciplines with `T` erased to `StateData`; the narrowing is enforced at registration time.
+ */
+export interface DisciplineDefinition<
+  K extends DisciplineType = DisciplineType,
+  T extends StateData = StateData,
+> {
+  /** Unique identifier for this discipline */
+  type: K;
+
+  /**
+   * The ranking function that selects among queue candidates.
+   * See `DisciplineComparator` for semantics.
+   */
+  comparator: DisciplineComparator<T>;
+}
+
+/**
+ * Maps discipline type keys to their definitions.
+ * `D` is the union of valid discipline keys for this registry.
+ * The registry itself is never serialized; `Store.discipline` stores only the key.
+ */
+export type DisciplineRegistry<D extends DisciplineType = DisciplineType> = {
+  [K in D]: DisciplineDefinition<K>;
+};
+
+/**
+ * Discipline for managing the selection order of events in a store's queues.
+ * FIFO: Selects the item that entered the queue first (lowest `seq`).
+ * LIFO: Selects the item that entered the queue most recently (highest `seq`).
+ */
+export const enum QueueDiscipline {
   FIFO = "FIFO",
   LIFO = "LIFO",
 }
 
+/** Unique name for a store filtering predicate over item events */
+export type PredicateType = string;
+
+/** Predicate function for store filtering over item events */
+export type Predicate<T extends StateData = StateData> = (
+  event: Event<T>,
+) => boolean;
+
+/**
+ * Registry mapping predicate keys to their implementations.
+ * Predicates must be registered in `sim.predicates` using `registerPredicate`.
+ * The registry is never serialized; re-injected at deserialization time via `deserializeSimulation`.
+ */
+export type PredicateRegistry = Record<PredicateType, Predicate>;
+
+/**
+ * Defines a named predicate with its implementation.
+ * Registered in `sim.predicates` via `registerPredicate`.
+ */
+export interface PredicateDefinition<
+  T extends StateData = StateData,
+  K extends PredicateType = PredicateType,
+> {
+  /** Unique identifier for this predicate */
+  type: K;
+
+  /** The predicate function that filters store items */
+  predicate: Predicate<T>;
+}
+
 /**
  * Object used to create new stores in the simulation.
- * Stores enable (possibly blocking) coordination between processes via `get`/`put` operations.
- * Defaults to blocking operations with capacity for one single item.
+ * Stores enable (possibly blocking) coordination between processes via `get`/`put`/`getWhere` operations.
+ * Defaults to a capacity of `0`: synchronous, a `put` waits for a `get`.
  * Capacity determines how many items the store can hold before `put` operations block.
- * Blocking operations use `EventState.Waiting` to pause processes until conditions resolve.
- * Stores default to LIFO discipline for their queues, meaning the most recently added event will be the first to be processed when conditions allow.
+ * Blocking operations use `EventStatus.Waiting` to pause processes until conditions resolve.
+ * Stores default to `FIFO` discipline. Custom disciplines must be registered in `sim.disciplines`.
  */
 export interface CreateStoreOptions {
   /** Optional store ID for deterministic typing/registration */
   id?: StoreID;
 
-  /** Maximum items the store can hold before `put` operations block */
+  /** Maximum items the store can hold before `put` operations block; defaults to `0` */
   capacity?: number;
 
-  /** Controls whether the store enables synchronous (blocking) or asynchronous coordination */
-  blocking?: boolean;
-
-  /** Discipline for managing the order of events in the store's queues */
-  discipline?: QueueDiscipline;
+  /**
+   * Discipline key controlling selection order among available items.
+   * Must be registered in `sim.disciplines` using `registerDiscipline`. Defaults to `FIFO`.
+   */
+  discipline?: DisciplineType;
 }
