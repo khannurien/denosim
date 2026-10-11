@@ -13,6 +13,7 @@ import type {
   ProcessType,
   Simulation,
   StateData,
+  StepEventMap,
   StepResult,
   StepStateMap,
   StoreItemMap,
@@ -167,7 +168,7 @@ function handleEvent(sim: Simulation, event: Event): Simulation {
  * Runs the process step associated with an event.
  * Returns the step result:
  * - Updated state for the process associated to the event;
- * - Optional next events for process continuation or spawning new processes.
+ * - Optional next events for process continuation or starting new processes.
  */
 function runStep(
   sim: Simulation,
@@ -189,18 +190,8 @@ function runStep(
     );
   }
 
-  // A continuation needs a parent to continue from
-  if (event.process.continues && !event.parent) {
-    throw new TypeError(
-      `Event cannot continue a process without a parent: ${event.id}`,
-    );
-  }
-
   // A process can only be continued under its own type
-  if (
-    parentState && event.process.continues &&
-    parentState.type !== event.process.type
-  ) {
+  if (parentState && parentState.type !== event.process.type) {
     throw new TypeError(
       `Event cannot continue a process of another type: ${event.id}` +
         ` (process: ${event.process.type}; parent process: ${parentState.type})`,
@@ -210,39 +201,19 @@ function runStep(
   // Get current process state
   const state: ProcessState =
     // CONTINUATION with state inheritance
-    // Child event explicitly continues parent's process.
+    // An event with a parent continues its parent's process.
     // This creates true process continuation where:
     // - Child events continue parent's exact execution point
     // - The same process advances through multiple events, keeping its ID
     // Several continuations emitted from the same step each get their own copy of the state (UNIX `fork`).
     // Used for temporal patterns (timeouts), synchronous I/O (synchronization).
-    (parentState && event.process.continues)
+    // What the event brings is left on the event, for the handler to read.
+    parentState
       ? {
         id: parentState.id,
-        ...(parentState.spawner && { spawner: parentState.spawner }),
         type: parentState.type,
         step: parentState.step,
-        data: {
-          ...parentState.data,
-          ...event.process.data,
-        },
-      }
-      // SPAWN: new process with data inheritance (UNIX `posix_spawn`, i.e. `fork` then `exec`)
-      // Child starts a new process instance, with its own ID, but inherits parent's data.
-      // This creates related but independent processes:
-      // - Parent spawning worker processes with shared context
-      // - Main process creating sub-processes with initialization data
-      // - Any parent-child relationship where data flows downstream
-      : parentState
-      ? {
-        id: event.id,
-        spawner: parentState.id,
-        type: definition.type,
-        step: definition.initial,
-        data: {
-          ...parentState.data,
-          ...event.process.data,
-        },
+        data: { ...parentState.data },
       }
       // ROOT PROCESS (no UNIX equivalent; closest to `init`)
       // Completely new process with no parent relationship.
@@ -289,9 +260,10 @@ export function registerDiscipline<
 export function registerPredicate<
   T extends StateData = StateData,
   K extends PredicateType = PredicateType,
+  R extends StateData = StateData,
 >(
   sim: Simulation,
-  definition: PredicateDefinition<T, K>,
+  definition: PredicateDefinition<T, K, R>,
 ): PredicateRegistry {
   return {
     ...sim.predicates,
@@ -301,16 +273,17 @@ export function registerPredicate<
 
 /**
  * Registers a process for further use during simulation.
- * Processes are spawned on event handling (see `CreateEventOptions`).
+ * Processes are started on event handling (see `CreateEventOptions`).
  * Returns the updated process registry.
  */
 export function registerProcess<
   M extends StepStateMap,
   K extends ProcessType,
   S extends StoreItemMap = StoreItemMap,
+  I extends StepEventMap<M> = Record<never, never>,
 >(
   sim: Simulation,
-  process: ProcessDefinition<M, S> & { type: K },
+  process: ProcessDefinition<M, S, I> & { type: K },
 ): ProcessRegistry {
   return {
     ...sim.processes,
@@ -344,7 +317,7 @@ export function createEvent<T extends StateData>(
 
 /**
  * Advances `event` to its next step, at `scheduledAt`. `event.id` becomes the parent of the new event.
- * Pass `data` to attach a payload, merged over the process data on the next step; without it, the next step sees the state returned by the handler as is.
+ * Pass `data` to attach a payload, which the next step reads from its event; its process data is the state returned by the handler either way.
  * Use `options` to set `waiting`, `priority`, etc.
  */
 export function continueEvent<T extends StateData>(
@@ -358,15 +331,15 @@ export function continueEvent<T extends StateData>(
     scheduledAt,
     ...options,
     process: data !== undefined
-      ? { type: event.process.type, continues: true, data: { ...data } }
-      : { type: event.process.type, continues: true },
+      ? { type: event.process.type, data: { ...data } }
+      : { type: event.process.type },
   });
 }
 
 /**
  * Resumes the process blocked on a waiting event, at `scheduledAt`. `blocked.parent` becomes the parent of the new event.
  * Used when a producer delivers to a blocked consumer, or vice-versa: the blocked event provides the process step to resume.
- * Pass `data` to deliver a payload (an item to a blocked consumer); without it, the resumed step sees the state returned by the handler as is (a blocked producer).
+ * Pass `data` to deliver a payload (an item to a blocked consumer), which the resumed step reads from its event; a blocked producer is resumed without one.
  */
 export function resumeEvent<T extends StateData>(
   blocked: Event<StateData>,
@@ -379,8 +352,8 @@ export function resumeEvent<T extends StateData>(
     scheduledAt,
     ...options,
     process: data !== undefined
-      ? { type: blocked.process.type, continues: true, data: { ...data } }
-      : { type: blocked.process.type, continues: true },
+      ? { type: blocked.process.type, data: { ...data } }
+      : { type: blocked.process.type },
   });
 }
 
@@ -423,13 +396,15 @@ export function scheduleEvent<T extends StateData>(
  * Closes an event's lifecycle in the timeline by marking it `Finished`.
  * Because the timeline is append-only and events are never deleted, this signals completion and excludes the event from future scheduling.
  * Returns an updated Timeline with the event's status marked as `Finished` and the corresponding transition appended; an event that is already `Finished` is left as is.
+ * So is an event the timeline does not hold: during a run, finished events are dropped from the working state at each compaction.
  */
 export function finishEvent<T extends StateData>(
   sim: Simulation,
   event: Event<T>,
 ): Timeline {
-  // Already finished: nothing to record
-  if (sim.timeline.status[event.id] === EventStatus.Finished) {
+  // Already finished, or no longer held by the timeline: nothing to record
+  const status = sim.timeline.status[event.id];
+  if (status === undefined || status === EventStatus.Finished) {
     return sim.timeline;
   }
 

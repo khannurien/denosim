@@ -10,7 +10,7 @@
     }
   },
   "tasks": {
-    "profile": "deno run -P=test --v8-flags=--prof examples/stack-size.ts",
+    "profile": "deno run -P=test --v8-flags=--prof examples/allocator.ts",
     "test": "deno test -P=test --coverage"
   },
   "imports": {

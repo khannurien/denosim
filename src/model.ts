@@ -140,7 +140,7 @@ export interface Event<T extends StateData = StateData> {
   /** Unique identifier for the event */
   id: EventID;
 
-  /** Optional parent event ID; defines a graph of events across processes */
+  /** Optional parent event ID: the event this one continues the process of */
   parent?: EventID;
 
   /** If `true`, the event will not be scheduled for process execution */
@@ -233,7 +233,7 @@ export interface Store<
   /** Items currently held by the store and awaiting consumption */
   buffer: StoreQueue<T>;
 
-  /** Processes blocked waiting to get items; their events carry the consumer's own payload, not an item */
+  /** Processes blocked waiting to get items; their events carry the data of the consumer's process, not an item */
   getRequests: StoreQueue;
 
   /** Processes blocked waiting to put items */
@@ -259,8 +259,8 @@ export interface StoreResult<T extends StateData = StateData> {
   step: Event;
 
   /**
-   * Item received by a `get` or `getWhere` that completed immediately.
-   * `undefined` when the caller blocks: the item then arrives with the next step, merged into its data.
+   * Item received by a `get` or `getWhere` that completed immediately; `undefined` when the caller blocks.
+   * Either way, the item arrives with the event that runs the next step, as its data.
    */
   item?: T;
 
@@ -318,9 +318,24 @@ export type StepStateMap = Record<StepType, StateData>;
 export type StepsDefinition<
   M extends StepStateMap,
   S extends StoreItemMap = StoreItemMap,
+  I extends StepEventMap<M> = Record<never, never>,
 > = {
-  [K in keyof M]: ProcessHandler<M, K, S>;
+  [K in keyof M]: ProcessHandler<M, K, S, I>;
 };
+
+/**
+ * Used to specify the type of what the event running a process step brings: an item received from a store, or the data of a continuation.
+ * `undefined` is part of the type when the event may bring nothing (e.g. an item or a timeout).
+ * A step left out is run by an event whose data is not typed.
+ */
+export type StepEventMap<M extends StepStateMap> = {
+  [K in keyof M]?: StateData | undefined;
+};
+
+/** The event passed to the handler of step `K`: its data is typed, and always there, if `I` declares the step */
+export type StepEvent<I, K> = K extends keyof I
+  ? Omit<Event, "process"> & { process: { type: ProcessType; data: I[K] } }
+  : Event;
 
 /**
  * Map process types to their definitions.
@@ -336,10 +351,12 @@ export type ProcessRegistry = Record<
  * Processes progress through steps, each with specific input/output state types.
  * Used to model workflows, state machines, and temporal patterns in the simulation.
  * `S` optionally declares the stores used by the process (store ID to item type), so that store operations in its handlers are checked.
+ * `I` optionally declares what the event running a step brings (step to data type), so that its handler reads it typed.
  */
 export interface ProcessDefinition<
   M extends StepStateMap,
   S extends StoreItemMap = StoreItemMap,
+  I extends StepEventMap<M> = Record<never, never>,
 > {
   /** Unique identifier for this process type */
   type: ProcessType;
@@ -348,11 +365,11 @@ export interface ProcessDefinition<
   initial: keyof M;
 
   /** Step handlers defining the process behavior */
-  steps: StepsDefinition<M, S>;
+  steps: StepsDefinition<M, S, I>;
 }
 
 /**
- * Attached to an event that will spawn a process when handled.
+ * Attached to an event that will start or continue a process when handled.
  * For process state initialization, refer to `runStep` implementation.
  */
 export interface ProcessCall<T extends StateData = StateData> {
@@ -360,15 +377,8 @@ export interface ProcessCall<T extends StateData = StateData> {
   type: ProcessType;
 
   /**
-   * Optional flag to continue the parent's process instead of starting a new one.
-   * When true, the event keeps the parent's process ID and runs the parent's current step instead of the definition's initial step.
-   * Requires a `parent`.
-   */
-  continues?: boolean;
-
-  /**
-   * Optional data that can be passed to the process.
-   * Can be used to initialize process state.
+   * Optional data brought by the event.
+   * Initializes the process state when the event starts a process; otherwise read by the handler from its event, and never merged into the process state.
    */
   data?: T;
 }
@@ -384,14 +394,17 @@ export type ProcessStateFor<M extends StepStateMap> = {
  * A process handler is a function that executes the processing logic associated with an event, and returns a
  * process step.
  * Knowing the current simulation state, it is capable of computing the state of the process's next step.
+ * `state.data` is what the previous step returned, or the initial data of a new process; `event.process.data` is what the event brings (an item, the data of a continuation), for the handler to keep in the state it returns if needed.
+ * Of `sim`, a handler reads `currentTime` and passes it to store operations. `timeline` and `states` are not for it: a run drops finished events from them as it goes. An event to finish or cancel later is kept in the process data.
  */
 export type ProcessHandler<
   M extends StepStateMap,
   K extends keyof M,
   S extends StoreItemMap = StoreItemMap,
+  I extends StepEventMap<M> = Record<never, never>,
 > = (
   sim: Simulation<S>,
-  event: Event<M[K]>,
+  event: StepEvent<I, K>,
   state: ProcessState<M[K], K & StepType>,
 ) => StepResult<M>;
 
@@ -408,9 +421,6 @@ export interface ProcessState<
    * Carried along continuations; forked copies share it.
    */
   id: ProcessID;
-
-  /** Identifier of the process that spawned this one, if any */
-  spawner?: ProcessID;
 
   /** Unique process type identifier */
   type: ProcessType;
@@ -443,13 +453,12 @@ export interface StepResult<M extends StepStateMap = StepStateMap> {
 /**
  * Object used to create new events in the simulation. It must define a time to schedule the event at.
  * An event will always trigger a process. If no process is specified, the event will run the `none` process.
- * Optional parent-child relationships enable various inheritance patterns:
+ * The optional parent tells a new process from a continuation:
  * - No parent: New process with provided process definition;
- * - Parent without `continues`: New process with parent data;
- * - Parent with `continues`: Continue parent's process.
+ * - Parent: Continue parent's process, at its current step, under its process ID.
  */
 export interface CreateEventOptions<T extends StateData = StateData> {
-  /** Optional parent event ID for state inheritance patterns */
+  /** Optional parent event ID: the event this one continues the process of */
   parent?: EventID;
 
   /** If `true`, the event will not be scheduled for process execution */
@@ -533,9 +542,16 @@ export const enum QueueDiscipline {
 /** Unique name for a store filtering predicate over item events */
 export type PredicateType = string;
 
-/** Predicate function for store filtering over item events */
-export type Predicate<T extends StateData = StateData> = (
+/**
+ * Predicate function for store filtering over item events.
+ * `request` stands for the consumer: the event `getWhere` was called with, or the blocked request made from it; both carry the data of the consumer's process, as its handler received it.
+ */
+export type Predicate<
+  T extends StateData = StateData,
+  R extends StateData = StateData,
+> = (
   event: Event<T>,
+  request: Event<R>,
 ) => boolean;
 
 /**
@@ -552,12 +568,13 @@ export type PredicateRegistry = Record<PredicateType, Predicate>;
 export interface PredicateDefinition<
   T extends StateData = StateData,
   K extends PredicateType = PredicateType,
+  R extends StateData = StateData,
 > {
   /** Unique identifier for this predicate */
   type: K;
 
-  /** The predicate function that filters store items */
-  predicate: Predicate<T>;
+  /** The predicate function that filters store items; `R` narrows the data of the consumer's request */
+  predicate: Predicate<T, R>;
 }
 
 /**

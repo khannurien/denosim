@@ -321,6 +321,31 @@ Deno.test("runSimulation leaves its input untouched", async () => {
   assertEquals(JSON.stringify(sim), before);
 });
 
+Deno.test("runSimulation returns the event it stopped before", async () => {
+  // 250 events at t=1..250: the run is stopped after a compaction
+  const sim = buildCounterSim(250);
+
+  const paused = await runSimulation(sim, {
+    until: (_sim, next) => next.scheduledAt > 120,
+  });
+
+  // Stopped by `until`: the event it returned `true` for, left `Scheduled`
+  assertEquals(paused.result.currentTime, 120);
+  assertEquals(paused.next?.scheduledAt, 121);
+  assert(paused.next);
+  assertEquals(
+    paused.result.timeline.status[paused.next.id],
+    EventStatus.Scheduled,
+  );
+  assertEquals(paused.result.timeline.events[paused.next.id], paused.next);
+
+  // No event left: nothing is returned
+  const resumed = await runSimulation(paused.result);
+
+  assertEquals(resumed.result.currentTime, 250);
+  assertEquals(resumed.next, undefined);
+});
+
 Deno.test("runSimulation keeps the same history in memory and on disk", async () => {
   const dir = "runs/test/history-memory-disk";
   await Deno.remove(dir, { recursive: true }).catch(() => {});

@@ -340,7 +340,7 @@ Deno.test("pruneWorkingState preserves state only for events with parent referen
   const childEvent = createEvent({
     scheduledAt: 1,
     parent: parentEvent.id,
-    process: { type: "test", continues: true },
+    process: { type: "test" },
   });
 
   sim.timeline = scheduleEvent(sim, parentEvent);
@@ -391,12 +391,12 @@ Deno.test("pruneWorkingState handles complex parent-child relationships", () => 
   const parent = createEvent({
     scheduledAt: 1,
     parent: grandparent.id,
-    process: { type: "test", continues: true },
+    process: { type: "test" },
   });
   const child = createEvent({
     scheduledAt: 2,
     parent: parent.id,
-    process: { type: "test", continues: true },
+    process: { type: "test" },
   });
 
   sim.timeline = scheduleEvent(sim, grandparent);

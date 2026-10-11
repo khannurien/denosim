@@ -16,6 +16,7 @@ export {
   initializeStore,
   put,
   registerStore,
+  reorderStore,
 } from "./src/stores.ts";
 export { loadHistory, runSimulation } from "./src/runner.ts";
 export type {

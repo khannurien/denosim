@@ -6,6 +6,7 @@ import type {
   Simulation,
   StateData,
   Store,
+  StoreItemMap,
 } from "../src/model.ts";
 import { EventStatus, QueueDiscipline } from "../src/model.ts";
 import {
@@ -44,12 +45,13 @@ const counter: ProcessDefinition<{
         return { state, next: [] };
       }
 
-      const next = continueEvent(event, sim.currentTime + 1, {
-        count: state.data.count + 1,
-        limit: state.data.limit,
-      });
-
-      return { state, next: [next] };
+      return {
+        state: {
+          ...state,
+          data: { ...state.data, count: state.data.count + 1 },
+        },
+        next: [continueEvent(event, sim.currentTime + 1)],
+      };
     },
   },
 };
@@ -360,7 +362,11 @@ Deno.test("pause/resume correctly resolves getWhere request after deserializatio
   const TASK_STORE = "tasks" as const;
   const PREDICATE_KEY = "isUrgent";
 
-  const scheduler: ProcessDefinition<{ wait: TaskData; run: TaskData }> = {
+  const scheduler: ProcessDefinition<
+    { wait: TaskData; run: TaskData },
+    StoreItemMap,
+    { run: TaskData }
+  > = {
     type: "scheduler",
     initial: "wait",
     steps: {
@@ -377,8 +383,8 @@ Deno.test("pause/resume correctly resolves getWhere request after deserializatio
           finish: finish ?? [],
         };
       },
-      run(_sim, _event, state) {
-        return { state, next: [] };
+      run(_sim, event, state) {
+        return { state: { ...state, data: event.process.data }, next: [] };
       },
     },
   };

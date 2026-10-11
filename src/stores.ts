@@ -98,6 +98,23 @@ function storeQueueRemove<T extends StateData>(
 }
 
 /**
+ * Rebuilds a `StoreQueue` heap under `discipline` in `O(N log N)`.
+ * Returns a new `StoreQueue`; entries keep their arrival order, and the `seq` counter is preserved.
+ */
+function storeQueueReorder<T extends StateData>(
+  queue: StoreQueue<T>,
+  discipline: DisciplineDefinition,
+): StoreQueue<T> {
+  const entries: StoreQueueEntry<T>[] = [];
+
+  for (const entry of queue.entries) {
+    heapPushWith(entries, entry, discipline.comparator);
+  }
+
+  return { entries, seq: queue.seq };
+}
+
+/**
  * Creates a new store with:
  * - Unique ID
  * - Optional capacity (defaults to 0: synchronous)
@@ -136,6 +153,41 @@ export function registerStore<
     ...sim.stores,
     [store.id]: { ...store },
   } as StoreRegistry<S & Record<K, T>>;
+}
+
+/**
+ * Reorders the queues of a store (`buffer`, `getRequests`, `putRequests`) under the discipline it now points to.
+ * Queues are ordered as entries come in: a store pointed to another discipline, or a discipline registered again under the same key (e.g. on a branch, to compare two policies), leaves the queued entries in their former order until this is called.
+ * Throws `RangeError` if the store or its discipline is missing.
+ * Returns the updated store definitions.
+ */
+export function reorderStore<
+  S extends StoreItemMap,
+  K extends keyof S & StoreID = keyof S & StoreID,
+>(
+  sim: Simulation<S>,
+  id: K,
+): StoreRegistry<S> {
+  const store = sim.stores[id];
+  if (!store) {
+    throw new RangeError(`Store not found in registry: ${id}`);
+  }
+  const discipline = sim.disciplines[store.discipline];
+  if (!discipline) {
+    throw new RangeError(
+      `Discipline definition not found in registry: ${store.discipline}`,
+    );
+  }
+
+  return {
+    ...sim.stores,
+    [store.id]: {
+      ...store,
+      buffer: storeQueueReorder(store.buffer, discipline),
+      getRequests: storeQueueReorder(store.getRequests, discipline),
+      putRequests: storeQueueReorder(store.putRequests, discipline),
+    },
+  };
 }
 
 /**
@@ -184,6 +236,43 @@ function resolvePredicate(
     );
   }
   return predicate;
+}
+
+/**
+ * Data of the process `event` belongs to, as the handler of `event` received it: the state saved by its parent, or the event's own data when it starts a process.
+ * This is what a consumer's request carries, for disciplines and predicates to rank or filter consumers on.
+ * Returns `undefined` when the event has neither a handled parent nor data.
+ */
+function resolveProcessData<S extends StoreItemMap>(
+  sim: Simulation<S>,
+  event: Event,
+): StateData | undefined {
+  const parent = event.parent ? sim.states[event.parent] : undefined;
+
+  return parent ? parent.data : event.process.data;
+}
+
+/**
+ * Checks that a blocked request about to be resumed is held by the timeline.
+ * A request is there, as `Waiting`, when the `step` of the operation that blocked was passed on: resuming one that was dropped would run again a step the process was not left waiting on.
+ * Only checked when `event`, on behalf of which the request is resumed, is itself held by the timeline: store operations made outside a run are left alone.
+ * Throws `RangeError` otherwise.
+ */
+function checkRequest<S extends StoreItemMap>(
+  sim: Simulation<S>,
+  event: Event,
+  request: Event,
+  id: StoreID,
+): void {
+  if (
+    sim.timeline.status[event.id] !== undefined &&
+    sim.timeline.status[request.id] === undefined
+  ) {
+    throw new RangeError(
+      `Request not found in timeline: ${request.id} (store: ${id})` +
+        `; its \`step\` was not passed on, or it was finished without \`cancel\``,
+    );
+  }
 }
 
 /**
@@ -237,7 +326,7 @@ export function put<
     const predicate = resolvePredicate(sim, event, req.predicateType);
 
     // Skip requests whose predicate rejects the item
-    if (!predicate(itemEvent)) return best;
+    if (!predicate(itemEvent, req.event)) return best;
 
     // Among those that accept, keep the discipline-best
     return !best || discipline.comparator(req, best.req) < 0
@@ -255,6 +344,8 @@ export function put<
       discipline.comparator(best.req, unconditional) < 0
     )
   ) {
+    checkRequest(sim, event, best.req.event, store.id);
+
     const remaining = [
       ...store.getWhereRequests.slice(0, best.index),
       ...store.getWhereRequests.slice(best.index + 1),
@@ -281,6 +372,7 @@ export function put<
       store.getRequests,
       discipline,
     );
+    checkRequest(sim, event, getRequest, store.id);
 
     sim.stores = {
       ...sim.stores,
@@ -367,6 +459,7 @@ function tryGetImmediate<T extends StateData>(
         store.putRequests,
         discipline,
       );
+      checkRequest(sim, event, putRequest, store.id);
 
       // Its request, which carries the item, becomes the buffered item
       const updatedPut = resumeEvent(putRequest, sim.currentTime);
@@ -398,6 +491,7 @@ function tryGetImmediate<T extends StateData>(
     // Match found: dequeue the producer, hand off the payload, resume both sides
     if (result) {
       const [putRequest, remaining] = result;
+      checkRequest(sim, event, putRequest, store.id);
 
       sim.stores = {
         ...sim.stores,
@@ -442,11 +536,11 @@ export function get<
   if (immediate) return immediate;
 
   // No data available: block get (in getRequests)
-  // Keeps the caller's payload on the request so disciplines can rank waiting consumers by data
+  // The request carries the data of the caller's process so disciplines can rank waiting consumers by data
   const blockedGet = continueEvent(
     event,
     sim.currentTime,
-    event.process.data,
+    resolveProcessData(sim, event),
     { waiting: true },
   );
 
@@ -463,6 +557,7 @@ export function get<
 
 /**
  * Retrieves an item from a store only if it satisfies a caller-supplied predicate.
+ * The predicate also receives the caller's side: `event`, or the blocked request made from it, both carrying the data of the caller's process as the handler of `event` received it.
  * Looks for a match among buffered items first, then among blocked producers, whose item is handed off directly.
  * Selection among multiple matching items follows the store's discipline (including custom comparators), applied to each queue separately.
  * Blocks if no matching item is currently available; the caller will be resumed by the first future `put` whose data satisfies the predicate.
@@ -480,22 +575,26 @@ export function getWhere<
   const { store, discipline } = resolveStore<S, K>(sim, event, id);
   const predicate = resolvePredicate(sim, event, predicateType);
 
+  // The caller's side, as the predicate sees it: carries the data of the caller's process, like the request made from it if the caller blocks
+  const data = resolveProcessData(sim, event);
+  const caller: Event = { ...event, process: { ...event.process, data } };
+
   // Check putRequests and buffer for a matching item; return immediately on a match
   const immediate = tryGetImmediate(
     sim,
     event,
     store,
     discipline,
-    predicate,
+    (item) => predicate(item, caller),
   );
   if (immediate) return immediate;
 
   // No match: block get (in getWhereRequests)
-  // Keeps the caller's payload on the request so disciplines can rank waiting consumers by data
+  // The request carries the data of the caller's process so disciplines and predicates can rank and filter waiting consumers by data
   const blockedGet = continueEvent(
     event,
     sim.currentTime,
-    event.process.data,
+    data,
     { waiting: true },
   );
 

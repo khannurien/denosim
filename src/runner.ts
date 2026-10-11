@@ -40,6 +40,9 @@ export interface SimulationResult {
   /** Statistics for the completed run */
   stats: SimulationStats;
 
+  /** Event the run stopped before, when `until` or `signal` ended it: left `Scheduled`, handled first if the result is run again; unset when no event was left */
+  next?: Event;
+
   /** History windows of the run, in order; only set when `history` is asked without a `directory` */
   history?: HistoryWindow[];
 }
@@ -72,12 +75,18 @@ export interface RunSimulationOptions {
   /**
    * Stop condition, checked before each event is handled: `next` is the event about to be handled.
    * When it returns `true` the simulation stops and `next` stays `Scheduled`; running the result again resumes from there.
-   * Must have no side effect: with a `rate`, it is checked again after the wait.
+   * Must have no side effect: with a `rate`, it is checked again after the wait. If it then stops the run, the clock is at `next.scheduledAt`.
    */
   until?: (sim: Simulation, next: Event) => boolean;
 
   /** Simulation speed, in simulation time units per wall-clock second */
   rate?: number;
+
+  /**
+   * Stops the run from outside, including during the wait before an event: the event stays `Scheduled`.
+   * Only seen while the run waits: without a `rate`, the loop never yields.
+   */
+  signal?: AbortSignal;
 
   /** Keeps the history of the run; if omitted, only the final state is returned */
   history?: HistoryOptions;
@@ -285,11 +294,12 @@ export async function persistRunManifest(
 /**
  * Runs the discrete-event simulation until:
  * - either no more events remain to process;
- * - or `until` returns `true` for the next event to process.
+ * - or `until` returns `true` for the next event to process;
+ * - or `signal` is aborted.
  * The simulation processes events in chronological order (earliest first).
  * Playback speed can be adjusted by passing a simulation rate (in simulation time units per wall-clock second).
  * `init` is left untouched: it can be run again, e.g. to branch out from it.
- * Returns the final simulation state along with statistics about the run, and its history if asked.
+ * Returns the final simulation state along with statistics about the run, the event it stopped before if `until` or `signal` ended it, and its history if asked.
  *
  * Layers on memory management: the working state is compacted every `COMPACTION_INTERVAL` handled events, and the complete final state is put back together at the end.
  * Nothing touches the disk unless `history.directory` is given.
@@ -350,16 +360,29 @@ export async function runSimulation(
     const next = nextEvent(working.current, heap);
     if (!next) break;
 
+    if (options?.signal?.aborted) break;
     if (options?.until?.(working.current, next)) break;
 
     if (options?.rate) {
       const wait = (next.scheduledAt - working.current.currentTime) * 1000 /
         options.rate;
       if (wait > 0) {
-        await delay(wait);
+        const waited = await delay(wait, options.signal);
 
-        // The condition may have changed during the wait (e.g. a pause asked from outside the loop)
-        if (options.until?.(working.current, next)) break;
+        // The run may have been stopped during the wait (e.g. a pause asked from outside the loop)
+        if (
+          options.signal?.aborted || options.until?.(working.current, next)
+        ) {
+          // The clock stops where the wait did: running the result again waits for what is left
+          working.current = {
+            ...working.current,
+            currentTime: Math.min(
+              next.scheduledAt,
+              working.current.currentTime + waited * options.rate / 1000,
+            ),
+          };
+          break;
+        }
       }
     }
 
@@ -413,6 +436,9 @@ export async function runSimulation(
 
   const stop = performance.now();
 
+  // Event the loop exited before, if `until` or `signal` ended the run
+  const pending = nextEvent(working.current, heap);
+
   // Put the complete final state back together
   absorbWorkingState(
     full,
@@ -427,15 +453,27 @@ export async function runSimulation(
       end: result.currentTime,
       duration: stop - start,
     },
+    ...(pending && { next: pending }),
     ...(history && !context && { history: windows }),
   };
 }
 
 /**
- * Helper function to introduce a wall-clock delay, in milliseconds.
+ * Helper function to introduce a wall-clock delay, in milliseconds; cut short when `signal` is aborted.
+ * Returns the time actually waited.
  */
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function delay(ms: number, signal?: AbortSignal): Promise<number> {
+  const start = performance.now();
+
+  return new Promise((resolve) => {
+    const done = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", done);
+      resolve(performance.now() - start);
+    };
+    const timer = setTimeout(done, ms);
+    signal?.addEventListener("abort", done);
+  });
 }
 
 /**

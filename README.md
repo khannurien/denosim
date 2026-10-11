@@ -8,15 +8,15 @@ Denosim is made for people who explore scheduling:
 
 Both data dependencies and resources allocation rely on **stores**: processes block on `put`/`get`, and an item is either data or a token (a resource is a store holding tokens).
 
-Denosim features a stateful, event-driven process-as-state-machine model with UNIX-inspired `fork`/spawn semantics, explicit process continuations, and inter-process synchronization through stores.
+Denosim features a stateful, event-driven process-as-state-machine model with UNIX-inspired `fork` semantics, explicit process continuations, and inter-process synchronization through stores.
 
 ## Main characteristics and features
 
-- ⚙️ Define **processes** using finite-state machines -- your code determines state transitions, and can `fork` or spawn processes;
+- ⚙️ Define **processes** using finite-state machines -- your code determines state transitions, and can `fork` or start processes;
 - ⏱️ Schedule **events** in simulated time -- use timeouts to model durations and continuations to chain tasks;
 - 🔗 Use **stores** to model both shared capacity and data handoff -- synchronize processes by blocking on `put`/`get`;
 - 🚦 Order store queues using **queue disciplines** (`FIFO`, `LIFO`, or your own) -- select specific items using `getWhere` predicates;
-- ⏯️ Leverage **immutability** to pause and resume simulations -- snapshot the whole simulation state and restore it later, *e.g.*, to compare policies (**FIXME**: usage not documented yet).
+- ⏯️ Leverage **immutability** to pause and resume simulations -- snapshot the whole simulation state and restore it later, *e.g.*, to compare policies.
 
 Planned features:
 
@@ -46,7 +46,7 @@ Planned features:
 **Concurrency and composition model**
 
 - Processes are started and continued by emitting new events, linked through `parent`;
-- Four patterns supported: continuation (same process, next step); `fork` (several continuations from one step, each with its own copy of the state); spawn (new process at its initial step, inheriting parent data and recording its spawner) and root process (no parent, only explicitly provided data);
+- Three patterns supported: continuation (same process, next step); `fork` (several continuations from one step, each with its own copy of the state) and root process (new process at its initial step, no parent, only explicitly provided data);
 - Forked copies share their process identifier; alternatives (*e.g.*, an item or a timeout) must cancel each other, through `finish` for a scheduled event and `cancel` for a store request;
 - Blocking is modeled by a `Waiting` event status and by resumption through newly emitted continuation events when conditions are satisfied.
 
@@ -60,8 +60,8 @@ Planned features:
 **Messaging and data flow**
 
 - Data flows via process data: the state returned by a step is what the next step sees;
-- Events contain a `ProcessCall` that can carry data, merged over the inherited state;
-- Processes exchange data through stores (`put`, `get`, `getWhere`), synchronous by default or buffered up to `capacity`; a received item is merged the same way;
+- Events contain a `ProcessCall` that can carry data: the initial data of a new process, or what a continuation brings to its next step, read from the event;
+- Processes exchange data through stores (`put`, `get`, `getWhere`), synchronous by default or buffered up to `capacity`; a received item arrives the same way, with the event that runs the next step;
 - A store operation returns events (`step`, `resume`, `finish`) that the handler must pass on; each blocking operation resumes the process on its own, so a step waiting on several is a `fork`;
 - This lets workflows evolve over multiple events (*e.g.*, arrive -> wait -> handle -> done) while carrying context forward.
 
@@ -71,7 +71,14 @@ Install Deno; see [the guide](https://docs.deno.com/runtime/getting_started/inst
 
 ## Usage
 
-**FIXME**: simple examples going through real-world use cases.
+Simple examples go through real-world use cases; run one with `deno run examples/queue.ts`:
+
+- `queue.ts` -- a coffee shop with one barista: processes, timeouts, a store holding a token;
+- `reneging.ts` -- callers give up when their patience runs out: wait for an item or a timeout, cancel the other;
+- `preemption.ts` -- one CPU, tasks with priorities: a running task is interrupted by a more urgent one and put back in the queue;
+- `allocator.ts` -- jobs needing CPUs and GPUs: a store as a task queue, an allocator process that starts a job once everything it needs is free, two queue policies compared, metrics;
+- `branch.ts` -- keep two nodes or rent a third: pause before a decision, one run per side from the same state;
+- `pause.ts` -- a counter played in real time: any key pauses and writes the state to disk, `--resume` reads it back.
 
 ## Development
 
@@ -85,9 +92,9 @@ deno task test
 
 ```sh
 # built-in CPU profiling (.cpuprofile output)
-deno run -A --cpu-prof --cpu-prof-interval=100 --cpu-prof-name=profile.cpuprofile examples/stack-size.ts
+deno run -A --cpu-prof --cpu-prof-interval=100 --cpu-prof-name=profile.cpuprofile examples/allocator.ts
 # V8 CPU profiling (.log output)
-deno run -A --v8-flags=--prof,--prof-sampling-interval=100,--log-deopt examples/stack-size.ts
+deno run -A --v8-flags=--prof,--prof-sampling-interval=100,--log-deopt examples/allocator.ts
 ```
 
 Analyze the resulting output with [cpupro](https://discoveryjs.github.io/cpupro/) or similar tools.

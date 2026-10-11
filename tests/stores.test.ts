@@ -1,10 +1,14 @@
-import { assert, assertEquals, assertThrows } from "@std/assert";
+import { assert, assertEquals, assertRejects, assertThrows } from "@std/assert";
 
 import type {
+  DisciplineDefinition,
+  Event,
   ProcessDefinition,
   ProcessHandler,
+  Simulation,
   StateData,
   StoreID,
+  StoreItemMap,
 } from "../src/model.ts";
 import { EventStatus, QueueDiscipline } from "../src/model.ts";
 import {
@@ -14,6 +18,7 @@ import {
   initializeStore,
   put,
   registerStore,
+  reorderStore,
 } from "../src/stores.ts";
 import { runSimulation } from "../src/runner.ts";
 import {
@@ -21,6 +26,7 @@ import {
   createEvent,
   initializeSimulation,
   registerDiscipline,
+  registerPredicate,
   registerProcess,
   scheduleEvent,
 } from "../src/simulation.ts";
@@ -1025,6 +1031,298 @@ Deno.test("getWhere errors on missing store", () => {
   );
 });
 
+Deno.test("getWhere predicates see the consumer's request", () => {
+  interface Parcel extends StateData {
+    to: string;
+  }
+
+  interface Resident extends StateData {
+    name: string;
+  }
+
+  const build = () => {
+    const sim = initializeSimulation();
+    sim.stores = registerStore<Parcel>(
+      sim,
+      initializeStore({ id: "lobby", capacity: 2 }),
+    );
+    sim.predicates = registerPredicate<Parcel, "mine", Resident>(sim, {
+      type: "mine",
+      predicate: (item, request) =>
+        item.process.data?.to === request.process.data?.name,
+    });
+    return sim;
+  };
+  const resident = (name: string) =>
+    createEvent<Resident>({
+      scheduledAt: 0,
+      process: { type: "none", data: { name } },
+    });
+
+  // Item already there: taken by the consumer it is for, the other one blocks
+  const buffered = build();
+  put(buffered, createEvent({ scheduledAt: 0 }), "lobby", { to: "Bob" });
+
+  const ada = getWhere(buffered, resident("Ada"), "lobby", "mine");
+  assert(ada.step.waiting);
+  assertEquals(ada.item, undefined);
+
+  const bob = getWhere(buffered, resident("Bob"), "lobby", "mine");
+  assert(!bob.step.waiting);
+  assertEquals(bob.item, { to: "Bob" });
+
+  // Consumers already blocked: the item resumes the one it is for, whatever their order
+  const blocked = build();
+  const first = getWhere(blocked, resident("Ada"), "lobby", "mine");
+  const second = getWhere(blocked, resident("Bob"), "lobby", "mine");
+
+  const forBob = put(blocked, createEvent({ scheduledAt: 0 }), "lobby", {
+    to: "Bob",
+  });
+  assertEquals(forBob.finish, [second.step]);
+
+  // An item for nobody waiting is buffered
+  const forCleo = put(blocked, createEvent({ scheduledAt: 0 }), "lobby", {
+    to: "Cleo",
+  });
+  assertEquals(forCleo.resume, undefined);
+  assertEquals(blocked.stores["lobby"].buffer.entries.length, 1);
+  assertEquals(blocked.stores["lobby"].getWhereRequests.length, 1);
+  assertEquals(blocked.stores["lobby"].getWhereRequests[0].event, first.step);
+});
+
+Deno.test("what an event brings is left on the event, not merged into the process data", async () => {
+  interface Letter extends StateData {
+    letter: number;
+  }
+
+  interface Note extends StateData {
+    note: string;
+  }
+
+  interface Reader extends StateData {
+    name: string;
+  }
+
+  // Runs one reader asking for a letter at t=1; the letter is sent at `sendAt`, before or after
+  async function read(sendAt: number) {
+    const sim = initializeSimulation();
+    sim.stores = registerStore<Letter>(
+      sim,
+      initializeStore({ id: "box", capacity: 1 }),
+    );
+    const seen: unknown[] = [];
+
+    const reader: ProcessDefinition<
+      { ask: Reader; got: Reader; after: Reader },
+      { box: Letter },
+      { got: Letter; after: Note }
+    > = {
+      type: "reader",
+      initial: "ask",
+      steps: {
+        ask(sim, event, state) {
+          const { step, resume, finish } = get(sim, event, "box");
+          return {
+            state: { ...state, step: "got" },
+            next: resume ? [step, ...resume] : [step],
+            finish,
+          };
+        },
+        got(sim, event, state) {
+          seen.push([state.data, event.process.data]);
+          return {
+            state: { ...state, step: "after" },
+            next: [continueEvent(event, sim.currentTime, { note: "read" })],
+          };
+        },
+        after(_sim, event, state) {
+          seen.push([state.data, event.process.data]);
+          return { state, next: [] };
+        },
+      },
+    };
+
+    const sender: ProcessDefinition<{ send: StateData }, { box: Letter }> = {
+      type: "sender",
+      initial: "send",
+      steps: {
+        send(sim, event, state) {
+          const { resume, finish } = put(sim, event, "box", { letter: 1 });
+          return { state, next: resume ?? [], finish };
+        },
+      },
+    };
+
+    sim.processes = registerProcess(sim, reader);
+    sim.processes = registerProcess(sim, sender);
+    sim.timeline = scheduleEvent(
+      sim,
+      createEvent({
+        scheduledAt: 1,
+        process: { type: "reader", data: { name: "Ada" } },
+      }),
+    );
+    sim.timeline = scheduleEvent(
+      sim,
+      createEvent({ scheduledAt: sendAt, process: { type: "sender" } }),
+    );
+
+    await runSimulation(sim);
+
+    return seen;
+  }
+
+  // An item, then the data of a continuation: each on its event, the process data as returned by the step before
+  const expected = [
+    [{ name: "Ada" }, { letter: 1 }],
+    [{ name: "Ada" }, { note: "read" }],
+  ];
+
+  // Letter buffered first: the reader's `get` completes immediately
+  assertEquals(await read(0), expected);
+
+  // Letter sent later: the reader blocks, then is resumed
+  assertEquals(await read(2), expected);
+});
+
+Deno.test("a consumer's request carries the data of its process", async () => {
+  interface Parcel extends StateData {
+    to?: string;
+  }
+
+  interface Resident extends StateData {
+    name?: string;
+    floor?: number;
+    to?: string;
+  }
+
+  const sim = initializeSimulation();
+  sim.stores = registerStore<Parcel>(sim, initializeStore({ id: "lobby" }));
+  sim.stores = registerStore<Parcel>(
+    sim,
+    initializeStore({ id: "lift", discipline: "highest" }),
+  );
+  sim.predicates = registerPredicate<Parcel, "mine", Resident>(sim, {
+    type: "mine",
+    predicate: (item, request) =>
+      item.process.data?.to === request.process.data?.name,
+  });
+  sim.disciplines = registerDiscipline<Resident>(sim, {
+    type: "highest",
+    comparator: (a, b) =>
+      (b.event.process.data?.floor ?? 0) - (a.event.process.data?.floor ?? 0),
+  });
+
+  const received: string[] = [];
+
+  // `name` and `floor` are set by the first step, in the state: the event that runs the second step carries no data
+  const resident = (
+    type: string,
+    name: string,
+    floor: number,
+    ask: ProcessHandler<
+      { settle: Resident; ask: Resident; done: Resident },
+      "ask"
+    >,
+  ): ProcessDefinition<
+    { settle: Resident; ask: Resident; done: Resident }
+  > => ({
+    type,
+    initial: "settle",
+    steps: {
+      settle(sim, event, state) {
+        return {
+          state: { ...state, step: "ask", data: { name, floor } },
+          next: [continueEvent(event, sim.currentTime)],
+        };
+      },
+      ask,
+      done(_sim, event, state) {
+        received.push(`${state.data.name} ${event.process.data?.["to"]}`);
+        return { state, next: [] };
+      },
+    },
+  });
+
+  // Ada and Bob wait for their own parcel in the lobby; Cleo and Dan for the lift, highest floor first
+  const forParcel: ProcessHandler<
+    { settle: Resident; ask: Resident; done: Resident },
+    "ask"
+  > = (sim, event, state) => {
+    const { step, resume, finish } = getWhere(sim, event, "lobby", "mine");
+    return {
+      state: { ...state, step: "done" },
+      next: resume ? [step, ...resume] : [step],
+      finish,
+    };
+  };
+  const forLift: ProcessHandler<
+    { settle: Resident; ask: Resident; done: Resident },
+    "ask"
+  > = (sim, event, state) => {
+    const { step, resume, finish } = get(sim, event, "lift");
+    return {
+      state: { ...state, step: "done" },
+      next: resume ? [step, ...resume] : [step],
+      finish,
+    };
+  };
+
+  const sender: ProcessDefinition<{ send: StateData }> = {
+    type: "sender",
+    initial: "send",
+    steps: {
+      send(sim, event, state) {
+        const sent = [
+          put(sim, event, "lobby", { to: "Bob" }),
+          put(sim, event, "lift", { to: "top" }),
+        ];
+        return {
+          state,
+          next: sent.flatMap(({ resume }) => resume ?? []),
+          finish: sent.flatMap(({ finish }) => finish ?? []),
+        };
+      },
+    },
+  };
+
+  sim.processes = registerProcess(sim, resident("ada", "Ada", 1, forParcel));
+  sim.processes = registerProcess(sim, resident("bob", "Bob", 2, forParcel));
+  sim.processes = registerProcess(sim, resident("cleo", "Cleo", 3, forLift));
+  sim.processes = registerProcess(sim, resident("dan", "Dan", 7, forLift));
+  sim.processes = registerProcess(sim, sender);
+  for (const type of ["ada", "bob", "cleo", "dan"]) {
+    sim.timeline = scheduleEvent(
+      sim,
+      createEvent({ scheduledAt: 0, process: { type } }),
+    );
+  }
+  sim.timeline = scheduleEvent(
+    sim,
+    createEvent({ scheduledAt: 1, process: { type: "sender" } }),
+  );
+
+  const { result } = await runSimulation(sim);
+
+  // The predicate matched Bob by his name, and the discipline ranked Dan by his floor
+  assertEquals(received.sort(), ["Bob Bob", "Dan top"]);
+
+  // Ada and Cleo still wait, their requests carrying their process data
+  assertEquals(
+    result.stores["lobby"].getWhereRequests.map((request) =>
+      request.event.process.data
+    ),
+    [{ name: "Ada", floor: 1 }],
+  );
+  assertEquals(
+    result.stores["lift"].getRequests.entries.map((entry) =>
+      entry.event.process.data
+    ),
+    [{ name: "Cleo", floor: 3 }],
+  );
+});
+
 Deno.test("getWhere errors on unregistered predicate key", () => {
   const sim = initializeSimulation();
   const store = initializeStore({});
@@ -1385,10 +1683,14 @@ Deno.test("getWhere integration: full round-trip through runSimulation", async (
   sim.stores = registerStore(sim, store);
 
   // Scheduler process: waits for an urgent task using getWhere
-  const scheduler: ProcessDefinition<{
-    wait: TaskData;
-    run: TaskData;
-  }> = {
+  const scheduler: ProcessDefinition<
+    {
+      wait: TaskData;
+      run: TaskData;
+    },
+    StoreItemMap,
+    { run: TaskData }
+  > = {
     type: "scheduler",
     initial: "wait",
     steps: {
@@ -1405,8 +1707,8 @@ Deno.test("getWhere integration: full round-trip through runSimulation", async (
           finish: finish ?? [],
         };
       },
-      run(_sim, _event, state) {
-        return { state, next: [] };
+      run(_sim, event, state) {
+        return { state: { ...state, data: event.process.data }, next: [] };
       },
     },
   };
@@ -1416,7 +1718,7 @@ Deno.test("getWhere integration: full round-trip through runSimulation", async (
   // Producer process: buffers a non-urgent task then an urgent task.
   // The non-urgent put seeds the buffer directly (result discarded, like er-triage
   // seed events); the urgent put resolves the scheduler's getWhere request.
-  // A `done` step is required so that updatedPut (continues: true) does not re-enter `go`.
+  // A `done` step is required so that updatedPut, a continuation, does not re-enter `go`.
   const producer: ProcessDefinition<{ go: TaskData; done: TaskData }> = {
     type: "producer",
     initial: "go",
@@ -1995,6 +2297,123 @@ Deno.test("put serves filtered and unconditional consumers in discipline order",
   assertEquals(served(QueueDiscipline.LIFO, false), "filtered");
 });
 
+Deno.test("reorderStore reorders queued items under the discipline the store points to", () => {
+  interface Job extends StateData {
+    size: number;
+  }
+
+  const smallest: DisciplineDefinition<"smallest" | "policy", Job> = {
+    type: "smallest",
+    comparator: (a, b) =>
+      (a.event.process.data?.size ?? 0) - (b.event.process.data?.size ?? 0) ||
+      a.seq - b.seq,
+  };
+
+  // Items out of the store, in order
+  const drain = (sim: Simulation, n: number) =>
+    Array.from(
+      { length: n },
+      () => get(sim, createEvent({ scheduledAt: 0 }), "queue").item?.["size"],
+    );
+
+  // `capacity` 3: three items buffered, two more carried by blocked producers
+  const build = () => {
+    const sim = initializeSimulation();
+    sim.disciplines = registerDiscipline(sim, smallest);
+    sim.disciplines = registerDiscipline(sim, {
+      type: "policy",
+      comparator: (a, b) => a.seq - b.seq,
+    });
+    sim.stores = registerStore<Job>(
+      sim,
+      initializeStore({ id: "queue", capacity: 3, discipline: "policy" }),
+    );
+    for (const size of [5, 1, 3, 4, 2]) {
+      put(sim, createEvent({ scheduledAt: 0 }), "queue", { size });
+    }
+    return sim;
+  };
+
+  // Arrival order to begin with
+  assertEquals(drain(build(), 5), [5, 1, 3, 4, 2]);
+
+  // The store is pointed to another discipline
+  const pointed = build();
+  pointed.stores = {
+    ...pointed.stores,
+    queue: { ...pointed.stores["queue"], discipline: "smallest" },
+  };
+  const before = pointed.stores;
+  pointed.stores = reorderStore(pointed, "queue");
+
+  // Smallest first: each blocked producer, smallest first too, takes the slot freed in the buffer
+  assertEquals(drain(pointed, 5), [1, 2, 3, 4, 5]);
+
+  // The stores passed in are left untouched
+  assertEquals(before["queue"].buffer.entries[0].event.process.data?.size, 5);
+
+  // Another comparator is registered under the key the store points to
+  const registered = build();
+  registered.disciplines = registerDiscipline(registered, {
+    ...smallest,
+    type: "policy",
+  });
+  registered.stores = reorderStore(registered, "queue");
+
+  assertEquals(drain(registered, 5), [1, 2, 3, 4, 5]);
+});
+
+Deno.test("reorderStore reorders blocked consumers", () => {
+  interface Bid extends StateData {
+    bid?: number;
+    lot?: string;
+  }
+
+  const sim = initializeSimulation();
+  sim.stores = registerStore<Bid>(sim, initializeStore({ id: "lots" }));
+
+  // Three consumers block in arrival order, each carrying its bid
+  const requests = [10, 30, 20].map((bid) =>
+    get(
+      sim,
+      createEvent<Bid>({
+        scheduledAt: 0,
+        process: { type: "none", data: { bid } },
+      }),
+      "lots",
+    ).step
+  );
+
+  // Highest bid first from now on
+  sim.disciplines = registerDiscipline<Bid>(sim, {
+    type: "FIFO",
+    comparator: (a, b) =>
+      (b.event.process.data?.bid ?? 0) - (a.event.process.data?.bid ?? 0),
+  });
+  sim.stores = reorderStore(sim, "lots");
+
+  const served = ["a", "b", "c"].map((lot) =>
+    put(sim, createEvent({ scheduledAt: 0 }), "lots", { lot }).finish
+  );
+
+  assertEquals(served, [[requests[1]], [requests[2]], [requests[0]]]);
+});
+
+Deno.test("reorderStore throws on a missing store or discipline", () => {
+  const sim = initializeSimulation();
+  sim.stores = registerStore(
+    sim,
+    initializeStore({ id: "queue", discipline: "unknown" }),
+  );
+
+  assertThrows(() => reorderStore(sim, "none"), RangeError, "Store not found");
+  assertThrows(
+    () => reorderStore(sim, "queue"),
+    RangeError,
+    "Discipline definition not found",
+  );
+});
+
 Deno.test("cancel withdraws a blocked get: a later put no longer resumes it", () => {
   const sim = initializeSimulation();
   const store = initializeStore({ capacity: 1 });
@@ -2126,21 +2545,26 @@ Deno.test("waiting for an item or a timeout resumes the process once", async () 
   interface WaitData extends StateData {
     why?: string;
     foo?: string;
-    request?: string;
-    timeout?: string;
+    request?: Event;
+    timeout?: Event;
   }
 
   // Runs one waiter that gives up at t=5, and a sender putting an item at `sendAt`
-  async function race(sendAt: number) {
+  // `fillers` events are handled in between: they move the point where the working state is compacted
+  async function race(sendAt: number, fillers: number = 0) {
     const sim = initializeSimulation();
     const store = initializeStore({ id: "mailbox", capacity: 1 });
     sim.stores = registerStore(sim, store);
     const outcomes: string[] = [];
 
-    const waiter: ProcessDefinition<{
-      start: WaitData;
-      stop: WaitData;
-    }> = {
+    const waiter: ProcessDefinition<
+      {
+        start: WaitData;
+        stop: WaitData;
+      },
+      StoreItemMap,
+      { stop: WaitData }
+    > = {
       type: "waiter",
       initial: "start",
       steps: {
@@ -2152,31 +2576,23 @@ Deno.test("waiting for an item or a timeout resumes the process once", async () 
             state: {
               ...state,
               step: "stop",
-              data: { request: request.id, timeout: timeout.id },
+              data: { request, timeout },
             },
             next: [request, timeout],
           };
         },
         stop(sim, event, state) {
-          const { why, foo, request, timeout } = state.data;
+          const { request, timeout } = state.data;
+          const { why, foo } = event.process.data;
 
           // Item arrived first: cancel the timeout
           if (why !== "timeout") {
             outcomes.push(`item ${foo}`);
-            return {
-              state,
-              next: [],
-              finish: [sim.timeline.events[timeout!]],
-            };
+            return { state, next: [], finish: [timeout!] };
           }
 
           // Timeout fired: withdraw the request from the store
-          const withdrawn = cancel(
-            sim,
-            event,
-            store.id,
-            sim.timeline.events[request!],
-          );
+          const withdrawn = cancel(sim, event, store.id, request!);
 
           // Request served at this very time: stand down, the item's continuation carries on
           if (!withdrawn) return { state, next: [] };
@@ -2211,10 +2627,19 @@ Deno.test("waiting for an item or a timeout resumes the process once", async () 
       sim,
       createEvent({ scheduledAt: sendAt, process: { type: "sender" } }),
     );
+    for (const _ of Array(fillers).keys()) {
+      sim.timeline = scheduleEvent(sim, createEvent({ scheduledAt: 1 }));
+    }
 
     const { result } = await runSimulation(sim);
 
-    return { outcomes, store: result.stores[store.id] };
+    return {
+      outcomes,
+      store: result.stores[store.id],
+      finished: result.timeline.transitions.filter((transition) =>
+        transition.status === EventStatus.Finished
+      ).map((transition) => transition.id),
+    };
   }
 
   // Item first: the timeout never fires
@@ -2232,6 +2657,119 @@ Deno.test("waiting for an item or a timeout resumes the process once", async () 
   assertEquals(late.outcomes, ["timeout"]);
   assertEquals(late.store.getRequests.entries.length, 0);
   assertEquals(late.store.buffer.entries.length, 1);
+
+  // Same tie, with a compaction at each possible point: once between the timeout standing down and the item's continuation
+  // The timeout, finished and dropped from the working state, is then left as is
+  for (const fillers of Array(150).keys()) {
+    const compacted = await race(5, fillers);
+    assertEquals(compacted.outcomes, ["item bar"]);
+    assertEquals(compacted.finished.length, new Set(compacted.finished).size);
+  }
+});
+
+Deno.test("a blocked request that was not passed on is rejected when resumed", async () => {
+  interface Parcel extends StateData {
+    parcel?: string;
+  }
+
+  // A final step that puts, or gets, and drops `step`: only sound when the operation cannot block
+  const sender: ProcessDefinition<{ send: Parcel }> = {
+    type: "sender",
+    initial: "send",
+    steps: {
+      send(sim, event, state) {
+        const { resume, finish } = put(sim, event, "shelf", state.data);
+        return { state, next: resume ?? [], finish };
+      },
+    },
+  };
+  const careless: ProcessDefinition<{ take: Parcel }> = {
+    type: "careless",
+    initial: "take",
+    steps: {
+      take(sim, event, state) {
+        const { resume, finish } = get(sim, event, "shelf");
+        return { state, next: resume ?? [], finish };
+      },
+    },
+  };
+  const taker: ProcessDefinition<{ take: Parcel; got: Parcel }> = {
+    type: "taker",
+    initial: "take",
+    steps: {
+      take(sim, event, state) {
+        const { step, resume, finish } = get(sim, event, "shelf");
+        return {
+          state: { ...state, step: "got" },
+          next: resume ? [step, ...resume] : [step],
+          finish,
+        };
+      },
+      got(_sim, _event, state) {
+        return { state, next: [] };
+      },
+    },
+  };
+
+  // Processes started in order, one per time unit; `fillers` events in between move the compaction
+  const build = (capacity: number, types: string[], fillers: number = 0) => {
+    const sim = initializeSimulation();
+    sim.stores = registerStore<Parcel>(
+      sim,
+      initializeStore({ id: "shelf", capacity }),
+    );
+    sim.processes = registerProcess(sim, sender);
+    sim.processes = registerProcess(sim, careless);
+    sim.processes = registerProcess(sim, taker);
+    for (const [at, type] of types.entries()) {
+      sim.timeline = scheduleEvent(
+        sim,
+        createEvent({
+          scheduledAt: 10 * at,
+          process: { type, data: { parcel: `parcel ${at}` } },
+        }),
+      );
+    }
+    for (const _ of Array(fillers).keys()) {
+      sim.timeline = scheduleEvent(sim, createEvent({ scheduledAt: 15 }));
+    }
+    return sim;
+  };
+
+  // The shelf has room for both parcels: nothing blocks, dropping `step` loses nothing
+  const roomy = await runSimulation(
+    build(2, ["sender", "sender", "taker", "taker"]),
+  );
+  assertEquals(roomy.result.stores["shelf"].buffer.entries.length, 0);
+
+  // Room for one: the second sender blocks, and its dropped request is found out when a taker frees the slot
+  await assertRejects(
+    () => runSimulation(build(1, ["sender", "sender", "taker", "taker"])),
+    RangeError,
+    "Request not found in timeline",
+  );
+
+  // The same across a compaction
+  await assertRejects(
+    () => runSimulation(build(1, ["sender", "sender", "taker", "taker"], 150)),
+    RangeError,
+    "Request not found in timeline",
+  );
+
+  // A consumer that blocks and drops its request is found out by the next `put`
+  await assertRejects(
+    () => runSimulation(build(1, ["careless", "sender"])),
+    RangeError,
+    "Request not found in timeline",
+  );
+
+  // Operations made outside a run, on behalf of events the timeline does not hold, are left alone
+  const outside = build(0, []);
+  const blocked = put(outside, createEvent({ scheduledAt: 0 }), "shelf", {
+    parcel: "seed",
+  });
+  const taken = get(outside, createEvent({ scheduledAt: 0 }), "shelf");
+  assertEquals(taken.finish, [blocked.step]);
 });
 
 Deno.test("store operations are checked against the stores a process declares", async () => {
