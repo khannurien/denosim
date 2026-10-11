@@ -21,6 +21,7 @@ Denosim features a stateful, event-driven process-as-state-machine model with UN
 Planned features:
 
 - 📊 **FIXME**: collect **metrics** -- read wait times, lateness or occupancy out of a run; for now they are computed by hand from process state;
+- 🐢 **FIXME**: handle an event in **constant time** -- each handled event copies the timeline, so a run slows down with the number of pending events; for now a process schedules its arrivals one at a time;
 - 🔌 Socket-based **communication** -- easily build user interfaces;
 - 🌐 Run **distributed** simulations -- deploy processes on different machines.
 

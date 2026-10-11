@@ -160,6 +160,7 @@ const DEFAULT_DUMP_INTERVAL = 1000;
 /**
  * Number of handled events between two compactions of the working state.
  * Handling an event copies the timeline: its cost grows with the number of events held, whether the history is kept or not.
+ * FIXME: Only finished events are dropped: with N events scheduled up front, handling one still costs O(N)
  */
 const COMPACTION_INTERVAL = 100;
 

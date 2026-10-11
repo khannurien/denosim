@@ -51,6 +51,12 @@ type Job = {
   duration: number;
 };
 
+/** The jobs to submit, and the next one to go */
+type Workload = {
+  jobs: Job[];
+  next: number;
+};
+
 type Running = Job & {
   held: Units;
   start: number;
@@ -70,15 +76,27 @@ interface Allocator extends StateData {
 
 type Stores = { queue: Message; done: Running };
 
-const submit: ProcessDefinition<{ submit: Job }, Stores> = {
+const submit: ProcessDefinition<{ submit: Workload }, Stores> = {
   type: "submit",
   initial: "submit",
   steps: {
     submit(sim, event, state) {
-      // `step` is not passed on, the process ends here: sound as the queue is never full
-      const { resume, finish } = put(sim, event, "queue", state.data);
+      const { jobs, next } = state.data;
 
-      return { state, next: resume ?? [], finish };
+      // `step` is not passed on: sound as the queue is never full
+      const { resume, finish } = put(sim, event, "queue", jobs[next]);
+
+      // One arrival at a time: the process sleeps until the next job is submitted, and ends after the last one
+      const following = jobs.at(next + 1);
+
+      return {
+        state: { ...state, data: { jobs, next: next + 1 } },
+        next: [
+          ...(resume ?? []),
+          ...(following ? [continueEvent(event, following.submitted)] : []),
+        ],
+        finish,
+      };
     },
   },
 };
@@ -283,22 +301,20 @@ if (import.meta.main) {
 
   // The workload is drawn up front: nothing random is left for the runs, which all see the same jobs
   const prng = randomSeeded(1n);
-  const workload: Job[] = Array.from({ length: 30 }, (_, i) => ({
+  const workload: Job[] = Array.from({ length: 3000 }, (_, i) => ({
     job: i + 1,
     submitted: i,
     cpus: randomIntegerBetween(1, 2, { prng }),
     gpus: randomIntegerBetween(0, 1, { prng }),
     duration: randomIntegerBetween(2, 12, { prng }),
   }));
-  for (const data of workload) {
-    sim.timeline = scheduleEvent(
-      sim,
-      createEvent({
-        scheduledAt: data.submitted,
-        process: { type: "submit", data },
-      }),
-    );
-  }
+  sim.timeline = scheduleEvent(
+    sim,
+    createEvent({
+      scheduledAt: 0,
+      process: { type: "submit", data: { jobs: workload, next: 0 } },
+    }),
+  );
 
   const { result: paused } = await runSimulation(sim, {
     until: (_sim, next) => next.scheduledAt > 15,
