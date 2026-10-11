@@ -16,7 +16,7 @@ Denosim features a stateful, event-driven process-as-state-machine model with UN
 - ⏱️ Schedule **events** in simulated time -- use timeouts to model durations and continuations to chain tasks;
 - 🔗 Use **stores** to model both shared capacity and data handoff -- synchronize processes by blocking on `put`/`get`;
 - 🚦 Order store queues using **queue disciplines** (`FIFO`, `LIFO`, or your own) -- select specific items using `getWhere` predicates;
-- ⏯️ Leverage **immutability** to pause and resume simulations -- snapshot the whole simulation state and restore it later, *e.g.*, to compare policies (**FIXME**: implementation to be rewritten, usage not documented yet).
+- ⏯️ Leverage **immutability** to pause and resume simulations -- snapshot the whole simulation state and restore it later, *e.g.*, to compare policies (**FIXME**: usage not documented yet).
 
 Planned features:
 
@@ -41,7 +41,7 @@ Planned features:
 
 - Process state is stored in a global simulation state, one saved state per handled event;
 - An event is never reprocessed: it is marked `Finished` once handled, or once the process it was blocking resumes;
-- Long runs are periodically dumped to disk, and finished events pruned from memory.
+- A run leaves the simulation it started from untouched; its history is kept on demand, in memory or dumped to disk.
 
 **Concurrency and composition model**
 
@@ -75,8 +75,19 @@ Install Deno; see [the guide](https://docs.deno.com/runtime/getting_started/inst
 
 ## Development
 
-Run tests:
+### Tests
 
 ```sh
 deno task test
 ```
+
+### Profiling
+
+```sh
+# built-in CPU profiling (.cpuprofile output)
+deno run -A --cpu-prof --cpu-prof-interval=100 --cpu-prof-name=profile.cpuprofile examples/stack-size.ts
+# V8 CPU profiling (.log output)
+deno run -A --v8-flags=--prof,--prof-sampling-interval=100,--log-deopt examples/stack-size.ts
+```
+
+Analyze the resulting output with [cpupro](https://discoveryjs.github.io/cpupro/) or similar tools.

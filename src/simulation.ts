@@ -11,7 +11,6 @@ import type {
   ProcessRegistry,
   ProcessState,
   ProcessType,
-  RunSimulationOptions,
   Simulation,
   StateData,
   StepResult,
@@ -21,7 +20,7 @@ import type {
   Timestamp,
 } from "./model.ts";
 import { EventStatus, QueueDiscipline } from "./model.ts";
-import { type EventHeap, heapPop } from "./heap.ts";
+import { type EventHeap, heapPeek, heapPop } from "./heap.ts";
 
 /**
  * Initializes a new simulation instance with:
@@ -81,24 +80,28 @@ export function initializeSimulation(): Simulation {
 }
 
 /**
- * Helper function to check simulation termination conditions.
- * If `untilTime` is provided, terminates when current time is greater than or equal to `untilTime`.
- * If `untilEvent` is provided, terminates when the event is finished.
- * Always returns false if neither condition is provided.
+ * Returns the earliest scheduled event, without handling it.
+ * Drops from the heap the events finished since they were pushed.
+ * Returns `undefined` if there are no more events to process in queue.
  */
-export function shouldTerminate(
-  sim: Simulation,
-  options: RunSimulationOptions,
-): boolean {
-  const untilTime = options.untilTime;
-  const timeMet = untilTime !== undefined &&
-    sim.currentTime >= untilTime;
+export function nextEvent(
+  current: Simulation,
+  heap: EventHeap,
+): Event | undefined {
+  while (true) {
+    const entry = heapPeek(heap);
 
-  const untilEvent = options.untilEvent;
-  const eventMet = untilEvent !== undefined &&
-    sim.timeline.status[untilEvent.id] === EventStatus.Finished;
+    if (!entry) {
+      return undefined; // No more events to process
+    }
 
-  return timeMet || eventMet;
+    // Only handle `Scheduled` events: lazily skip those finished since they were pushed
+    if (current.timeline.status[entry.id] === EventStatus.Scheduled) {
+      return current.timeline.events[entry.id];
+    }
+
+    heapPop(heap);
+  }
 }
 
 /**
@@ -110,20 +113,15 @@ export function advance(
   current: Simulation,
   heap: EventHeap,
 ): [Simulation, boolean] {
-  while (true) {
-    const event = heapPop(heap);
+  const event = nextEvent(current, heap);
 
-    if (!event) {
-      return [current, false]; // No more events to process
-    }
-
-    // Only handle `Scheduled` events: lazily skip those finished since they were pushed
-    if (current.timeline.status[event.id] === EventStatus.Scheduled) {
-      const next = handleEvent(current, current.timeline.events[event.id]);
-
-      return [next, true];
-    }
+  if (!event) {
+    return [current, false]; // No more events to process
   }
+
+  heapPop(heap);
+
+  return [handleEvent(current, event), true];
 }
 
 /**

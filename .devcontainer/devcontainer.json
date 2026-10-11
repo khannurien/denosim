@@ -19,7 +19,8 @@
   "customizations": {
     "vscode": {
       "extensions": [
-        "justjavac.vscode-deno-extensionpack"
+        "justjavac.vscode-deno-extensionpack",
+        "ms-vscode.vscode-js-profile-flame"
       ]
     }
   }

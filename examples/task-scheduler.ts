@@ -1,6 +1,7 @@
 import { randomIntegerBetween, randomSeeded } from "@std/random";
 
 import type { Event, ProcessDefinition, StateData } from "../src/model.ts";
+import { EventStatus } from "../src/model.ts";
 import {
   get,
   getWhere,
@@ -289,7 +290,9 @@ if (import.meta.main) {
   const stop = createEvent({ scheduledAt: SIM_TIME });
   sim.timeline = scheduleEvent(sim, stop);
 
-  const { stats } = await runSimulation(sim, { untilEvent: stop });
+  const { stats } = await runSimulation(sim, {
+    until: (sim) => sim.timeline.status[stop.id] === EventStatus.Finished,
+  });
 
   const sync = completed.filter((t) => t.kind === "sync");
   const async_ = completed.filter((t) => t.kind === "async");

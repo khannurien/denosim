@@ -14,10 +14,10 @@ import {
   createEvent,
   finishEvent,
   initializeSimulation,
+  nextEvent,
   registerPredicate,
   registerProcess,
   scheduleEvent,
-  shouldTerminate,
 } from "../src/simulation.ts";
 import { buildHeap } from "../src/heap.ts";
 
@@ -234,12 +234,104 @@ Deno.test("simulation until time condition", async () => {
   sim.timeline = scheduleEvent(sim, e2);
   sim.timeline = scheduleEvent(sim, e3);
 
-  const { result, stats } = await runSimulation(sim, { untilTime: 20 });
+  const { result, stats } = await runSimulation(sim, {
+    until: (_sim, next) => next.scheduledAt > 20,
+  });
 
   assertEquals(stats.end, 20);
   assertEquals(result.timeline.status[e1.id], EventStatus.Finished);
   assertEquals(result.timeline.status[e2.id], EventStatus.Finished);
   assertEquals(result.timeline.status[e3.id], EventStatus.Scheduled);
+});
+
+Deno.test("simulation until time condition is exact", async () => {
+  const sim = initializeSimulation();
+
+  // No event at 20: the simulation stops before the first event past it
+  const e1 = createEvent({ scheduledAt: 10 });
+  const e2 = createEvent({ scheduledAt: 25 });
+  sim.timeline = scheduleEvent(sim, e1);
+  sim.timeline = scheduleEvent(sim, e2);
+
+  const before = await runSimulation(sim, {
+    until: (_sim, next) => next.scheduledAt > 20,
+  });
+
+  assertEquals(before.stats.end, 10);
+  assertEquals(before.result.timeline.status[e2.id], EventStatus.Scheduled);
+
+  // Several events at 20: all of them are handled
+  const e3 = createEvent({ scheduledAt: 20 });
+  const e4 = createEvent({ scheduledAt: 20 });
+  sim.timeline = scheduleEvent(sim, e3);
+  sim.timeline = scheduleEvent(sim, e4);
+
+  const at = await runSimulation(sim, {
+    until: (_sim, next) => next.scheduledAt > 20,
+  });
+
+  assertEquals(at.stats.end, 20);
+  assertEquals(at.result.timeline.status[e3.id], EventStatus.Finished);
+  assertEquals(at.result.timeline.status[e4.id], EventStatus.Finished);
+  assertEquals(at.result.timeline.status[e2.id], EventStatus.Scheduled);
+});
+
+Deno.test("simulation until condition sees the next event and the state", async () => {
+  interface TickData extends StateData {
+    count: number;
+  }
+
+  const sim = initializeSimulation();
+
+  const ticker: ProcessDefinition<{ tick: TickData }> = {
+    type: "ticker",
+    initial: "tick",
+    steps: {
+      tick(sim, event, state) {
+        return {
+          state: { ...state, data: { count: state.data.count + 1 } },
+          next: [continueEvent(event, sim.currentTime + 1)],
+        };
+      },
+    },
+  };
+  sim.processes = registerProcess(sim, ticker);
+  sim.timeline = scheduleEvent(
+    sim,
+    createEvent({
+      scheduledAt: 0,
+      process: { type: "ticker", data: { count: 0 } },
+    }),
+  );
+
+  // Stop before the step that would take the count from 3 to 4: an event emitted by a handler, named through its parent's saved state
+  const paused = await runSimulation(sim, {
+    until: (sim, next) =>
+      next.process.type === "ticker" && next.parent !== undefined &&
+      sim.states[next.parent].data.count === 3,
+  });
+
+  assertEquals(paused.stats.end, 2);
+  assertEquals(
+    Object.values(paused.result.timeline.status).filter((status) =>
+      status === EventStatus.Scheduled
+    ).length,
+    1,
+  );
+
+  // The result of a stopped run can be run again: it resumes from the event left scheduled
+  const resumed = await runSimulation(paused.result, {
+    until: (_sim, next) => next.scheduledAt > 5,
+  });
+
+  assertEquals(resumed.stats.end, 5);
+  assertEquals(
+    Math.max(
+      ...Object.values(resumed.result.states).map((state) => state.data.count)
+        .filter((count) => typeof count === "number"),
+    ),
+    6,
+  );
 });
 
 Deno.test("simulation until event condition", async () => {
@@ -252,7 +344,9 @@ Deno.test("simulation until event condition", async () => {
   sim.timeline = scheduleEvent(sim, e2);
   sim.timeline = scheduleEvent(sim, e3);
 
-  const { result, stats } = await runSimulation(sim, { untilEvent: e2 });
+  const { result, stats } = await runSimulation(sim, {
+    until: (sim) => sim.timeline.status[e2.id] === EventStatus.Finished,
+  });
 
   assertEquals(stats.end, 20);
   assertEquals(result.timeline.status[e1.id], EventStatus.Finished);
@@ -1098,7 +1192,7 @@ Deno.test("events with same time and priority are processed in FIFO scheduling o
   assertEquals(executionOrder, ["first", "second", "third"]);
 });
 
-Deno.test("simulation rate acts as best-effort wall-clock throttling", async () => {
+Deno.test("simulation rate maps simulation time to wall-clock time", async () => {
   const createTestSim = () => {
     const sim = initializeSimulation();
     sim.timeline = scheduleEvent(sim, createEvent({ scheduledAt: 0 }));
@@ -1127,7 +1221,7 @@ Deno.test("simulation rate acts as best-effort wall-clock throttling", async () 
     ),
   );
 
-  const expectedMs = 2 * (1000 / 20); // 100ms nominal
+  const expectedMs = 1 * (1000 / 20); // one time unit at 20 units per second: 50ms nominal
   const tolerance = 0.80; // allow 20% timing jitter on loaded CI environments
   assert(slowElapsed >= expectedMs * tolerance);
   assert(slowElapsed > fastElapsed);
@@ -1280,37 +1374,48 @@ Deno.test("finishEvent leaves an already finished event as is", () => {
   assertEquals(finishEvent(sim, event), finished);
 });
 
-Deno.test("shouldTerminate fires when both untilTime and untilEvent are satisfied", () => {
+Deno.test("simulation until condition can be changed from outside the loop", async () => {
   const sim = initializeSimulation();
-  const event = createEvent({ scheduledAt: 5 });
-  sim.timeline = scheduleEvent(sim, event);
-  sim.timeline = finishEvent(sim, event);
-  sim.currentTime = 10;
+  for (const scheduledAt of [1, 2, 3, 4]) {
+    sim.timeline = scheduleEvent(sim, createEvent({ scheduledAt }));
+  }
 
-  // Both conditions are met; shouldTerminate must return true
-  assert(shouldTerminate(sim, { untilTime: 10, untilEvent: event }));
+  // 10 time units per second: one event every 100ms; the pause is asked during the wait for the third one
+  const pause = new AbortController();
+  const timer = setTimeout(() => pause.abort(), 250);
+  const first = await runSimulation(sim, {
+    rate: 10,
+    until: () => pause.signal.aborted,
+  });
+  clearTimeout(timer);
+
+  assertEquals(first.stats.end, 2);
+
+  const second = await runSimulation(first.result);
+  assertEquals(second.stats.end, 4);
 });
 
-Deno.test("shouldTerminate fires when only untilTime is reached", () => {
+Deno.test("nextEvent returns the earliest scheduled event without handling it", () => {
   const sim = initializeSimulation();
-  sim.currentTime = 5;
-  assert(shouldTerminate(sim, { untilTime: 5 }));
-  assert(!shouldTerminate(sim, { untilTime: 6 }));
-});
 
-Deno.test("shouldTerminate fires when only untilEvent is finished", () => {
-  const sim = initializeSimulation();
-  const event = createEvent({ scheduledAt: 0 });
-  sim.timeline = scheduleEvent(sim, event);
+  const later = createEvent({ scheduledAt: 2 });
+  const earlier = createEvent({ scheduledAt: 1 });
+  sim.timeline = scheduleEvent(sim, later);
+  sim.timeline = scheduleEvent(sim, earlier);
 
-  assert(!shouldTerminate(sim, { untilEvent: event }));
-  sim.timeline = finishEvent(sim, event);
-  assert(shouldTerminate(sim, { untilEvent: event }));
-});
+  const heap = buildHeap(sim);
 
-Deno.test("shouldTerminate returns false when neither condition is provided", () => {
-  const sim = initializeSimulation();
-  assert(!shouldTerminate(sim, {}));
+  assertEquals(nextEvent(sim, heap), earlier);
+  assertEquals(nextEvent(sim, heap), earlier);
+  assertEquals(sim.timeline.status[earlier.id], EventStatus.Scheduled);
+
+  // A finished event is dropped from the heap
+  sim.timeline = finishEvent(sim, earlier);
+  assertEquals(nextEvent(sim, heap), later);
+  assertEquals(heap.entries.length, 1);
+
+  sim.timeline = finishEvent(sim, later);
+  assertEquals(nextEvent(sim, heap), undefined);
 });
 
 Deno.test("advance() skips Waiting events and processes the next Scheduled event", () => {

@@ -13,22 +13,22 @@ import type {
 import { EventStatus } from "./model.ts";
 
 /** Delta operations for events */
-type EventDeltaOp = { key: EventID; event: Event };
+export type EventDeltaOp = { key: EventID; event: Event };
 
 /** Delta operations for status */
-type StatusDeltaOp = { key: EventID; status: EventStatus };
+export type StatusDeltaOp = { key: EventID; status: EventStatus };
 
 /** Delta operations for transitions */
-type TransitionDeltaOp = { transition: EventTransition };
+export type TransitionDeltaOp = { transition: EventTransition };
 
 /** Delta operations for state */
-type StateDeltaOp = { key: EventID; value: ProcessState };
+export type StateDeltaOp = { key: EventID; value: ProcessState };
 
 /**
  * Delta operations for stores.
  * Only carry the fields that changed.
  */
-type StoreDeltaOp = {
+export type StoreDeltaOp = {
   key: StoreID;
   buffer?: StoreQueue;
   getRequests?: StoreQueue;
@@ -57,16 +57,16 @@ export interface SimulationDelta {
   st: StoreDeltaOp[];
 }
 
-/** Full simulation state with delta encoding support */
-export interface DeltaEncodedSimulation {
-  /** Base snapshot -- full state at reference point */
+/**
+ * A window of the history of a run: a state, and the deltas of the events handled from it.
+ * The history of a run is a sequence of windows, kept in memory or written to disk, one dump per window.
+ */
+export interface HistoryWindow {
+  /** Base snapshot -- state the window starts from */
   base: Simulation;
 
-  /** Sequence of deltas from base to current state */
+  /** Sequence of deltas from base, one per handled event */
   deltas: SimulationDelta[];
-
-  /** Current simulation state (can be reconstructed from base + deltas) */
-  current: Simulation;
 }
 
 /**
@@ -187,20 +187,18 @@ function diffStores(
 }
 
 /**
- * Given a sequence of simulation states, create a delta-encoded representation that captures the initial state as a base and the subsequent states as a series of deltas representing the changes from one state to the next.
+ * Given a sequence of simulation states, create a history window that captures the initial state as a base and the subsequent states as a series of deltas representing the changes from one state to the next.
  * This allows for efficient storage and reconstruction of the simulation history by only recording the differences between states rather than the full state at each step.
  */
-export function createDeltaEncodedSimulation(
+export function createHistoryWindow(
   states: Simulation[],
-): DeltaEncodedSimulation {
+): HistoryWindow {
   const base = states[0];
   const deltas = states.slice(1).map((state, index) =>
     createDelta(states[index], state)
   );
 
-  const deltaEncoded = { base, deltas, current: states[states.length - 1] };
-
-  return deltaEncoded;
+  return { base, deltas };
 }
 
 /**
@@ -291,4 +289,71 @@ export function pruneWorkingState(sim: Simulation): Simulation {
     ),
     stores: sim.stores,
   };
+}
+
+/**
+ * Folds a working state into `full`, the complete state accumulated since the start of a run.
+ * Events, statuses and states keep the position of their first appearance, i.e. scheduling order.
+ * `inherited` is the number of leading transitions of `sim` that `full` already holds: those kept by `pruneWorkingState` for the events still pending.
+ * Mutates `full`.
+ */
+export function absorbWorkingState(
+  full: Pick<Simulation, "timeline" | "states">,
+  sim: Simulation,
+  inherited: number,
+): void {
+  Object.assign(full.timeline.events, sim.timeline.events);
+  Object.assign(full.timeline.status, sim.timeline.status);
+  for (const transition of sim.timeline.transitions.slice(inherited)) {
+    full.timeline.transitions.push(transition);
+  }
+  Object.assign(full.states, sim.states);
+}
+
+/**
+ * Given the history windows of a run, in order, reconstruct the full sequence of simulation states: the base of the first window, then one state per handled event.
+ * Every state is complete: it holds every event since the base of the first window, whether the windows were pruned or not.
+ * Windows of a run resumed from the result of another can be passed one after the other.
+ */
+export function historyStates(windows: HistoryWindow[]): Simulation[] {
+  const states: Simulation[] = [];
+
+  // Complete state at the end of the windows already replayed
+  const full: Pick<Simulation, "timeline" | "states"> = {
+    timeline: { events: {}, status: {}, transitions: [] },
+    states: {},
+  };
+
+  for (const [index, window] of windows.entries()) {
+    const replay = reconstructFromDeltas(window.base, window.deltas);
+
+    if (index === 0) {
+      // The first window starts from a complete state: its states are complete as they are
+      for (const state of replay) states.push(state);
+      absorbWorkingState(full, replay[replay.length - 1], 0);
+      continue;
+    }
+
+    // A later window starts from a working state, whose transitions are already in `full`
+    // Its base is skipped: it is the last state of the previous window
+    const inherited = window.base.timeline.transitions.length;
+
+    for (const state of replay.slice(1)) {
+      // Complete the working state with a copy of what the previous windows hold
+      const complete = {
+        timeline: {
+          events: { ...full.timeline.events },
+          status: { ...full.timeline.status },
+          transitions: [...full.timeline.transitions],
+        },
+        states: { ...full.states },
+      };
+      absorbWorkingState(complete, state, inherited);
+      states.push({ ...state, ...complete });
+    }
+
+    absorbWorkingState(full, replay[replay.length - 1], inherited);
+  }
+
+  return states;
 }

@@ -55,6 +55,14 @@ export function heapPush(
 }
 
 /**
+ * Returns the minimum entry from the heap without removing it, in `O(1)`.
+ * Returns `undefined` if empty.
+ */
+export function heapPeek(heap: EventHeap): HeapEntry | undefined {
+  return heap.entries.at(0);
+}
+
+/**
  * Removes and returns the minimum entry from the heap in `O(log N)`.
  * Heap is mutated in-place.
  * Returns `undefined` if empty.
@@ -65,6 +73,7 @@ export function heapPop(heap: EventHeap): HeapEntry | undefined {
 
 /**
  * Generic sift-up: restores the heap property upward from index `i` using a caller-supplied comparator.
+ * Kept imperative: `i` walks up the tree, and a recursive form costs a call per level.
  */
 function siftUpWith<T>(
   entries: T[],
@@ -83,6 +92,7 @@ function siftUpWith<T>(
 
 /**
  * Generic sift-down: restores the heap property downward from index `i` using a caller-supplied comparator.
+ * Kept imperative: `i` walks down the tree, and a recursive form costs a call per level.
  */
 function siftDownWith<T>(
   entries: T[],
@@ -165,9 +175,11 @@ export function buildHeap(sim: Simulation): EventHeap {
     }
   }
 
-  // Floyd's algorithm: build heap in-place in O(N)
-  for (let i = (heap.entries.length >> 1) - 1; i >= 0; i--) {
-    siftDownWith(heap.entries, i, compareByTimePriorityFIFO);
+  // Floyd's algorithm: build heap in-place in O(N), sifting down from the last parent to the root
+  const parents = heap.entries.length >> 1;
+  for (const k of heap.entries.keys()) {
+    if (k >= parents) break;
+    siftDownWith(heap.entries, parents - 1 - k, compareByTimePriorityFIFO);
   }
   return heap;
 }

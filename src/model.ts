@@ -61,6 +61,15 @@ export interface Simulation<
 }
 
 /**
+ * The registries of a simulation: `processes`, `disciplines` and `predicates`.
+ * Never serialized; passed back in when a simulation is restored. Any `Simulation` can be passed where registries are expected.
+ */
+export type SimulationRegistries = Pick<
+  Simulation,
+  "processes" | "disciplines" | "predicates"
+>;
+
+/**
  * Parallel data structures that together describe the full lifecycle of every event:
  * - `events`: immutable event definitions, keyed by ID (what the event is)
  * - `transitions`: append-only log of every status change (when and how it progressed)
@@ -367,7 +376,7 @@ export interface ProcessCall<T extends StateData = StateData> {
 /**
  * Used as the type of the `state` field in `StepResult<M>`, ensuring that a handler can only return a state that names a step actually defined in the process and pairs it with the correct data type for that step.
  */
-type ProcessStateFor<M extends StepStateMap> = {
+export type ProcessStateFor<M extends StepStateMap> = {
   [K in keyof M]: ProcessState<M[K], K & StepType>;
 }[keyof M];
 
@@ -429,63 +438,6 @@ export interface StepResult<M extends StepStateMap = StepStateMap> {
    * Used when the handler needs to terminate events currently in `EventStatus.Waiting`.
    */
   finish?: Event[];
-}
-
-/**
- * Statistics about a simulation run.
- * Currently tracks only end timestamp and simulation duration, but could be extended with:
- * - Average process latency
- * - Other performance metrics
- */
-export interface SimulationStats {
-  /** Simulation time the simulation ended at */
-  end: Timestamp;
-
-  /** Real-world time (in milliseconds) the simulation took to complete */
-  duration: number;
-}
-
-/**
- * Return value of a completed simulation run.
- * Bundles the final simulation along with run statistics.
- */
-export interface SimulationResult<T> {
-  /** Final simulation representation after the run completes */
-  result: T;
-
-  /** Statistics for the completed run */
-  stats: SimulationStats;
-}
-
-/**
- * Object used to configure a simulation run.
- * Allows setting the rate of simulation to map wall-clock speed to the virtual passing of time.
- * Allows setting either an end timestamp or an end event to stop the simulation at specific time.
- */
-export interface RunSimulationOptions<T extends StateData = StateData> {
-  /** Simulation speed in Hz (events per second) */
-  rate?: number;
-
-  /** Stop simulation when `currentTime` reaches this value */
-  untilTime?: Timestamp;
-
-  /** Stop simulation when this specific event finishes */
-  untilEvent?: Event<T>;
-
-  /** Optional run identifier; defaults to a random UUID */
-  runId?: string;
-
-  /**
-   * Explicit run directory path. If omitted, defaults to `$runs/run-${runId}`.
-   * If `run.json` exists in this directory, it is merged as run defaults.
-   */
-  runDirectory?: string;
-
-  /** Overrides the simulation dump interval for this run */
-  dumpInterval?: number;
-
-  /** Optional metadata merged into `run.json` for this run */
-  runMetadata?: Record<string, unknown>;
 }
 
 /**

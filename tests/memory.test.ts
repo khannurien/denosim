@@ -1,9 +1,11 @@
 import { assert, assertEquals } from "@std/assert";
 
 import {
+  absorbWorkingState,
   applyDeltas,
   createDelta,
-  createDeltaEncodedSimulation,
+  createHistoryWindow,
+  historyStates,
   pruneWorkingState,
   reconstructFromDeltas,
 } from "../src/memory.ts";
@@ -15,9 +17,10 @@ import type {
 } from "../src/model.ts";
 import { EventStatus, QueueDiscipline } from "../src/model.ts";
 import { registerStore } from "../src/stores.ts";
-import { runSimulationWithDeltas } from "../src/runner.ts";
+import { runSimulation } from "../src/runner.ts";
 import {
   createEvent,
+  finishEvent,
   initializeSimulation,
   registerProcess,
   scheduleEvent,
@@ -87,8 +90,7 @@ Deno.test("createDelta captures status transition and state mutations", async ()
     state: { ...sim.states },
   };
 
-  const { result } = await runSimulationWithDeltas(sim);
-  const next = result.current;
+  const { result: next } = await runSimulation(sim);
 
   const delta = createDelta(prev, next);
 
@@ -111,8 +113,8 @@ Deno.test("delta encoding roundtrip reconstructs final state", () => {
   const sim2 = initializeSimulation();
   sim2.currentTime = 2;
 
-  const encoded = createDeltaEncodedSimulation([sim0, sim1, sim2]);
-  const recovered = reconstructFromDeltas(encoded.base, encoded.deltas);
+  const window = createHistoryWindow([sim0, sim1, sim2]);
+  const recovered = reconstructFromDeltas(window.base, window.deltas);
 
   assertEquals(recovered.length, 3);
   assertEquals(recovered[2].currentTime, 2);
@@ -247,18 +249,17 @@ Deno.test("runSimulation records only real steps and keeps full final state afte
     sim.timeline = scheduleEvent(sim, event);
   }
 
-  const { result } = await runSimulationWithDeltas(sim, {
-    runDirectory: dir,
-    dumpInterval: 2,
+  const { result, history } = await runSimulation(sim, {
+    history: { directory: dir, interval: 2 },
   });
 
-  assertEquals(result.current.currentTime, 4);
+  assertEquals(result.currentTime, 4);
   assert(
     initial.every((event) =>
-      result.current.timeline.status[event.id] === EventStatus.Finished
+      result.timeline.status[event.id] === EventStatus.Finished
     ),
   );
-  assertEquals(result.deltas.length, 0);
+  assertEquals(history, undefined);
 
   const dump0 = await Deno.stat(`${dir}/dumps/0-t1.json`);
   const dump1 = await Deno.stat(`${dir}/dumps/1-t3.json`);
@@ -445,30 +446,28 @@ Deno.test("pruneWorkingState handles complex parent-child relationships", () => 
 });
 
 Deno.test("runSimulation keeps base immutable and reconstructs current from deltas", async () => {
-  const dir = "runs/test/dumps-immutability";
-  await Deno.remove(dir, { recursive: true }).catch(() => {});
-
   const sim = initializeSimulation();
 
   const event = createEvent({ scheduledAt: 0 });
   sim.timeline = scheduleEvent(sim, event);
 
-  const { result } = await runSimulationWithDeltas(sim, {
-    runDirectory: dir,
-    dumpInterval: 100,
+  const { result, history } = await runSimulation(sim, {
+    history: { interval: 100 },
   });
 
-  assertEquals(Object.keys(result.base.timeline.events).length, 1);
-  assertEquals(result.base.timeline.status[event.id], EventStatus.Scheduled);
-  assertEquals(Object.keys(result.base.states).length, 0);
+  assert(history);
+  assertEquals(history.length, 1);
+  const [window] = history;
 
-  const replay = reconstructFromDeltas(result.base, result.deltas);
+  assertEquals(Object.keys(window.base.timeline.events).length, 1);
+  assertEquals(window.base.timeline.status[event.id], EventStatus.Scheduled);
+  assertEquals(Object.keys(window.base.states).length, 0);
+
+  const replay = reconstructFromDeltas(window.base, window.deltas);
   const replayStop = replay[replay.length - 1];
-  assertEquals(replayStop, result.current);
+  assertEquals(replayStop, result);
   assertEquals(replayStop.timeline.status[event.id], EventStatus.Finished);
   assertEquals(Object.keys(replayStop.states).length, 1);
-
-  await Deno.remove(dir, { recursive: true });
 });
 
 Deno.test("dumps preserve full replay state by default", async () => {
@@ -491,11 +490,9 @@ Deno.test("dumps preserve full replay state by default", async () => {
 
   const dir = "runs/test/dumps-checkpoint-compact";
   await Deno.remove(dir, { recursive: true }).catch(() => {});
-  const { result } = await runSimulationWithDeltas(sim, {
-    runDirectory: dir,
-    dumpInterval: 1,
+  const { result: stop } = await runSimulation(sim, {
+    history: { directory: dir, interval: 1 },
   });
-  const stop = result.current;
 
   assertEquals(Object.keys(stop.timeline.events).length, 2);
   assertEquals(stop.timeline.status[e1.id], EventStatus.Finished);
@@ -504,7 +501,7 @@ Deno.test("dumps preserve full replay state by default", async () => {
   await Deno.remove(dir, { recursive: true });
 });
 
-Deno.test("dumps keep untilEvent semantics with full replay state", async () => {
+Deno.test("dumps keep until semantics with full replay state", async () => {
   const sim = initializeSimulation();
   const e1 = createEvent({ scheduledAt: 10 });
   const e2 = createEvent({ scheduledAt: 20 });
@@ -515,12 +512,10 @@ Deno.test("dumps keep untilEvent semantics with full replay state", async () => 
 
   const dir = "runs/test/dumps-checkpoint-until-event";
   await Deno.remove(dir, { recursive: true }).catch(() => {});
-  const { result, stats } = await runSimulationWithDeltas(sim, {
-    untilEvent: e2,
-    runDirectory: dir,
-    dumpInterval: 1,
+  const { result: stop, stats } = await runSimulation(sim, {
+    until: (sim) => sim.timeline.status[e2.id] === EventStatus.Finished,
+    history: { directory: dir, interval: 1 },
   });
-  const stop = result.current;
 
   assertEquals(stats.end, 20);
   const handledE1 = Object.values(stop.timeline.events).find((event) =>
@@ -581,4 +576,59 @@ Deno.test("pruneWorkingState preserves stores, processes, disciplines, and predi
   assertEquals(pruned.processes, sim.processes);
   assertEquals(pruned.disciplines, sim.disciplines);
   assertEquals(pruned.predicates, sim.predicates);
+});
+
+Deno.test("absorbWorkingState skips the transitions already held", () => {
+  const sim = initializeSimulation();
+  const e1 = createEvent({ scheduledAt: 0 });
+  const e2 = createEvent({ scheduledAt: 1 });
+  sim.timeline = scheduleEvent(sim, e1);
+  sim.timeline = scheduleEvent(sim, e2);
+  sim.timeline = finishEvent(sim, e1);
+
+  const full = {
+    timeline: { events: {}, status: {}, transitions: [] },
+    states: {},
+  };
+  absorbWorkingState(full, sim, 0);
+  assertEquals(full.timeline.transitions.length, 3);
+
+  // e1 is pruned; the transition kept for e2, still pending, is already in `full`
+  const pruned = pruneWorkingState(sim);
+  assertEquals(pruned.timeline.transitions.length, 1);
+
+  pruned.timeline = finishEvent(pruned, e2);
+  absorbWorkingState(full, pruned, 1);
+
+  const transitions: EventTransition[] = full.timeline.transitions;
+  assertEquals(transitions.map((transition) => transition.id), [
+    e1.id,
+    e2.id,
+    e1.id,
+    e2.id,
+  ]);
+  assertEquals(Object.keys(full.timeline.events), [e1.id, e2.id]);
+  assertEquals(full.timeline.status, {
+    [e1.id]: EventStatus.Finished,
+    [e2.id]: EventStatus.Finished,
+  });
+});
+
+Deno.test("historyStates with no window returns an empty array", () => {
+  assertEquals(historyStates([]), []);
+});
+
+Deno.test("historyStates on a single window equals reconstructFromDeltas", () => {
+  const sim0 = initializeSimulation();
+  const sim1 = initializeSimulation();
+  sim1.currentTime = 1;
+  const sim2 = initializeSimulation();
+  sim2.currentTime = 2;
+
+  const window = createHistoryWindow([sim0, sim1, sim2]);
+
+  assertEquals(
+    historyStates([window]),
+    reconstructFromDeltas(window.base, window.deltas),
+  );
 });

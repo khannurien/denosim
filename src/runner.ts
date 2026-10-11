@@ -1,25 +1,87 @@
-import type { DeltaEncodedSimulation } from "./memory.ts";
-import { createDelta, pruneWorkingState } from "./memory.ts";
+import type { HistoryWindow } from "./memory.ts";
+import {
+  absorbWorkingState,
+  createDelta,
+  pruneWorkingState,
+} from "./memory.ts";
 import type {
-  DisciplineRegistry,
   Event,
-  EventID,
-  EventTransition,
-  PredicateRegistry,
-  ProcessRegistry,
-  ProcessState,
-  RunSimulationOptions,
   Simulation,
-  SimulationResult,
+  SimulationRegistries,
+  Timestamp,
 } from "./model.ts";
 import { EventStatus } from "./model.ts";
-import {
-  deserializeLastSimulation,
-  deserializeSimulation,
-  serializeForDump,
-} from "./serialize.ts";
+import { deserializeDump, serializeForDump } from "./serialize.ts";
 import { buildHeap, heapPush } from "./heap.ts";
-import { advance, shouldTerminate } from "./simulation.ts";
+import { advance, nextEvent } from "./simulation.ts";
+
+/**
+ * Statistics about a simulation run.
+ * Currently tracks only end timestamp and simulation duration, but could be extended with:
+ * - Average process latency
+ * - Other performance metrics
+ */
+export interface SimulationStats {
+  /** Simulation time the simulation ended at */
+  end: Timestamp;
+
+  /** Real-world time (in milliseconds) the simulation took to complete */
+  duration: number;
+}
+
+/**
+ * Return value of a simulation run.
+ * Bundles the final simulation along with run statistics.
+ */
+export interface SimulationResult {
+  /** Final simulation state: complete, with every event since the state the run started from */
+  result: Simulation;
+
+  /** Statistics for the completed run */
+  stats: SimulationStats;
+
+  /** History windows of the run, in order; only set when `history` is asked without a `directory` */
+  history?: HistoryWindow[];
+}
+
+/**
+ * Object used to keep the history of a run: every intermediate state, as a sequence of windows.
+ * Windows are kept in memory and returned, unless a `directory` is given: they are then written there, one dump per window.
+ */
+export interface HistoryOptions {
+  /**
+   * Directory where the history is written. If omitted, nothing touches the disk.
+   * If `run.json` exists in this directory, it is merged as run defaults, and dumps are added after the existing ones.
+   */
+  directory?: string;
+
+  /** Number of handled events per window; defaults to `1000` */
+  interval?: number;
+
+  /** Optional metadata merged into `run.json` for this run; only used with a `directory` */
+  metadata?: Record<string, unknown>;
+}
+
+/**
+ * Object used to configure a simulation run.
+ * Allows setting a condition to stop the simulation on.
+ * Allows setting the rate of simulation to map wall-clock speed to the virtual passing of time.
+ * Allows keeping the history of the run, in memory or on disk.
+ */
+export interface RunSimulationOptions {
+  /**
+   * Stop condition, checked before each event is handled: `next` is the event about to be handled.
+   * When it returns `true` the simulation stops and `next` stays `Scheduled`; running the result again resumes from there.
+   * Must have no side effect: with a `rate`, it is checked again after the wait.
+   */
+  until?: (sim: Simulation, next: Event) => boolean;
+
+  /** Simulation speed, in simulation time units per wall-clock second */
+  rate?: number;
+
+  /** Keeps the history of the run; if omitted, only the final state is returned */
+  history?: HistoryOptions;
+}
 
 /**
  * Dump configuration and mutable state for a simulation run.
@@ -29,7 +91,7 @@ interface RunDumpMetadata {
   /** Directory where dump files are written */
   directory: string;
 
-  /** Number of deltas to accumulate between dumps; controls the granularity vs. disk-write tradeoff */
+  /** Number of deltas per dump; controls the granularity vs. disk-write tradeoff */
   interval: number;
 
   /** Monotonically increasing count of dumps written so far; used as the numeric prefix in dump file names */
@@ -41,13 +103,10 @@ interface RunDumpMetadata {
 
 /**
  * Persisted representation of a simulation run, written to `run.json` in the run's root directory.
- * Combines run identity, timestamps, dump state, and optional user metadata in a single document.
+ * Combines timestamps, dump state, and optional user metadata in a single document.
  * Written on initialization and after every dump, so it always reflects the latest run state and allows interrupted runs to be resumed or inspected after the fact.
  */
 interface RunManifest {
-  /** Unique identifier for this run; stable across restarts of the same run */
-  runId: string;
-
   /** ISO 8601 timestamp of when this run was first initialized; never updated after creation */
   createdAt: string;
 
@@ -60,7 +119,7 @@ interface RunManifest {
   /** Dump configuration and progress state */
   dump: RunDumpMetadata;
 
-  /** Optional user-supplied metadata, merged from `RunSimulationOptions.runMetadata` at run start */
+  /** Optional user-supplied metadata, merged from `HistoryOptions.metadata` at run start */
   metadata?: Record<string, unknown>;
 }
 
@@ -86,9 +145,14 @@ export interface DumpWriteResult {
   manifest: RunManifest;
 }
 
-const DEFAULT_RUNS_DIR = "runs";
 const DEFAULT_DUMP_DIR = "dumps";
 const DEFAULT_DUMP_INTERVAL = 1000;
+
+/**
+ * Number of handled events between two compactions of the working state.
+ * Handling an event copies the timeline: its cost grows with the number of events held, whether the history is kept or not.
+ */
+const COMPACTION_INTERVAL = 100;
 
 /**
  * Reads the run manifest from disk if it exists.
@@ -109,18 +173,17 @@ async function readManifest(path: string): Promise<Partial<RunManifest>> {
  */
 function buildManifest(
   previous: Partial<RunManifest>,
-  options: RunSimulationOptions | undefined,
-  defaults: { runId: string; runRoot: string },
+  options: HistoryOptions | undefined,
+  runRoot: string,
 ): RunManifest {
   const now = new Date().toISOString();
   const dumpDirectory = previous.dump?.directory ??
-    `${defaults.runRoot}/${DEFAULT_DUMP_DIR}`;
-  const dumpInterval = options?.dumpInterval ?? previous.dump?.interval ??
+    `${runRoot}/${DEFAULT_DUMP_DIR}`;
+  const dumpInterval = options?.interval ?? previous.dump?.interval ??
     DEFAULT_DUMP_INTERVAL;
 
   return {
-    runId: previous.runId ?? defaults.runId,
-    runRoot: defaults.runRoot,
+    runRoot,
     createdAt: previous.createdAt ?? now,
     updatedAt: now,
     dump: {
@@ -131,23 +194,23 @@ function buildManifest(
     },
     metadata: {
       ...(previous.metadata ?? {}),
-      ...(options?.runMetadata ?? {}),
+      ...(options?.metadata ?? {}),
     },
   };
 }
 
 /**
- * Determines if it's time to dump the current simulation state based on the configured interval and the number of deltas accumulated since the last dump.
+ * Determines if it's time to close the current history window based on the configured interval and the number of deltas accumulated since the last one.
  */
 export function shouldDump(
-  deltaEncoded: DeltaEncodedSimulation,
+  window: HistoryWindow,
   interval: number,
 ): boolean {
-  return deltaEncoded.deltas.length >= interval;
+  return window.deltas.length >= interval;
 }
 
 /**
- * Dumps the current simulation state to disk and return dump file details.
+ * Dumps a serialized history window to disk and return dump file details.
  * Files are written to the run dump directory using the configured sequence/time pattern.
  * The file name uses a simple monotonic sequence and simulation time, e.g. `1-t100.json`.
  * Returns the updated manifest.
@@ -182,22 +245,21 @@ export async function dumpToDisk(
 }
 
 /**
- * Initializes a simulation run: computes paths, reads any previous manifest from disk, builds the merged manifest, creates necessary directories, and writes the manifest.
+ * Initializes a simulation run in `directory`: computes paths, reads any previous manifest from disk, builds the merged manifest, creates necessary directories, and writes the manifest.
  * Returns a `RunContext` for use in the main simulation loop.
  */
 export async function initializeRun(
-  options?: RunSimulationOptions,
+  directory: string,
+  options?: HistoryOptions,
 ): Promise<RunContext> {
-  const runId = options?.runId ?? crypto.randomUUID();
-  const runRoot = options?.runDirectory ?? `${DEFAULT_RUNS_DIR}/run-${runId}`;
-  const manifestPath = `${runRoot}/run.json`;
+  const manifestPath = `${directory}/run.json`;
 
   // Read previous manifest from disk if it exists
   const previous = await readManifest(manifestPath);
 
-  const manifest = buildManifest(previous, options, { runId, runRoot });
+  const manifest = buildManifest(previous, options, directory);
 
-  await Deno.mkdir(runRoot, { recursive: true });
+  await Deno.mkdir(directory, { recursive: true });
   await Deno.mkdir(manifest.dump.directory, { recursive: true });
 
   await persistRunManifest(manifest, manifestPath);
@@ -223,40 +285,61 @@ export async function persistRunManifest(
 /**
  * Runs the discrete-event simulation until:
  * - either no more events remain to process;
- * - or the simulation time reaches at least the specified `until` time;
- * - or the simulation reaches a point where the specified `until` event is processed.
+ * - or `until` returns `true` for the next event to process.
  * The simulation processes events in chronological order (earliest first).
- * Playback speed can be adjusted by passing a simulation rate (expressed in Hz).
- * Returns the final simulation state along with statistics about the run.
+ * Playback speed can be adjusted by passing a simulation rate (in simulation time units per wall-clock second).
+ * `init` is left untouched: it can be run again, e.g. to branch out from it.
+ * Returns the final simulation state along with statistics about the run, and its history if asked.
+ *
+ * Layers on memory management: the working state is compacted every `COMPACTION_INTERVAL` handled events, and the complete final state is put back together at the end.
+ * Nothing touches the disk unless `history.directory` is given.
  */
 export async function runSimulation(
   init: Simulation,
   options?: RunSimulationOptions,
-): Promise<SimulationResult<Simulation>> {
-  const { result, stats } = await runSimulationWithDeltas(init, options);
+): Promise<SimulationResult> {
+  const history = options?.history;
+  const context = history?.directory !== undefined
+    ? await initializeRun(history.directory, history)
+    : undefined;
+  const interval = context?.manifest.dump.interval ?? history?.interval ??
+    DEFAULT_DUMP_INTERVAL;
 
-  return {
-    result: result.current,
-    stats,
+  // Complete state, accumulated at each compaction; starts with everything `init` holds
+  const full: Pick<Simulation, "timeline" | "states"> = {
+    timeline: { events: {}, status: {}, transitions: [] },
+    states: {},
   };
-}
+  absorbWorkingState(full, init, 0);
 
-/**
- * Runs the simulation and exposes the delta-encoded representation.
- * Layers on memory management: delta accumulation, periodic dumps, state pruning, and final reconstruction from disk when dumps have been written.
- */
-export async function runSimulationWithDeltas(
-  init: Simulation,
-  options?: RunSimulationOptions,
-): Promise<SimulationResult<DeltaEncodedSimulation>> {
-  const context = await initializeRun(options);
-
-  const encoded: DeltaEncodedSimulation = {
-    base: { ...init },
+  // Working state since the last compaction: `current` is the state the loop advances, finished events are pruned from it at each compaction
+  // Every transition of `base` is already held by `full`
+  const working: HistoryWindow & { current: Simulation } = {
+    base: init,
     deltas: [],
-    current: { ...init },
+    current: init,
   };
-  const dumps: string[] = [];
+
+  // Current history window, and the windows kept in memory
+  const window: HistoryWindow = { base: init, deltas: [] };
+  const windows: HistoryWindow[] = [];
+
+  // Closes the current history window: writes it to disk, or keeps it in memory
+  const closeWindow = async () => {
+    if (context) {
+      const dump = await dumpToDisk(
+        serializeForDump(window),
+        working.current.currentTime,
+        context,
+      );
+      context.manifest = dump.manifest;
+    } else {
+      windows.push({ base: window.base, deltas: window.deltas });
+    }
+
+    window.base = working.current;
+    window.deltas = [];
+  };
 
   // Initialize heap from starting simulation state
   const heap = buildHeap(init);
@@ -264,19 +347,34 @@ export async function runSimulationWithDeltas(
   // Main simulation loop
   const start = performance.now();
   while (true) {
-    const [next, more] = advance(encoded.current, heap);
-    if (!more) break;
+    const next = nextEvent(working.current, heap);
+    if (!next) break;
+
+    if (options?.until?.(working.current, next)) break;
+
+    if (options?.rate) {
+      const wait = (next.scheduledAt - working.current.currentTime) * 1000 /
+        options.rate;
+      if (wait > 0) {
+        await delay(wait);
+
+        // The condition may have changed during the wait (e.g. a pause asked from outside the loop)
+        if (options.until?.(working.current, next)) break;
+      }
+    }
+
+    const [after] = advance(working.current, heap);
 
     // Record the diff from the previous state to the next and advance the current pointer
-    const delta = createDelta(encoded.current, next);
-    encoded.deltas.push(delta);
-    encoded.current = next;
+    const delta = createDelta(working.current, after);
+    working.deltas.push(delta);
+    working.current = after;
 
     // Push newly scheduled events onto the heap
     // delta.e contains events added this step; Waiting events are excluded (not yet schedulable)
     for (const op of delta.e) {
-      if (next.timeline.status[op.key] === EventStatus.Scheduled) {
-        const event = next.timeline.events[op.key];
+      if (after.timeline.status[op.key] === EventStatus.Scheduled) {
+        const event = after.timeline.events[op.key];
         heapPush(heap, {
           scheduledAt: event.scheduledAt,
           priority: event.priority,
@@ -285,144 +383,77 @@ export async function runSimulationWithDeltas(
       }
     }
 
-    if (options?.rate) await delay(options.rate);
-    if (options && shouldTerminate(encoded.current, options)) break;
-
-    if (shouldDump(encoded, context.manifest.dump.interval)) {
-      // Flush accumulated deltas to disk and record the dump path
-      const dump = await dumpToDisk(
-        serializeForDump(encoded),
-        encoded.current.currentTime,
-        context,
-      );
-      dumps.push(dump.path);
-      context.manifest = dump.manifest;
-
-      // Compact in-memory state: history is now safely on disk, we can drop it
+    if (working.deltas.length >= COMPACTION_INTERVAL) {
+      // Compact the working state: what it holds is now safely in `full`, we can drop the finished events
       // Make the pruned state the new base for future deltas
-      const compacted = pruneWorkingState(encoded.current);
-      encoded.base = compacted;
-      encoded.deltas = [];
-      encoded.current = compacted;
+      absorbWorkingState(
+        full,
+        working.current,
+        working.base.timeline.transitions.length,
+      );
+      const compacted = pruneWorkingState(working.current);
+      working.base = compacted;
+      working.deltas = [];
+      working.current = compacted;
 
       // Rebuild heap from pruned state: finished events are gone, stale entries discarded
       const fresh = buildHeap(compacted);
       heap.entries = fresh.entries;
       heap.seq = fresh.seq;
     }
+
+    if (history) {
+      window.deltas.push(delta);
+      if (shouldDump(window, interval)) await closeWindow();
+    }
   }
 
-  // Flush any remaining deltas so loadRunHistory sees the complete history
-  // Only fires when there are prior periodic dumps to stitch with
-  // If no periodic dumps occurred the run is purely in-memory and the delta encoding is intact
-  // Also skipped when the loop exited exactly on a dump boundary (deltas already flushed)
-  if (dumps.length > 0 && encoded.deltas.length > 0) {
-    const dump = await dumpToDisk(
-      serializeForDump(encoded),
-      encoded.current.currentTime,
-      context,
-    );
-    dumps.push(dump.path);
-    context.manifest = dump.manifest;
-
-    // Prune so the tail passed to reconstructFullCurrent doesn't overlap with the dump
-    // Mirrors the periodic dump path: history is on disk, drop it from the working state
-    const compacted = pruneWorkingState(encoded.current);
-    encoded.base = compacted;
-    encoded.deltas = [];
-    encoded.current = compacted;
-  }
+  // Close the last window, unless the loop exited exactly on a window boundary
+  if (history && window.deltas.length > 0) await closeWindow();
 
   const stop = performance.now();
-  if (dumps.length > 0) {
-    // Produce a full-history view of the run
-    // Merge all dump files with the in-memory tail
-    const current = await reconstructFullCurrent(dumps, encoded.current);
-    encoded.base = current;
-    encoded.deltas = [];
-    encoded.current = current;
-  }
+
+  // Put the complete final state back together
+  absorbWorkingState(
+    full,
+    working.current,
+    working.base.timeline.transitions.length,
+  );
+  const result: Simulation = { ...working.current, ...full };
 
   return {
-    result: encoded,
+    result,
     stats: {
-      end: encoded.current.currentTime,
+      end: result.currentTime,
       duration: stop - start,
     },
+    ...(history && !context && { history: windows }),
   };
 }
 
 /**
- * Helper function to introduce a wall-clock delay based on desired simulation rate (in Hz).
- * If rate is not provided, executes immediately.
- * Otherwise, computes delay in milliseconds and times out accordingly.
+ * Helper function to introduce a wall-clock delay, in milliseconds.
  */
-function delay(rate: number): Promise<void> {
-  return new Promise((resolve) =>
-    setTimeout(resolve, rate > 0 ? 1000 / rate : 0)
-  );
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 /**
- * Reconstructs a full current state from dump files and an in-memory tail.
- * This restores replay-complete state for run outputs while allowing in-run pruning.
+ * Loads the history windows written to `directory` by previous `runSimulation` runs, in order.
+ * Each dump file is a self-contained window. Pass the result to `historyStates` to reconstruct the intermediate states, as with the windows of a run that kept its history in memory.
+ * Registries that are initialized in user code must be passed to the function.
+ * Returns an empty array if the directory or its dumps do not exist.
  */
-export async function reconstructFullCurrent(
-  dumps: string[],
-  tail: Simulation,
-): Promise<Simulation> {
-  const snapshots = await Promise.all(
-    dumps.map(async (dump) =>
-      deserializeLastSimulation(
-        await Deno.readTextFile(dump),
-        tail.processes,
-        tail.disciplines,
-        tail.predicates,
-      )
-    ),
-  );
-
-  if (snapshots.length === 0) {
-    return tail;
-  }
-
-  // Single-pass merge across all dump snapshots and the in-memory tail
-  const events: Record<string, Event> = {};
-  const status: Record<EventID, EventStatus> = {};
-  const transitions: EventTransition[] = [];
-  const states: Record<string, ProcessState> = {};
-
-  for (const snap of [...snapshots, tail]) {
-    Object.assign(events, snap.timeline.events);
-    Object.assign(status, snap.timeline.status);
-    for (const t of snap.timeline.transitions) transitions.push(t);
-    Object.assign(states, snap.states);
-  }
-
-  return {
-    ...tail,
-    timeline: { ...tail.timeline, events, status, transitions },
-    states,
-  };
-}
-
-/**
- * Reconstructs the full sequence of intermediate simulation states from the dump files written by a previous `runSimulationWithDeltas` run.
- * Each dump file is a self-contained delta-encoded window. This function loads them in sequence order, reconstructs the intermediate states within each window, and stitches the windows into a single chronological array, giving the same scrub-able history that would be available from `reconstructFromDeltas` on a run that fit entirely in memory.
- * The base of each subsequent window is skipped during stitching: it is the pruned snapshot used as a memory-management boundary, not a new simulation step, so it would otherwise duplicate the final time of the preceding window.
- */
-export async function loadRunHistory(
-  runDirectory: string,
-  processes: ProcessRegistry,
-  disciplines: DisciplineRegistry,
-  predicates: PredicateRegistry,
-): Promise<Simulation[]> {
+export async function loadHistory(
+  directory: string,
+  registries: SimulationRegistries,
+): Promise<HistoryWindow[]> {
   // Read the manifest to find the dump directory
   // May differ from the default if the run was initialized with a custom path
-  const manifestPath = `${runDirectory}/run.json`;
+  const manifestPath = `${directory}/run.json`;
   const manifest = await readManifest(manifestPath);
   const dumpDir = manifest.dump?.directory ??
-    `${runDirectory}/${DEFAULT_DUMP_DIR}`;
+    `${directory}/${DEFAULT_DUMP_DIR}`;
 
   // Collect all dump files
   const dumps: string[] = [];
@@ -437,8 +468,6 @@ export async function loadRunHistory(
     throw err;
   }
 
-  if (dumps.length === 0) return [];
-
   // Sort by the monotonic sequence prefix (e.g. "2-t400.json" -> 2)
   // parseInt stops at the first non-digit character, so no explicit split needed
   dumps.sort((a, b) => {
@@ -447,22 +476,10 @@ export async function loadRunHistory(
     return parseInt(nameA, 10) - parseInt(nameB, 10);
   });
 
-  const allStates: Simulation[] = [];
+  const windows: HistoryWindow[] = [];
   for (const file of dumps) {
-    const json = await Deno.readTextFile(file);
-    const states = deserializeSimulation(
-      json,
-      processes,
-      disciplines,
-      predicates,
-    );
-    if (allStates.length === 0) {
-      allStates.push(...states);
-    } else {
-      // states[0] (pruned base of this window) == last entry of the previous window
-      allStates.push(...states.slice(1));
-    }
+    windows.push(deserializeDump(await Deno.readTextFile(file), registries));
   }
 
-  return allStates;
+  return windows;
 }

@@ -119,11 +119,13 @@ Deno.test("heapPushWith / heapPopWith dequeue in min-heap order", () => {
   const entries: number[] = [];
   for (const n of [5, 2, 8, 1, 3]) heapPushWith(entries, n, numCmp);
 
-  const result: number[] = [];
-  let v: number | undefined;
-  while ((v = heapPopWith(entries, numCmp)) !== undefined) result.push(v);
+  const result = Array.from(
+    { length: entries.length },
+    () => heapPopWith(entries, numCmp),
+  );
 
   assertEquals(result, [1, 2, 3, 5, 8]);
+  assertEquals(heapPopWith(entries, numCmp), undefined);
 });
 
 Deno.test("heapPushWith / heapPopWith respect a reversed comparator (max-heap)", () => {

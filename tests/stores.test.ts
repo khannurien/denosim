@@ -496,14 +496,13 @@ Deno.test("buffered LIFO store at capacity applies discipline per queue", () => 
   assertEquals(sim.stores[store.id].buffer.entries.length, 1);
   assertEquals(sim.stores[store.id].putRequests.entries.length, 2);
 
-  const received: unknown[] = [];
-  for (let i = 0; i < 3; i++) {
+  const received = Array.from({ length: 3 }, () => {
     const consumer = createEvent<FooData>({
       scheduledAt: 1,
       process: { type: "none", data: { store: store.id } },
     });
-    received.push(get(sim, consumer, store.id).step.process.data?.["foo"]);
-  }
+    return get(sim, consumer, store.id).step.process.data?.["foo"];
+  });
 
   // A is the only buffered item; blocked producers then take the freed slot in LIFO order
   assertEquals(received, ["A", "C", "B"]);
@@ -1877,12 +1876,12 @@ Deno.test("a producer's next step sees its returned state, not the item it put",
   }
 
   // Runs a producer putting `{ n: 1 }` while returning a state where `n` is 2
-  // Returns the `n` seen by its next step
+  // Returns the `n` seen by its next step, once per run of that step
   async function seenAfterPut(capacity: number, consumerAt: number) {
     const sim = initializeSimulation();
     const store = initializeStore({ capacity });
     sim.stores = registerStore(sim, store);
-    let seen: number | undefined;
+    const seen: number[] = [];
 
     const producer: ProcessDefinition<{
       start: CountData;
@@ -1901,7 +1900,7 @@ Deno.test("a producer's next step sees its returned state, not the item it put",
           };
         },
         stop(_sim, _event, state) {
-          seen = state.data.n;
+          seen.push(state.data.n);
           return { state, next: [] };
         },
       },
@@ -1946,11 +1945,11 @@ Deno.test("a producer's next step sees its returned state, not the item it put",
   }
 
   // Consumer already waiting: direct handoff
-  assertEquals(await seenAfterPut(1, 0), 2);
+  assertEquals(await seenAfterPut(1, 0), [2]);
   // Buffered store: the item is held in the buffer
-  assertEquals(await seenAfterPut(1, 5), 2);
+  assertEquals(await seenAfterPut(1, 5), [2]);
   // Synchronous store: the producer blocks until the consumer arrives
-  assertEquals(await seenAfterPut(0, 5), 2);
+  assertEquals(await seenAfterPut(0, 5), [2]);
 });
 
 Deno.test("put serves filtered and unconditional consumers in discipline order", () => {

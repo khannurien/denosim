@@ -6,7 +6,7 @@ import type {
   ProcessDefinition,
   StateData,
 } from "../src/model.ts";
-import { QueueDiscipline } from "../src/model.ts";
+import { EventStatus, QueueDiscipline } from "../src/model.ts";
 import { get, initializeStore, put, registerStore } from "../src/stores.ts";
 import { runSimulation } from "../src/runner.ts";
 import {
@@ -321,7 +321,9 @@ async function runScenario(
   const stop = createEvent({ scheduledAt: SIM_TIME });
   sim.timeline = scheduleEvent(sim, stop);
 
-  const { result } = await runSimulation(sim, { untilEvent: stop });
+  const { result } = await runSimulation(sim, {
+    until: (sim) => sim.timeline.status[stop.id] === EventStatus.Finished,
+  });
 
   const latestByPatient = new Map<number, PatientData>();
   for (const processState of Object.values(result.states)) {

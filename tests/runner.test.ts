@@ -1,18 +1,17 @@
 import { assert, assertEquals, assertRejects } from "@std/assert";
 
-import type { DeltaEncodedSimulation } from "../src/memory.ts";
+import type { HistoryWindow } from "../src/memory.ts";
+import { historyStates } from "../src/memory.ts";
 import type { ProcessDefinition, Simulation, StateData } from "../src/model.ts";
 import { EventStatus } from "../src/model.ts";
 import {
   dumpToDisk,
   initializeRun,
-  loadRunHistory,
-  reconstructFullCurrent,
+  loadHistory,
   runSimulation,
-  runSimulationWithDeltas,
   shouldDump,
 } from "../src/runner.ts";
-import { serializeSimulation } from "../src/serialize.ts";
+import { serializeForDump } from "../src/serialize.ts";
 import {
   continueEvent,
   createEvent,
@@ -23,18 +22,14 @@ import {
 
 Deno.test("shouldDump depends on local delta window only", () => {
   const sim = initializeSimulation();
-  const deltaEncoded: DeltaEncodedSimulation = {
+  const window: HistoryWindow = {
     base: sim,
     deltas: [{ c: 1, e: [], es: [], et: [], s: [], st: [] }],
-    current: {
-      ...sim,
-      currentTime: 1,
-    },
   };
 
-  assertEquals(shouldDump(deltaEncoded, 2), false);
-  deltaEncoded.deltas.push({ c: 2, e: [], es: [], et: [], s: [], st: [] });
-  assertEquals(shouldDump(deltaEncoded, 2), true);
+  assertEquals(shouldDump(window, 2), false);
+  window.deltas.push({ c: 2, e: [], es: [], et: [], s: [], st: [] });
+  assertEquals(shouldDump(window, 2), true);
 });
 
 Deno.test("dumpToDisk writes a dump file", async () => {
@@ -42,21 +37,19 @@ Deno.test("dumpToDisk writes a dump file", async () => {
   await Deno.remove(dir, { recursive: true }).catch(() => {});
 
   const sim = initializeSimulation();
-  const deltaEncoded: DeltaEncodedSimulation = {
+  const window: HistoryWindow = {
     base: sim,
     deltas: [{ c: 1, e: [], es: [], et: [], s: [], st: [] }],
-    current: { ...sim, currentTime: 1 },
   };
 
-  const runContext = await initializeRun({ runDirectory: dir });
-  await dumpToDisk(serializeSimulation(deltaEncoded), 1, runContext);
+  const runContext = await initializeRun(dir);
+  await dumpToDisk(serializeForDump(window), 1, runContext);
   const stat = await Deno.stat(`${dir}/dumps/0-t1.json`);
   assert(stat.isFile);
 
   const raw = JSON.parse(await Deno.readTextFile(`${dir}/dumps/0-t1.json`));
   assertEquals(raw.deltas.length, 1);
   assertEquals(raw.base.currentTime, 0);
-  assertEquals(raw.current.currentTime, 1);
 
   await Deno.remove(dir, { recursive: true });
 });
@@ -68,7 +61,6 @@ Deno.test("initializeRun reuses existing manifest dump state", async () => {
 
   const now = new Date().toISOString();
   const manifest = {
-    runId: "resume-1",
     createdAt: now,
     updatedAt: now,
     runRoot: dir,
@@ -85,7 +77,7 @@ Deno.test("initializeRun reuses existing manifest dump state", async () => {
     JSON.stringify(manifest, null, 2),
   );
 
-  const context = await initializeRun({ runDirectory: dir });
+  const context = await initializeRun(dir);
   assertEquals(context.manifest.dump.directory, `${dir}/custom-dumps`);
   assertEquals(context.manifest.dump.interval, 7);
   assertEquals(context.manifest.dump.count, 42);
@@ -102,91 +94,11 @@ Deno.test("initializeRun rejects invalid run.json", async () => {
   await Deno.writeTextFile(`${dir}/run.json`, "{ not valid json");
 
   await assertRejects(
-    () => initializeRun({ runDirectory: dir, dumpInterval: 3 }),
+    () => initializeRun(dir, { interval: 3 }),
     SyntaxError,
   );
 
   await Deno.remove(dir, { recursive: true });
-});
-
-Deno.test("reconstructFullCurrent merges dump files with in-memory state", async () => {
-  const dir = "runs/test/reconstruct-full-current-test";
-  await Deno.remove(dir, { recursive: true }).catch(() => {});
-
-  // Create a simple process
-  const sim = initializeSimulation();
-  const simpleProcess: ProcessDefinition<{
-    start: StateData;
-  }> = {
-    type: "reconstruct-test",
-    initial: "start",
-    steps: {
-      start: (_sim, _event, state) => {
-        return {
-          state: { ...state, completed: true },
-          next: [],
-        };
-      },
-    },
-  };
-
-  sim.processes = registerProcess(sim, simpleProcess);
-
-  // Create and run first dump
-  const e1 = createEvent({
-    scheduledAt: 0,
-    process: { type: "reconstruct-test" },
-  });
-  sim.timeline = scheduleEvent(sim, e1);
-
-  await runSimulationWithDeltas(sim, {
-    runDirectory: dir,
-    dumpInterval: 1,
-  });
-
-  // Create dump file path
-  const dumpFiles = [
-    `${dir}/dumps/0-t0.json`,
-  ];
-
-  // Verify dump file exists
-  const dumpStat = await Deno.stat(dumpFiles[0]);
-  assert(dumpStat.isFile);
-
-  // Create in-memory tail with additional events
-  const tailSim = initializeSimulation();
-  tailSim.processes = sim.processes;
-  const e2 = createEvent({
-    scheduledAt: 1,
-    process: { type: "reconstruct-test" },
-  });
-  tailSim.timeline = scheduleEvent(tailSim, e2);
-  const { result } = await runSimulation(tailSim);
-
-  // Reconstruct full current state from dumps and tail
-  const reconstructed = await reconstructFullCurrent(dumpFiles, result);
-
-  // e1 comes from the dump file, e2 from the tail; both must be present
-  assert(
-    reconstructed.timeline.events[e1.id],
-    "e1 from dump must be present",
-  );
-  assert(reconstructed.timeline.events[e2.id], "e2 from tail must be present");
-  assertEquals(reconstructed.timeline.status[e1.id], EventStatus.Finished);
-  assertEquals(reconstructed.timeline.status[e2.id], EventStatus.Finished);
-
-  // Clean up
-  await Deno.remove(dir, { recursive: true });
-});
-
-Deno.test("reconstructFullCurrent handles no dumps", async () => {
-  const tail = initializeSimulation();
-
-  // Test with empty dump array
-  const reconstructed = await reconstructFullCurrent([], tail);
-
-  // Should return the tail unchanged
-  assertEquals(reconstructed, tail);
 });
 
 interface CounterState extends StateData {
@@ -229,53 +141,44 @@ function buildCounterSim(endTime: number): Simulation {
   return sim;
 }
 
-Deno.test("loadRunHistory returns empty array when run directory does not exist", async () => {
+Deno.test("loadHistory returns empty array when run directory does not exist", async () => {
   const sim = initializeSimulation();
-  const states = await loadRunHistory(
+  const windows = await loadHistory(
     `runs/test/nonexistent-${crypto.randomUUID()}`,
-    sim.processes,
-    sim.disciplines,
-    sim.predicates,
+    sim,
   );
-  assertEquals(states, []);
+  assertEquals(windows, []);
 });
 
-Deno.test("loadRunHistory returns empty array when no dump files exist", async () => {
+Deno.test("loadHistory returns empty array when no dump files exist", async () => {
   const dir = "runs/test/load-history-no-dumps";
   await Deno.remove(dir, { recursive: true }).catch(() => {});
 
   // initializeRun creates run.json and the dumps/ dir, but no dump files yet.
-  await initializeRun({ runDirectory: dir });
+  await initializeRun(dir);
 
   const sim = initializeSimulation();
-  const states = await loadRunHistory(
-    dir,
-    sim.processes,
-    sim.disciplines,
-    sim.predicates,
-  );
-  assertEquals(states, []);
+  const windows = await loadHistory(dir, sim);
+  assertEquals(windows, []);
 
   await Deno.remove(dir, { recursive: true });
 });
 
-Deno.test("loadRunHistory reconstructs states from a single dump file", async () => {
+Deno.test("loadHistory reconstructs states from dump files", async () => {
   const dir = "runs/test/load-history-single-dump";
   await Deno.remove(dir, { recursive: true }).catch(() => {});
 
-  // 3 events at t=1,2,3; dumpInterval=2.
+  // 3 events at t=1,2,3; interval=2.
   // Dump 0 (0-t2.json): base(ct=0) + deltas for t=1,2 → states [ct=0,1,2].
-  // Dump 1 (1-t3.json): final flush, base=pruned(ct=2) + delta for t=3 → states [ct=2,3].
-  // Stitched (states[0] of dump 1 skipped as pruned boundary): [ct=0,1,2,3].
+  // Dump 1 (1-t3.json): final flush, base(ct=2) + delta for t=3 → states [ct=2,3].
+  // Stitched (base of dump 1 skipped: it is the last state of dump 0): [ct=0,1,2,3].
   const sim = buildCounterSim(3);
-  await runSimulationWithDeltas(sim, { runDirectory: dir, dumpInterval: 2 });
+  await runSimulation(sim, { history: { directory: dir, interval: 2 } });
 
-  const states = await loadRunHistory(
-    dir,
-    sim.processes,
-    sim.disciplines,
-    sim.predicates,
-  );
+  const windows = await loadHistory(dir, sim);
+  assertEquals(windows.length, 2);
+
+  const states = historyStates(windows);
 
   assertEquals(states.length, 4);
   assertEquals(states[0].currentTime, 0);
@@ -286,24 +189,19 @@ Deno.test("loadRunHistory reconstructs states from a single dump file", async ()
   await Deno.remove(dir, { recursive: true });
 });
 
-Deno.test("loadRunHistory stitches multiple dump windows without duplicating boundary times", async () => {
+Deno.test("loadHistory stitches multiple dump windows without duplicating boundary times", async () => {
   const dir = "runs/test/load-history-multi-dump";
   await Deno.remove(dir, { recursive: true }).catch(() => {});
 
-  // 6 events at t=1..6; dumpInterval=3 fires after t=3 and again after t=6.
+  // 6 events at t=1..6; interval=3 fires after t=3 and again after t=6.
   // Dump 0 (0-t3.json): base(ct=0) + deltas for t=1,2,3 → states [ct=0,1,2,3].
-  // Dump 1 (1-t6.json): base=pruned(ct=3) + deltas for t=4,5,6 → states [ct=3,4,5,6].
-  // When stitching, states[0] of dump 1 (the pruned ct=3 boundary) is skipped
+  // Dump 1 (1-t6.json): base(ct=3) + deltas for t=4,5,6 → states [ct=3,4,5,6].
+  // When stitching, the base of dump 1 (the ct=3 boundary) is skipped
   // so ct=3 appears exactly once in the result (from dump 0).
   const sim = buildCounterSim(6);
-  await runSimulationWithDeltas(sim, { runDirectory: dir, dumpInterval: 3 });
+  await runSimulation(sim, { history: { directory: dir, interval: 3 } });
 
-  const states = await loadRunHistory(
-    dir,
-    sim.processes,
-    sim.disciplines,
-    sim.predicates,
-  );
+  const states = historyStates(await loadHistory(dir, sim));
 
   assertEquals(states.length, 7);
   assertEquals(
@@ -314,22 +212,17 @@ Deno.test("loadRunHistory stitches multiple dump windows without duplicating bou
   await Deno.remove(dir, { recursive: true });
 });
 
-Deno.test("loadRunHistory sorts dump files by sequence number, not lexicographically", async () => {
+Deno.test("loadHistory sorts dump files by sequence number, not lexicographically", async () => {
   const dir = "runs/test/load-history-sort";
   await Deno.remove(dir, { recursive: true }).catch(() => {});
 
-  // 22 events at t=1..22; dumpInterval=2 produces 11 dump files (0-t2.json … 10-t22.json).
+  // 22 events at t=1..22; interval=2 produces 11 dump files (0-t2.json … 10-t22.json).
   // A lexicographic sort would place "10-t22.json" between "1-t4.json" and "2-t6.json",
   // corrupting the state sequence. The correct sort uses the integer sequence prefix.
   const sim = buildCounterSim(22);
-  await runSimulationWithDeltas(sim, { runDirectory: dir, dumpInterval: 2 });
+  await runSimulation(sim, { history: { directory: dir, interval: 2 } });
 
-  const states = await loadRunHistory(
-    dir,
-    sim.processes,
-    sim.disciplines,
-    sim.predicates,
-  );
+  const states = historyStates(await loadHistory(dir, sim));
 
   // With correct sort the last state must be ct=22.
   // With lexicographic sort "10" sorts before "2", so the last processed window
@@ -337,20 +230,21 @@ Deno.test("loadRunHistory sorts dump files by sequence number, not lexicographic
   assertEquals(states[states.length - 1].currentTime, 22);
 
   // All times must be monotonically non-decreasing.
-  for (let i = 1; i < states.length; i++) {
+  for (const [i, state] of states.entries()) {
+    if (i === 0) continue;
     assert(
-      states[i].currentTime >= states[i - 1].currentTime,
-      `time went backward at index ${i}: ${states[i - 1].currentTime} → ${
-        states[i].currentTime
-      }`,
+      state.currentTime >= states[i - 1].currentTime,
+      `time went backward at index ${i}: ${
+        states[i - 1].currentTime
+      } → ${state.currentTime}`,
     );
   }
 
   await Deno.remove(dir, { recursive: true });
 });
 
-Deno.test("loadRunHistory rethrows errors other than NotFound", async () => {
-  // The catch block in loadRunHistory only suppresses Deno.errors.NotFound.
+Deno.test("loadHistory rethrows errors other than NotFound", async () => {
+  // The catch block in loadHistory only suppresses Deno.errors.NotFound.
   // Any other error (e.g. NotADirectory when the dump path is a file) must be re-thrown.
   const dir = `runs/test/load-history-rethrow-${crypto.randomUUID()}`;
   await Deno.mkdir(dir, { recursive: true });
@@ -361,7 +255,7 @@ Deno.test("loadRunHistory rethrows errors other than NotFound", async () => {
 
   const sim = initializeSimulation();
   await assertRejects(
-    () => loadRunHistory(dir, sim.processes, sim.disciplines, sim.predicates),
+    () => loadHistory(dir, sim),
   );
 
   await Deno.remove(dir, { recursive: true });
@@ -369,21 +263,19 @@ Deno.test("loadRunHistory rethrows errors other than NotFound", async () => {
 
 Deno.test("shouldDump returns false when deltas array is empty", () => {
   const sim = initializeSimulation();
-  const deltaEncoded: DeltaEncodedSimulation = {
+  const window: HistoryWindow = {
     base: sim,
     deltas: [],
-    current: sim,
   };
-  assertEquals(shouldDump(deltaEncoded, 1), false);
+  assertEquals(shouldDump(window, 1), false);
 });
 
-Deno.test("initializeRun merges runMetadata into the manifest", async () => {
+Deno.test("initializeRun merges metadata into the manifest", async () => {
   const dir = "runs/test/run-metadata-test";
   await Deno.remove(dir, { recursive: true }).catch(() => {});
 
-  const context = await initializeRun({
-    runDirectory: dir,
-    runMetadata: { env: "ci", version: 42 },
+  const context = await initializeRun(dir, {
+    metadata: { env: "ci", version: 42 },
   });
 
   assertEquals(context.manifest.metadata?.["env"], "ci");
@@ -393,6 +285,103 @@ Deno.test("initializeRun merges runMetadata into the manifest", async () => {
   const raw = JSON.parse(await Deno.readTextFile(context.manifestPath));
   assertEquals(raw.metadata?.["env"], "ci");
   assertEquals(raw.metadata?.["version"], 42);
+
+  await Deno.remove(dir, { recursive: true });
+});
+
+Deno.test("runSimulation returns a complete final state across compactions", async () => {
+  // 250 events at t=1..250: the working state is compacted more than once along the way
+  const sim = buildCounterSim(250);
+  const { result, history } = await runSimulation(sim);
+
+  assertEquals(history, undefined);
+  assertEquals(result.currentTime, 250);
+  assertEquals(Object.keys(result.timeline.events).length, 250);
+  assert(
+    Object.values(result.timeline.status).every((status) =>
+      status === EventStatus.Finished
+    ),
+  );
+  assertEquals(Object.keys(result.states).length, 250);
+
+  // Each event is scheduled once and finished once: no transition is lost or duplicated
+  assertEquals(result.timeline.transitions.length, 500);
+  assertEquals(
+    new Set(result.timeline.transitions.map((t) => `${t.id}:${t.status}`)).size,
+    500,
+  );
+});
+
+Deno.test("runSimulation leaves its input untouched", async () => {
+  const sim = buildCounterSim(250);
+  const before = JSON.stringify(sim);
+
+  await runSimulation(sim);
+
+  assertEquals(JSON.stringify(sim), before);
+});
+
+Deno.test("runSimulation keeps the same history in memory and on disk", async () => {
+  const dir = "runs/test/history-memory-disk";
+  await Deno.remove(dir, { recursive: true }).catch(() => {});
+
+  // Windows of 60 events and compactions do not fall on the same events
+  const memory = await runSimulation(buildCounterSim(250), {
+    history: { interval: 60 },
+  });
+  const sim = buildCounterSim(250);
+  const disk = await runSimulation(sim, {
+    history: { directory: dir, interval: 60 },
+  });
+
+  assert(memory.history);
+  assertEquals(memory.history.length, 5);
+  assertEquals(disk.history, undefined);
+
+  const fromMemory = historyStates(memory.history);
+  const fromDisk = historyStates(await loadHistory(dir, sim));
+  assertEquals(fromMemory.length, 251);
+  assertEquals(fromDisk.length, 251);
+
+  // Every state is complete: after k handled events, k events are finished, whatever was pruned along the way
+  const finished = (state: Simulation) =>
+    Object.values(state.timeline.status).filter((status) =>
+      status === EventStatus.Finished
+    ).length;
+  for (const k of [0, 1, 59, 60, 61, 100, 101, 249, 250]) {
+    assertEquals(fromMemory[k].currentTime, k);
+    assertEquals(finished(fromMemory[k]), k);
+    assertEquals(fromDisk[k].currentTime, k);
+    assertEquals(finished(fromDisk[k]), k);
+  }
+
+  await Deno.remove(dir, { recursive: true });
+});
+
+Deno.test("runSimulation continues the history of a resumed run in the same directory", async () => {
+  const dir = "runs/test/history-resume";
+  await Deno.remove(dir, { recursive: true }).catch(() => {});
+
+  const sim = buildCounterSim(250);
+  const paused = await runSimulation(sim, {
+    until: (_sim, next) => next.scheduledAt > 130,
+    history: { directory: dir, interval: 60 },
+  });
+  assertEquals(paused.result.currentTime, 130);
+
+  const resumed = await runSimulation(paused.result, {
+    history: { directory: dir, interval: 60 },
+  });
+  assertEquals(resumed.result.currentTime, 250);
+
+  const states = historyStates(await loadHistory(dir, sim));
+  assertEquals(states.map((state) => state.currentTime), [
+    ...Array(251).keys(),
+  ]);
+  assertEquals(
+    states[250].timeline.transitions,
+    resumed.result.timeline.transitions,
+  );
 
   await Deno.remove(dir, { recursive: true });
 });

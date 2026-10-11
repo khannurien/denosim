@@ -14,7 +14,8 @@ import {
   put,
   registerStore,
 } from "../src/stores.ts";
-import { runSimulationWithDeltas } from "../src/runner.ts";
+import { historyStates } from "../src/memory.ts";
+import { runSimulation } from "../src/runner.ts";
 import {
   deserializeSimulation,
   serializeSimulation,
@@ -100,25 +101,18 @@ Deno.test("basic serialization", async () => {
 
   sim.timeline = scheduleEvent(sim, e);
 
-  const { result } = await runSimulationWithDeltas(sim);
+  const { result } = await runSimulation(sim);
 
   const json = serializeSimulation(result);
-  const recovered = deserializeSimulation(
-    json,
-    result.current.processes,
-    result.current.disciplines,
-    result.current.predicates,
-  );
+  const recovered = deserializeSimulation(json, result);
 
-  assertEquals(recovered.length, result.deltas.length + 1);
-  assertEquals(recovered[recovered.length - 1].currentTime, 0);
-  assertEquals(
-    Object.keys(recovered[recovered.length - 1].timeline.events).length,
-    1,
-  );
-  assertEquals(recovered[recovered.length - 1].states[e.id].data.value, 42);
+  assertEquals(recovered.currentTime, 0);
+  assertEquals(Object.keys(recovered.timeline.events).length, 1);
+  assertEquals(recovered.states[e.id].data.value, 42);
 
-  const restoredHandler = recovered[0].processes["dummy"].steps["start"];
+  // Registries are left out of the serialized simulation, and passed back in
+  assert(!("processes" in JSON.parse(json)));
+  const restoredHandler = recovered.processes["dummy"].steps["start"];
   assert(typeof restoredHandler === "function");
 });
 
@@ -135,16 +129,10 @@ Deno.test("process state serialization", async () => {
   });
   sim.timeline = scheduleEvent(sim, start);
 
-  const { result } = await runSimulationWithDeltas(sim);
-  const recovered = deserializeSimulation(
-    serializeSimulation(result),
-    result.current.processes,
-    result.current.disciplines,
-    result.current.predicates,
-  );
-  const stop = recovered[recovered.length - 1];
+  const { result } = await runSimulation(sim);
+  const stop = deserializeSimulation(serializeSimulation(result), result);
 
-  assertEquals(result.current.currentTime, 3);
+  assertEquals(result.currentTime, 3);
   assertEquals(finishedCount(stop), 4);
   assertEquals(maxCount(stop), 3);
 });
@@ -162,16 +150,15 @@ Deno.test("process resume across runs", async () => {
   });
   firstRun.timeline = scheduleEvent(firstRun, start);
 
-  const partial = await runSimulationWithDeltas(firstRun, { untilTime: 2 });
-  const recovered = deserializeSimulation(
+  const partial = await runSimulation(firstRun, {
+    until: (_sim, next) => next.scheduledAt > 2,
+  });
+  const restored = deserializeSimulation(
     serializeSimulation(partial.result),
-    partial.result.current.processes,
-    partial.result.current.disciplines,
-    partial.result.current.predicates,
+    partial.result,
   );
-  const restored = recovered[recovered.length - 1];
 
-  const resumed = await runSimulationWithDeltas(restored);
+  const resumed = await runSimulation(restored);
 
   const fullRun = initializeSimulation();
   fullRun.processes = registerProcess(fullRun, counter);
@@ -183,17 +170,11 @@ Deno.test("process resume across runs", async () => {
     },
   });
   fullRun.timeline = scheduleEvent(fullRun, fullStart);
-  const full = await runSimulationWithDeltas(fullRun);
+  const full = await runSimulation(fullRun);
 
-  assertEquals(
-    resumed.result.current.currentTime,
-    full.result.current.currentTime,
-  );
-  assertEquals(
-    finishedCount(resumed.result.current),
-    finishedCount(full.result.current),
-  );
-  assertEquals(maxCount(resumed.result.current), maxCount(full.result.current));
+  assertEquals(resumed.result.currentTime, full.result.currentTime);
+  assertEquals(finishedCount(resumed.result), finishedCount(full.result));
+  assertEquals(maxCount(resumed.result), maxCount(full.result));
 });
 
 Deno.test("process rewind", async () => {
@@ -209,23 +190,19 @@ Deno.test("process rewind", async () => {
   });
   sim.timeline = scheduleEvent(sim, start);
 
-  const { result } = await runSimulationWithDeltas(sim);
-  const timeline = deserializeSimulation(
-    serializeSimulation(result),
-    result.current.processes,
-    result.current.disciplines,
-    result.current.predicates,
-  );
+  const { result, history } = await runSimulation(sim, { history: {} });
+  assert(history);
+  const timeline = historyStates(history);
 
-  const rewindPoint = timeline[3];
-  const rewound = await runSimulationWithDeltas(rewindPoint);
-
-  assertEquals(rewound.result.current.currentTime, result.current.currentTime);
-  assertEquals(
-    finishedCount(rewound.result.current),
-    finishedCount(result.current),
+  const rewindPoint = deserializeSimulation(
+    serializeSimulation(timeline[3]),
+    result,
   );
-  assertEquals(maxCount(rewound.result.current), maxCount(result.current));
+  const rewound = await runSimulation(rewindPoint);
+
+  assertEquals(rewound.result.currentTime, result.currentTime);
+  assertEquals(finishedCount(rewound.result), finishedCount(result));
+  assertEquals(maxCount(rewound.result), maxCount(result));
 });
 
 Deno.test("serialize handles arrow-function handlers", async () => {
@@ -258,14 +235,9 @@ Deno.test("serialize handles arrow-function handlers", async () => {
   });
   sim.timeline = scheduleEvent(sim, event);
 
-  const { result } = await runSimulationWithDeltas(sim);
-  const recovered = deserializeSimulation(
-    serializeSimulation(result),
-    result.current.processes,
-    result.current.disciplines,
-    result.current.predicates,
-  );
-  const restoredHandler = recovered[0].processes["arrow"].steps["start"];
+  const { result } = await runSimulation(sim);
+  const recovered = deserializeSimulation(serializeSimulation(result), result);
+  const restoredHandler = recovered.processes["arrow"].steps["start"];
   assert(typeof restoredHandler === "function");
 });
 
@@ -298,14 +270,8 @@ Deno.test("store state survives serialization roundtrip", async () => {
   // Bypass the typed API to inject the store directly
   sim.stores = { "tag-store": store };
 
-  const { result } = await runSimulationWithDeltas(sim);
-  const recovered = deserializeSimulation(
-    serializeSimulation(result),
-    result.current.processes,
-    result.current.disciplines,
-    result.current.predicates,
-  );
-  const stop = recovered[recovered.length - 1];
+  const { result } = await runSimulation(sim);
+  const stop = deserializeSimulation(serializeSimulation(result), result);
 
   assertEquals(stop.stores["tag-store"].buffer.entries.length, 2);
   const tags = stop.stores["tag-store"].buffer.entries
@@ -325,29 +291,28 @@ Deno.test("recovered handler executes correctly on continued simulation", async 
   sim.timeline = scheduleEvent(sim, start);
 
   // Run only halfway; pending events must remain for the handler to fire later
-  const partial = await runSimulationWithDeltas(sim, { untilTime: 2 });
-  assertEquals(partial.result.current.currentTime, 2);
+  const partial = await runSimulation(sim, {
+    until: (_sim, next) => next.scheduledAt > 2,
+  });
+  assertEquals(partial.result.currentTime, 2);
   assert(
-    Object.values(partial.result.current.timeline.status).some(
+    Object.values(partial.result.timeline.status).some(
       (s) => s === EventStatus.Scheduled,
     ),
   );
 
-  const recovered = deserializeSimulation(
+  const restored = deserializeSimulation(
     serializeSimulation(partial.result),
-    partial.result.current.processes,
-    partial.result.current.disciplines,
-    partial.result.current.predicates,
+    partial.result,
   );
-  const restored = recovered[recovered.length - 1];
 
   // Continuing the simulation requires the recovered handler to fire
-  const { result } = await runSimulationWithDeltas(restored);
+  const { result } = await runSimulation(restored);
 
   // Handler must have advanced the counter to its limit
-  assertEquals(result.current.currentTime, 4);
-  assertEquals(maxCount(result.current), 4);
-  assertEquals(finishedCount(result.current), 5); // count 0→4 = 5 events
+  assertEquals(result.currentTime, 4);
+  assertEquals(maxCount(result), 4);
+  assertEquals(finishedCount(result), 5); // count 0→4 = 5 events
 });
 
 Deno.test("getWhereRequests survives serialization roundtrip", async () => {
@@ -376,14 +341,8 @@ Deno.test("getWhereRequests survives serialization roundtrip", async () => {
   const sim = initializeSimulation();
   sim.stores = { "fgr-store": store };
 
-  const { result } = await runSimulationWithDeltas(sim);
-  const recovered = deserializeSimulation(
-    serializeSimulation(result),
-    result.current.processes,
-    result.current.disciplines,
-    result.current.predicates,
-  );
-  const stop = recovered[recovered.length - 1];
+  const { result } = await runSimulation(sim);
+  const stop = deserializeSimulation(serializeSimulation(result), result);
 
   assertEquals(stop.stores["fgr-store"].getWhereRequests.length, 1);
   assertEquals(
@@ -474,29 +433,24 @@ Deno.test("pause/resume correctly resolves getWhere request after deserializatio
   sim.timeline = scheduleEvent(sim, schedEvent);
   sim.timeline = scheduleEvent(sim, prodEvent);
 
-  const partial = await runSimulationWithDeltas(sim, { untilTime: 0 });
-  assertEquals(partial.result.current.currentTime, 0);
+  const partial = await runSimulation(sim, {
+    until: (_sim, next) => next.scheduledAt > 0,
+  });
+  assertEquals(partial.result.currentTime, 0);
 
   // Scheduler must be blocked: request recorded with the predicate key.
   assertEquals(
-    partial.result.current.stores[TASK_STORE].getWhereRequests.length,
+    partial.result.stores[TASK_STORE].getWhereRequests.length,
     1,
   );
   assertEquals(
-    partial.result.current.stores[TASK_STORE].getWhereRequests[0]
-      .predicateType,
+    partial.result.stores[TASK_STORE].getWhereRequests[0].predicateType,
     PREDICATE_KEY,
   );
 
   // Serialize and deserialize, re-supplying both the process and predicate registries.
   const json = serializeSimulation(partial.result);
-  const recovered = deserializeSimulation(
-    json,
-    sim.processes,
-    sim.disciplines,
-    sim.predicates,
-  );
-  const restored = recovered[recovered.length - 1];
+  const restored = deserializeSimulation(json, sim);
 
   // getWhereRequests must survive the roundtrip.
   assertEquals(restored.stores[TASK_STORE].getWhereRequests.length, 1);
@@ -506,8 +460,8 @@ Deno.test("pause/resume correctly resolves getWhere request after deserializatio
   );
 
   // Resume: producer fires at t=1, resolves the getWhere request with taskId=2.
-  const { result } = await runSimulationWithDeltas(restored);
-  const schedulerState = Object.values(result.current.states).find(
+  const { result } = await runSimulation(restored);
+  const schedulerState = Object.values(result.states).find(
     (s) => s.type === "scheduler" && s.data["taskId"] === 2,
   );
   assert(

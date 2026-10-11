@@ -224,30 +224,26 @@ export function put<
 ): StoreResult {
   const { store, discipline } = resolveStore<S, K>(sim, event, id);
 
-  // Track the discipline-best getWhere request whose predicate accepts the item
-  let best: { req: GetWhereRequest; index: number } | null = null;
+  // Carries `data` so the predicate can inspect it; only built when a getWhere request is pending
+  const itemEvent = store.getWhereRequests.length > 0
+    ? continueEvent(event, sim.currentTime, data)
+    : undefined;
 
-  if (store.getWhereRequests.length > 0) {
-    // Carries `data` so the predicate can inspect it
-    const itemEvent = continueEvent(event, sim.currentTime, data);
+  // Scan all getWhere requests; keep the discipline-best one whose predicate accepts the item
+  const best = itemEvent === undefined ? null : store.getWhereRequests.reduce<
+    { req: GetWhereRequest; index: number } | null
+  >((best, req, index) => {
+    // Look up the request's predicate by its registered key
+    const predicate = resolvePredicate(sim, event, req.predicateType);
 
-    // Scan all getWhere requests; keep the one that wins under the store discipline
-    for (let i = 0; i < store.getWhereRequests.length; i++) {
-      // Look up the request's predicate by its registered key
-      const req = store.getWhereRequests[i];
-      const predicate = resolvePredicate(sim, event, req.predicateType);
+    // Skip requests whose predicate rejects the item
+    if (!predicate(itemEvent)) return best;
 
-      // Skip requests whose predicate rejects the item
-      // Among those that accept, keep the discipline-best
-      if (!predicate(itemEvent)) continue;
-      if (
-        !best ||
-        discipline.comparator(req, best.req) < 0
-      ) {
-        best = { req, index: i };
-      }
-    }
-  }
+    // Among those that accept, keep the discipline-best
+    return !best || discipline.comparator(req, best.req) < 0
+      ? { req, index }
+      : best;
+  }, null);
 
   // Unconditional pending get requests: the best one by discipline is at the root of the heap
   const unconditional = store.getRequests.entries.at(0);

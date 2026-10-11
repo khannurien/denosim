@@ -1,68 +1,66 @@
-import type { DeltaEncodedSimulation } from "./memory.ts";
-import { applyDeltas, reconstructFromDeltas } from "./memory.ts";
-import type {
-  DisciplineRegistry,
-  PredicateRegistry,
-  ProcessRegistry,
-  Simulation,
-} from "./model.ts";
+import type { HistoryWindow } from "./memory.ts";
+import type { Simulation, SimulationRegistries } from "./model.ts";
 
 /**
  * The whole simulation should be completely serializable to JSON.
  * That allows to store the simulation state and resume it at any point.
  * This is useful for long-running simulations (e.g. for replaying or branch exploration).
+ * Registries hold functions and are left out; they are passed back in to `deserializeSimulation`.
  */
-export function serializeSimulation(
-  deltaEncoded: DeltaEncodedSimulation,
-): string {
-  return JSON.stringify(deltaEncoded);
+export function serializeSimulation(sim: Simulation): string {
+  const {
+    processes: _processes,
+    disciplines: _disciplines,
+    predicates: _predicates,
+    ...data
+  } = sim;
+
+  return JSON.stringify(data);
 }
 
 /**
- * Serializes only the base and deltas for on-disk dump files.
- * `current` is always reconstructable from `base + deltas` and is omitted to reduce file size.
- */
-export function serializeForDump(encoded: DeltaEncodedSimulation): string {
-  return JSON.stringify({ base: encoded.base, deltas: encoded.deltas });
-}
-
-/**
- * Restores simulation states from a JSON string produced by `serializeSimulation`.
+ * Restores a simulation from a JSON string produced by `serializeSimulation`.
  * Registries that are initialized in user code must be passed to the function.
  * The simulation can then be resumed from the point where it was serialized.
  */
 export function deserializeSimulation(
   data: string,
-  processes: ProcessRegistry,
-  disciplines: DisciplineRegistry,
-  predicates: PredicateRegistry,
-): Simulation[] {
-  const deltaEncoded: DeltaEncodedSimulation = JSON.parse(data);
-  const states = reconstructFromDeltas(deltaEncoded.base, deltaEncoded.deltas);
+  registries: SimulationRegistries,
+): Simulation {
+  const sim: Simulation = JSON.parse(data);
 
-  for (const sim of states) {
-    sim.processes = processes;
-    sim.predicates = predicates;
-    sim.disciplines = disciplines;
-  }
-
-  return states;
+  return {
+    ...sim,
+    processes: registries.processes,
+    disciplines: registries.disciplines,
+    predicates: registries.predicates,
+  };
 }
 
 /**
- * Like `deserializeSimulation` but returns only the final reconstructed state.
- * Use when intermediate states are not needed (e.g. resuming from a dump in reconstructFullCurrent).
+ * Serializes a history window for an on-disk dump file.
  */
-export function deserializeLastSimulation(
+export function serializeForDump(window: HistoryWindow): string {
+  return JSON.stringify({ base: window.base, deltas: window.deltas });
+}
+
+/**
+ * Restores a history window from a JSON string produced by `serializeForDump`.
+ * Registries that are initialized in user code must be passed to the function.
+ */
+export function deserializeDump(
   data: string,
-  processes: ProcessRegistry,
-  disciplines: DisciplineRegistry,
-  predicates: PredicateRegistry,
-): Simulation {
-  const deltaEncoded: DeltaEncodedSimulation = JSON.parse(data);
-  const sim = applyDeltas(deltaEncoded.base, deltaEncoded.deltas);
-  sim.processes = processes;
-  sim.predicates = predicates;
-  sim.disciplines = disciplines;
-  return sim;
+  registries: SimulationRegistries,
+): HistoryWindow {
+  const window: HistoryWindow = JSON.parse(data);
+
+  return {
+    base: {
+      ...window.base,
+      processes: registries.processes,
+      disciplines: registries.disciplines,
+      predicates: registries.predicates,
+    },
+    deltas: window.deltas,
+  };
 }
