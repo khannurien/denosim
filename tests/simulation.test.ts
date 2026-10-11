@@ -758,7 +758,7 @@ Deno.test("process state inheritance (fork)", async () => {
   assertEquals(results["worker3"], 30);
 });
 
-Deno.test("process state inheritance (exec)", async () => {
+Deno.test("process state inheritance (spawn)", async () => {
   interface FooData extends StateData {
     foobar: number;
   }
@@ -845,7 +845,7 @@ Deno.test("process state inheritance (exec)", async () => {
   assert(barStates.some((state) => state.data.foobar === -3.14));
 });
 
-Deno.test("process state inheritance (spawn)", async () => {
+Deno.test("process state inheritance (root process)", async () => {
   interface FooData extends StateData {
     foobar: number;
   }
@@ -916,6 +916,129 @@ Deno.test("process state inheritance (spawn)", async () => {
   );
   assert(barState);
   assertEquals(barState.data.foobar, -3.14);
+});
+
+Deno.test("process identifiers across continuation, spawn and root process", async () => {
+  const sim = initializeSimulation();
+
+  const driver: ProcessDefinition<{
+    start: StateData;
+    done: StateData;
+  }> = {
+    type: "driver",
+    initial: "start",
+    steps: {
+      start(_sim, event, state) {
+        return {
+          state: { ...state, step: "done" },
+          next: [
+            continueEvent(event, 1),
+            createEvent({
+              parent: event.id,
+              scheduledAt: 2,
+              process: { type: "spawned" },
+            }),
+            createEvent({ scheduledAt: 3, process: { type: "root" } }),
+          ],
+        };
+      },
+      done(_sim, _event, state) {
+        return { state, next: [] };
+      },
+    },
+  };
+
+  const worker = (type: string): ProcessDefinition<{ start: StateData }> => ({
+    type,
+    initial: "start",
+    steps: {
+      start(sim, event, state) {
+        // Runs twice, so that identifiers are also checked on a worker's continuation
+        return {
+          state,
+          next: sim.currentTime < 5 ? [continueEvent(event, 5)] : [],
+        };
+      },
+    },
+  });
+
+  sim.processes = registerProcess(sim, driver);
+  sim.processes = registerProcess(sim, worker("spawned"));
+  sim.processes = registerProcess(sim, worker("root"));
+
+  const e1 = createEvent({ scheduledAt: 0, process: { type: "driver" } });
+  sim.timeline = scheduleEvent(sim, e1);
+
+  const { result } = await runSimulation(sim);
+  const states = Object.values(result.state);
+
+  // Both driver steps belong to the same process, identified by the event that started it
+  const driverStates = states.filter((state) => state.type === "driver");
+  assertEquals(driverStates.length, 2);
+  assert(driverStates.every((state) => state.id === e1.id));
+  assert(driverStates.every((state) => state.parent === undefined));
+
+  // A spawned process has its own ID and records its spawner, including on its continuation
+  const spawned = states.filter((state) => state.type === "spawned");
+  assertEquals(spawned.length, 2);
+  assert(spawned[0].id !== e1.id);
+  assert(spawned.every((state) => state.id === spawned[0].id));
+  assert(spawned.every((state) => state.parent === e1.id));
+
+  // A root process has its own ID and no parent
+  const root = states.filter((state) => state.type === "root");
+  assertEquals(root.length, 2);
+  assert(root[0].id !== e1.id && root[0].id !== spawned[0].id);
+  assert(root.every((state) => state.id === root[0].id));
+  assert(root.every((state) => state.parent === undefined));
+});
+
+Deno.test("continuation without data sees the state returned by the handler", async () => {
+  interface FooData extends StateData {
+    count: number;
+  }
+
+  const sim = initializeSimulation();
+  const seen: number[] = [];
+
+  const foo: ProcessDefinition<{
+    start: FooData;
+  }> = {
+    type: "foo",
+    initial: "start",
+    steps: {
+      start(sim, event, state) {
+        seen.push(state.data.count);
+
+        return {
+          state: {
+            ...state,
+            data: { ...state.data, count: state.data.count + 1 },
+          },
+          // No data passed: the initial payload must not shadow the updated state
+          next: sim.currentTime < 2
+            ? [continueEvent(event, sim.currentTime + 1)]
+            : [],
+        };
+      },
+    },
+  };
+
+  sim.processes = registerProcess(sim, foo);
+
+  const e1 = createEvent<FooData>({
+    scheduledAt: 0,
+    process: {
+      type: "foo",
+      data: { count: 0 },
+    },
+  });
+
+  sim.timeline = scheduleEvent(sim, e1);
+
+  await runSimulation(sim);
+
+  assertEquals(seen, [0, 1, 2]);
 });
 
 Deno.test("default none process is a no-op", async () => {
@@ -1025,6 +1148,52 @@ Deno.test("runSimulation rejects when event references unregistered process type
   );
 });
 
+Deno.test("runSimulation rejects when event references a parent that was never handled", async () => {
+  const sim = initializeSimulation();
+  const event = createEvent({ parent: "unknown", scheduledAt: 0 });
+  sim.timeline = scheduleEvent(sim, event);
+
+  await assertRejects(
+    () => runSimulation(sim),
+    RangeError,
+    "Parent state not found for event",
+  );
+});
+
+Deno.test("runSimulation rejects when a continuation changes process type", async () => {
+  const sim = initializeSimulation();
+
+  const foo: ProcessDefinition<{
+    start: StateData;
+  }> = {
+    type: "foo",
+    initial: "start",
+    steps: {
+      start(_sim, event, state) {
+        const other = createEvent({
+          parent: event.id,
+          scheduledAt: 1,
+          process: { type: "none", inheritStep: true },
+        });
+
+        return { state, next: [other] };
+      },
+    },
+  };
+
+  sim.processes = registerProcess(sim, foo);
+  sim.timeline = scheduleEvent(
+    sim,
+    createEvent({ scheduledAt: 0, process: { type: "foo" } }),
+  );
+
+  await assertRejects(
+    () => runSimulation(sim),
+    TypeError,
+    "Event cannot continue a process of another type",
+  );
+});
+
 Deno.test("registerPredicate registers a predicate that can be looked up and called", () => {
   const sim = initializeSimulation();
 
@@ -1081,6 +1250,18 @@ Deno.test("finishEvent marks event as Finished and appends a transition", () => 
   assertEquals(last.id, event.id);
   assertEquals(last.state, EventState.Finished);
   assertEquals(last.at, sim.currentTime);
+});
+
+Deno.test("finishEvent leaves an already finished event as is", () => {
+  const sim = initializeSimulation();
+  const event = createEvent({ scheduledAt: 0 });
+  sim.timeline = scheduleEvent(sim, event);
+  sim.timeline = finishEvent(sim, event);
+
+  const finished = sim.timeline;
+
+  // No second `Finished` transition is appended
+  assertEquals(finishEvent(sim, event), finished);
 });
 
 Deno.test("shouldTerminate fires when both untilTime and untilEvent are satisfied", () => {

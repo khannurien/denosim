@@ -3,6 +3,7 @@ import type {
   CreateStoreOptions,
   DisciplineDefinition,
   Event,
+  FilteredGetRequest,
   Predicate,
   PredicateType,
   Simulation,
@@ -93,40 +94,63 @@ function storeQueuePopWhere<T extends StateData>(
 }
 
 /**
- * Advances `event` to its next step. `event.id` becomes the parent of the new event.
- * Pass `data` to replace the payload; use `options` to set `waiting`, `priority`, etc.
+ * Removes `event` from a `StoreQueue` heap in `O(N log N)`, rebuilding the heap from the remaining entries.
+ * Returns a new `StoreQueue`; the `seq` counter is preserved.
+ */
+function storeQueueRemove<T extends StateData>(
+  queue: StoreQueue<T>,
+  event: Event,
+  discipline: DisciplineDefinition,
+): StoreQueue<T> {
+  const comparator = disciplineToQueueComparator<T>(discipline);
+  const entries: StoreQueueEntry<T>[] = [];
+
+  for (const entry of queue.entries) {
+    if (entry.event.id !== event.id) heapPushWith(entries, entry, comparator);
+  }
+
+  return { entries, seq: queue.seq };
+}
+
+/**
+ * Advances `event` to its next step, at `scheduledAt`. `event.id` becomes the parent of the new event.
+ * Pass `data` to attach a payload, merged over the process data on the next step; without it, the next step sees the state returned by the handler as is.
+ * Use `options` to set `waiting`, `priority`, etc.
  */
 export function continueEvent<T extends StateData>(
-  event: Event<T>,
-  currentTime: Timestamp,
+  event: Event,
+  scheduledAt: Timestamp,
   data?: T,
   options?: Pick<CreateEventOptions, "waiting" | "priority">,
 ): Event<T> {
   return createEvent({
     parent: event.id,
-    scheduledAt: currentTime,
+    scheduledAt,
     ...options,
     process: data !== undefined
-      ? { ...event.process, inheritStep: true, data: { ...data } }
-      : { ...event.process, inheritStep: true },
+      ? { type: event.process.type, inheritStep: true, data: { ...data } }
+      : { type: event.process.type, inheritStep: true },
   });
 }
 
 /**
- * Resumes a waiting event with new data. `blocked.parent` becomes the parent of the new event.
- * Used when a producer delivers to a blocked consumer, or vice-versa: the blocked event provides the process step to resume; the data comes from the other side.
+ * Resumes a waiting event at `scheduledAt`. `blocked.parent` becomes the parent of the new event.
+ * Used when a producer delivers to a blocked consumer, or vice-versa: the blocked event provides the process step to resume.
+ * Pass `data` to deliver a payload (an item to a blocked consumer); without it, the resumed step sees the state returned by the handler as is (a blocked producer).
  */
 export function resumeEvent<T extends StateData>(
   blocked: Event<StateData>,
-  currentTime: Timestamp,
-  data: T,
+  scheduledAt: Timestamp,
+  data?: T,
   options?: Pick<CreateEventOptions, "priority">,
 ): Event<T> {
   return createEvent({
     parent: blocked.parent,
-    scheduledAt: currentTime,
+    scheduledAt,
     ...options,
-    process: { ...blocked.process, inheritStep: true, data: { ...data } },
+    process: data !== undefined
+      ? { type: blocked.process.type, inheritStep: true, data: { ...data } }
+      : { type: blocked.process.type, inheritStep: true },
   });
 }
 
@@ -226,11 +250,11 @@ function resolvePredicate(
  * Throws `TypeError` if missing.
  */
 function resolvePayload<T extends StateData>(
-  storeEvent: Event,
+  storeEvent: Event<T>,
   sim: Simulation,
   requestEvent: Event,
 ): T {
-  const payload = storeEvent.process.data as T | undefined;
+  const payload = storeEvent.process.data;
   if (payload === undefined) {
     throw new TypeError(
       `Store payload is missing for event: ${storeEvent.id}` +
@@ -241,9 +265,8 @@ function resolvePayload<T extends StateData>(
 }
 
 /**
- * Sends `data` to a store on behalf of `event`. Four cases:
- * - Unconditional pending consumer: immediate handoff by discipline order;
- * - Filtered pending consumer: immediate handoff;
+ * Sends `data` to a store on behalf of `event`. Three cases:
+ * - Pending consumer, unconditional or filtered with a predicate accepting the item: immediate handoff to the best one by discipline;
  * - Blocking store, or non-blocking store at capacity: the producer blocks;
  * - Non-blocking store with available capacity: the data is buffered.
  * Mutates `sim.stores` directly and returns a `StoreResult` describing the continuation.
@@ -254,14 +277,75 @@ export function put<
   T extends S[K] = S[K],
 >(
   sim: Simulation<S>,
-  event: Event<T>,
+  event: Event,
   id: K,
   data: T,
-): StoreResult<T> {
+): StoreResult {
   const { store, discipline } = resolveStore<S, K>(sim, event, id);
 
-  // Check for unconditional pending get requests
-  if (store.getRequests.entries.length > 0) {
+  // Track the discipline-best filtered waiter (getWhere) whose predicate accepts the item
+  let best: { req: FilteredGetRequest; index: number } | null = null;
+
+  if (store.filteredGetRequests.length > 0) {
+    // Carries `data` so the predicate can inspect it
+    const itemEvent = continueEvent(event, sim.currentTime, data);
+
+    // Scan all filtered waiters; keep the one that wins under the store discipline
+    for (let i = 0; i < store.filteredGetRequests.length; i++) {
+      // Look up waiter's predicate by its registered key
+      const req = store.filteredGetRequests[i];
+      const predicate = resolvePredicate(sim, event, req.predicateType);
+
+      // Skip waiters whose predicate rejects the item
+      // Among those that accept, keep the discipline-best
+      if (!predicate(itemEvent)) continue;
+      if (
+        !best ||
+        discipline.comparator(
+            { event: req.event, index: req.seq },
+            { event: best.req.event, index: best.req.seq },
+          ) < 0
+      ) {
+        best = { req, index: i };
+      }
+    }
+  }
+
+  // Unconditional pending get requests: the best one by discipline is at the root of the heap
+  const unconditional = store.getRequests.entries.at(0);
+
+  // The filtered waiter is served if it wins over the unconditional one under the store discipline
+  if (
+    best && (
+      !unconditional ||
+      discipline.comparator(
+          { event: best.req.event, index: best.req.seq },
+          { event: unconditional.event, index: unconditional.seq },
+        ) < 0
+    )
+  ) {
+    const remaining = [
+      ...store.filteredGetRequests.slice(0, best.index),
+      ...store.filteredGetRequests.slice(best.index + 1),
+    ];
+
+    sim.stores = {
+      ...sim.stores,
+      [store.id]: { ...store, filteredGetRequests: remaining },
+    };
+
+    const updatedGet = resumeEvent(best.req.event, sim.currentTime, data);
+    const updatedPut = continueEvent(event, sim.currentTime);
+
+    return {
+      step: updatedPut,
+      resume: [updatedGet],
+      finish: [best.req.event],
+    };
+  }
+
+  // Otherwise the unconditional one is served, if any
+  if (unconditional) {
     const [getRequest, remaining] = storeQueuePop(
       store.getRequests,
       discipline,
@@ -278,60 +362,6 @@ export function put<
     return { step: updatedPut, resume: [updatedGet], finish: [getRequest] };
   }
 
-  // Check for filtered get requests (getWhere waiters)
-  if (store.filteredGetRequests.length > 0) {
-    // Carries `data` so the predicate can inspect it
-    const itemEvent = continueEvent(event, sim.currentTime, data);
-
-    // Track the discipline-best waiter whose predicate accepts the item
-    let best: {
-      req: { event: Event<StateData>; predicateType: PredicateType };
-      index: number;
-    } | null = null;
-
-    // Scan all filtered waiters; keep the one that wins under the store discipline
-    for (let i = 0; i < store.filteredGetRequests.length; i++) {
-      // Look up waiter's predicate by its registered key
-      const req = store.filteredGetRequests[i];
-      const predicate = resolvePredicate(sim, event, req.predicateType);
-
-      // Skip waiters whose predicate rejects the item
-      // Among those that accept, keep the discipline-best
-      if (!predicate(itemEvent)) continue;
-      if (
-        !best ||
-        discipline.comparator(
-            { event: req.event, index: i },
-            { event: best.req.event, index: best.index },
-          ) < 0
-      ) {
-        best = { req, index: i };
-      }
-    }
-
-    // Matching waiter found: hand off the item and resume both sides
-    if (best) {
-      const remaining = [
-        ...store.filteredGetRequests.slice(0, best.index),
-        ...store.filteredGetRequests.slice(best.index + 1),
-      ];
-
-      sim.stores = {
-        ...sim.stores,
-        [store.id]: { ...store, filteredGetRequests: remaining },
-      };
-
-      const updatedGet = resumeEvent(best.req.event, sim.currentTime, data);
-      const updatedPut = continueEvent(event, sim.currentTime);
-
-      return {
-        step: updatedPut,
-        resume: [updatedGet],
-        finish: [best.req.event],
-      };
-    }
-  }
-
   // Blocking store or non-blocking store without pending get request: block put
   if (store.blocking || store.buffer.entries.length >= store.capacity) {
     const blockedPut = continueEvent(event, sim.currentTime, data, {
@@ -346,17 +376,20 @@ export function put<
       },
     };
 
+    // The placeholder carries the item, but stands for the caller's continuation
     return { step: blockedPut };
   }
 
   // Non-blocking store with capacity available: use buffer
-  const updatedPut = continueEvent(event, sim.currentTime, data);
+  // The buffered item carries `data`; the producer's continuation does not, so its next step sees its own state
+  const item = continueEvent(event, sim.currentTime, data);
+  const updatedPut = continueEvent(event, sim.currentTime);
 
   sim.stores = {
     ...sim.stores,
     [store.id]: {
       ...store,
-      buffer: storeQueuePush(store.buffer, updatedPut, discipline),
+      buffer: storeQueuePush(store.buffer, item, discipline),
     },
   };
 
@@ -365,17 +398,65 @@ export function put<
 
 /**
  * Shared logic for `get` and `getWhere`.
- * Scans `putRequests` then `buffer` (non-blocking stores only) for a matching item, applying `predicate` if provided.
+ * Scans `buffer` (non-blocking stores only) then `putRequests` for a matching item, applying `predicate` if provided.
+ * When a buffered item is taken, a blocked producer (if any) takes the freed slot and is resumed.
  * Returns a `StoreResult` on an immediate match, * or `null` when no data is available and the caller must block.
  */
 function tryGetImmediate<T extends StateData>(
   sim: Simulation<StoreRegistry>,
-  event: Event<T>,
+  event: Event,
   store: Store<T>,
   discipline: DisciplineDefinition,
   predicate?: (event: Event<T>) => boolean,
 ): StoreResult<T> | null {
   const id = store.id;
+
+  // Non-blocking stores: scan buffer first, as buffered items entered the store before any blocked producer
+  if (!store.blocking && store.buffer.entries.length > 0) {
+    const result = predicate
+      ? storeQueuePopWhere(store.buffer, discipline, predicate)
+      : storeQueuePop(store.buffer, discipline);
+
+    // Match found: dequeue the buffered item and deliver it to the consumer
+    if (result) {
+      const [buffered, remaining] = result;
+
+      const payload = resolvePayload(buffered, sim, event);
+      const updatedGet = continueEvent(event, sim.currentTime, payload);
+
+      // No blocked producer: the freed slot stays empty
+      if (store.putRequests.entries.length === 0) {
+        sim.stores = { ...sim.stores, [id]: { ...store, buffer: remaining } };
+
+        return { step: updatedGet, item: payload };
+      }
+
+      // Blocked producer: the best one by discipline takes the freed slot and resumes
+      const [putRequest, pending] = storeQueuePop(
+        store.putRequests,
+        discipline,
+      );
+
+      // Its placeholder, which carries the item, becomes the buffered item
+      const updatedPut = resumeEvent(putRequest, sim.currentTime);
+
+      sim.stores = {
+        ...sim.stores,
+        [id]: {
+          ...store,
+          buffer: storeQueuePush(remaining, putRequest, discipline),
+          putRequests: pending,
+        },
+      };
+
+      return {
+        step: updatedGet,
+        item: payload,
+        resume: [updatedPut],
+        finish: [putRequest],
+      };
+    }
+  }
 
   // Scan putRequests for a matching blocked producer
   if (store.putRequests.entries.length > 0) {
@@ -392,30 +473,16 @@ function tryGetImmediate<T extends StateData>(
         [id]: { ...store, putRequests: remaining },
       };
 
-      const payload = resolvePayload<T>(putRequest, sim, event);
-      const updatedPut = resumeEvent(putRequest, sim.currentTime, payload);
+      const payload = resolvePayload(putRequest, sim, event);
+      const updatedPut = resumeEvent(putRequest, sim.currentTime);
       const updatedGet = continueEvent(event, sim.currentTime, payload);
 
-      return { step: updatedGet, resume: [updatedPut], finish: [putRequest] };
-    }
-  }
-
-  // Non-blocking stores: scan buffer
-  if (!store.blocking && store.buffer.entries.length > 0) {
-    const result = predicate
-      ? storeQueuePopWhere(store.buffer, discipline, predicate)
-      : storeQueuePop(store.buffer, discipline);
-
-    // Match found: dequeue the buffered item and deliver it to the consumer
-    if (result) {
-      const [buffered, remaining] = result;
-
-      sim.stores = { ...sim.stores, [id]: { ...store, buffer: remaining } };
-
-      const payload = resolvePayload<T>(buffered, sim, event);
-      const updatedGet = continueEvent(event, sim.currentTime, payload);
-
-      return { step: updatedGet };
+      return {
+        step: updatedGet,
+        item: payload,
+        resume: [updatedPut],
+        finish: [putRequest],
+      };
     }
   }
 
@@ -424,30 +491,33 @@ function tryGetImmediate<T extends StateData>(
 
 /**
  * Retrieves an item from a store on behalf of `event`. Three cases:
- * - Pending producer: the get completes immediately. The best producer by discipline is dequeued and rescheduled; its waiting placeholder is cleaned up. The consumer receives a continuation event with the data attached;
- * - Non-blocking store with buffered data: the best buffered item by discipline is dequeued and its data attached to the consumer's continuation;
+ * - Non-blocking store with buffered data: the best buffered item by discipline is dequeued, returned as `item` and attached to the consumer's continuation. If a producer is pending, the best one by discipline takes the freed slot and is rescheduled;
+ * - Pending producer, no buffered data: the get completes immediately. The best producer by discipline is dequeued and rescheduled; its waiting placeholder is cleaned up. Its item is returned as `item` and attached to the consumer's continuation;
  * - No data available: the consumer blocks.
  * Mutates `sim.stores` directly and returns a `StoreResult` describing the continuation.
  */
 export function get<
   S extends StoreRegistry,
   K extends keyof S & StoreID = keyof S & StoreID,
-  T extends S[K] = S[K],
 >(
   sim: Simulation<S>,
-  event: Event<T>,
+  event: Event,
   id: K,
-): StoreResult<T> {
+): StoreResult<S[K]> {
   const { store, discipline } = resolveStore<S, K>(sim, event, id);
 
   // Check putRequests and buffer for an available item; return immediately on a match
-  const immediate = tryGetImmediate(sim, event, store as Store<T>, discipline);
+  const immediate = tryGetImmediate(sim, event, store, discipline);
   if (immediate) return immediate;
 
   // No data available: block get (in getRequests)
-  const blockedGet = continueEvent(event, sim.currentTime, undefined, {
-    waiting: true,
-  });
+  // Keeps the caller's payload on the placeholder so disciplines can rank waiting consumers by data
+  const blockedGet = continueEvent(
+    event,
+    sim.currentTime,
+    event.process.data,
+    { waiting: true },
+  );
 
   sim.stores = {
     ...sim.stores,
@@ -462,20 +532,20 @@ export function get<
 
 /**
  * Retrieves an item from a store only if it satisfies a caller-supplied predicate.
- * Selection among multiple matching items follows the store's discipline (including custom comparators).
+ * Looks for a match among buffered items first (non-blocking stores only), then among blocked producers, whose item is handed off directly.
+ * Selection among multiple matching items follows the store's discipline (including custom comparators), applied to each queue separately.
  * Blocks if no matching item is currently available; the caller will be resumed by the first future `put` whose data satisfies the predicate.
  * Mutates `sim.stores` directly and returns a `StoreResult` describing the continuation.
  */
 export function getWhere<
   S extends StoreRegistry,
   K extends keyof S & StoreID,
-  T extends S[K] = S[K],
 >(
   sim: Simulation<S>,
-  event: Event<T>,
+  event: Event,
   id: K,
   predicateType: PredicateType,
-): StoreResult<T> {
+): StoreResult<S[K]> {
   const { store, discipline } = resolveStore<S, K>(sim, event, id);
   const predicate = resolvePredicate(sim, event, predicateType);
 
@@ -483,27 +553,74 @@ export function getWhere<
   const immediate = tryGetImmediate(
     sim,
     event,
-    store as Store<T>,
+    store,
     discipline,
     predicate,
   );
   if (immediate) return immediate;
 
   // No match: block get (in filteredGetRequests)
-  const blockedGet = continueEvent(event, sim.currentTime, undefined, {
-    waiting: true,
-  });
+  // Keeps the caller's payload on the placeholder so disciplines can rank waiting consumers by data
+  const blockedGet = continueEvent(
+    event,
+    sim.currentTime,
+    event.process.data,
+    { waiting: true },
+  );
 
   sim.stores = {
     ...sim.stores,
     [store.id]: {
       ...store,
+      // Filtered waiters draw their arrival order from the `getRequests` counter
+      getRequests: { ...store.getRequests, seq: store.getRequests.seq + 1 },
       filteredGetRequests: [
         ...store.filteredGetRequests,
-        { event: blockedGet, predicateType },
+        { event: blockedGet, predicateType, seq: store.getRequests.seq },
       ],
     },
   };
 
   return { step: blockedGet };
+}
+
+/**
+ * Withdraws `request`, a blocked `get`, `getWhere` or `put`, from a store on behalf of `event`.
+ * Used when a process stops waiting (e.g. on a timeout): finishing the request alone would leave it queued, and a later operation would resume it.
+ * Returns `null` if the request is no longer queued, i.e. it has already been served and its process resumed.
+ * Mutates `sim.stores` directly and returns a `StoreResult` describing the continuation.
+ */
+export function cancel<
+  S extends StoreRegistry,
+  K extends keyof S & StoreID = keyof S & StoreID,
+  T extends StateData = StateData,
+>(
+  sim: Simulation<S>,
+  event: Event<T>,
+  id: K,
+  request: Event,
+): StoreResult<T> | null {
+  const { store, discipline } = resolveStore<S, K>(sim, event, id);
+
+  const getRequests = storeQueueRemove(store.getRequests, request, discipline);
+  const putRequests = storeQueueRemove(store.putRequests, request, discipline);
+  const filteredGetRequests = store.filteredGetRequests.filter((req) =>
+    req.event.id !== request.id
+  );
+
+  // Request no longer queued: it has already been served
+  if (
+    getRequests.entries.length === store.getRequests.entries.length &&
+    putRequests.entries.length === store.putRequests.entries.length &&
+    filteredGetRequests.length === store.filteredGetRequests.length
+  ) {
+    return null;
+  }
+
+  sim.stores = {
+    ...sim.stores,
+    [store.id]: { ...store, getRequests, putRequests, filteredGetRequests },
+  };
+
+  return { step: continueEvent(event, sim.currentTime), finish: [request] };
 }

@@ -191,11 +191,14 @@ export interface FilteredGetRequest<T extends StateData = StateData> {
 
   /** A condition that must be satisfied to unblock the request */
   predicateType: PredicateType;
+
+  /** Arrival order, stamped from the `getRequests` counter so that both kinds of consumers can be compared */
+  seq: number;
 }
 
 /**
  * Shared data structure used for coordinating processes.
- * Stores are used through `get`, `put`, and `getWhere` primitives.
+ * Stores are used through `get`, `put`, `getWhere` and `cancel` primitives.
  * Used for inter-process synchronization, producer-consumer patterns, resource sharing, etc.
  */
 export interface Store<
@@ -224,8 +227,8 @@ export interface Store<
   /** Items currently stored by non-blocking `put` operations and awaiting consumption */
   buffer: StoreQueue<T>;
 
-  /** Processes blocked waiting to get items */
-  getRequests: StoreQueue<T>;
+  /** Processes blocked waiting to get items; their events carry the consumer's own payload, not an item */
+  getRequests: StoreQueue;
 
   /** Processes blocked waiting to put items */
   putRequests: StoreQueue<T>;
@@ -235,18 +238,25 @@ export interface Store<
    * Each entry pairs the waiting event with the predicate key used to look up the predicate function in `sim.predicates`.
    * `predicateType` is a plain string and is fully JSON-serializable. The predicate function is resolved from `predicates` at runtime.
    */
-  filteredGetRequests: FilteredGetRequest<T>[];
+  filteredGetRequests: FilteredGetRequest[];
 }
 
 /**
- * Returned by `get` and `put` store operations to indicate the outcome in terms of continuation and possible resume events.
+ * Returned by store operations to indicate the outcome in terms of continuation and possible resume events.
+ * `step`, `resume` and `finish` are control flow, to be passed on by the handler; `T` is the type of the store's items.
  */
 export interface StoreResult<T extends StateData = StateData> {
   /**
    * Continuation event for the calling process.
    * Must be scheduled by the process handler of the calling event.
    */
-  step: Event<T>;
+  step: Event;
+
+  /**
+   * Item received by a `get` or `getWhere` that completed immediately.
+   * `undefined` when the caller blocks: the item then arrives with the next step, merged into its data.
+   */
+  item?: T;
 
   /**
    * Resume event for the blocked process, if any.
@@ -254,7 +264,7 @@ export interface StoreResult<T extends StateData = StateData> {
    * This is relevant for blocking stores where processes can be paused until certain conditions are satisfied (e.g., an item is put into the store or space becomes available).
    * In non-blocking scenarios, this may be `undefined` since the process can continue immediately without waiting for store conditions.
    */
-  resume?: Event<T>[];
+  resume?: Event[];
 
   /**
    * Events to explicitly mark as `Finished` as a side effect of the store operation.
@@ -274,6 +284,9 @@ export type StoreID = string;
 
 /** Unique, user-defined identifier for a process */
 export type ProcessType = string;
+
+/** Unique identifier for a running process: the ID of the event that started it */
+export type ProcessID = EventID;
 
 /** User-defined identifier for a step within a process. Unique at process level */
 export type StepType = string;
@@ -296,8 +309,11 @@ export type StoreDefinitions<R extends StoreRegistry> = {
 export type StepStateMap = Record<StepType, StateData>;
 
 /** Dynamically maps process steps to their corresponding handlers */
-export type StepsDefinition<M extends StepStateMap> = {
-  [K in keyof M]: ProcessHandler<M, K>;
+export type StepsDefinition<
+  M extends StepStateMap,
+  S extends StoreRegistry = StoreRegistry,
+> = {
+  [K in keyof M]: ProcessHandler<M, K, S>;
 };
 
 /**
@@ -313,8 +329,12 @@ export type ProcessRegistry = Record<
  * Defines a process with a unique type and its state machine behavior.
  * Processes progress through steps, each with specific input/output state types.
  * Used to model workflows, state machines, and temporal patterns in the simulation.
+ * `S` optionally declares the stores used by the process (store ID to item type), so that store operations in its handlers are checked.
  */
-export interface ProcessDefinition<M extends StepStateMap> {
+export interface ProcessDefinition<
+  M extends StepStateMap,
+  S extends StoreRegistry = StoreRegistry,
+> {
   /** Unique identifier for this process type */
   type: ProcessType;
 
@@ -322,7 +342,7 @@ export interface ProcessDefinition<M extends StepStateMap> {
   initial: keyof M;
 
   /** Step handlers defining the process behavior */
-  steps: StepsDefinition<M>;
+  steps: StepsDefinition<M, S>;
 }
 
 /**
@@ -361,8 +381,9 @@ type ProcessStateFor<M extends StepStateMap> = {
 export type ProcessHandler<
   M extends StepStateMap,
   K extends keyof M,
+  S extends StoreRegistry = StoreRegistry,
 > = (
-  sim: Simulation,
+  sim: Simulation<S>,
   event: Event<M[K]>,
   state: ProcessState<M[K], K & StepType>,
 ) => ProcessStep<M>;
@@ -375,6 +396,15 @@ export interface ProcessState<
   T extends StateData = StateData,
   K extends StepType = StepType,
 > {
+  /**
+   * Unique identifier for the process: the ID of the event that started it.
+   * Carried along continuations; forked copies share it.
+   */
+  id: ProcessID;
+
+  /** Identifier of the process that spawned this one, if any */
+  parent?: ProcessID;
+
   /** Unique process type identifier */
   type: ProcessType;
 

@@ -368,7 +368,11 @@ Deno.test("filteredGetRequests survives serialization roundtrip", async () => {
     buffer: { entries: [], seq: 0 },
     getRequests: { entries: [], seq: 0 },
     putRequests: { entries: [], seq: 0 },
-    filteredGetRequests: [{ event: waiterEvent, predicateType: "myPredicate" }],
+    filteredGetRequests: [{
+      event: waiterEvent,
+      predicateType: "myPredicate",
+      seq: 0,
+    }],
   };
 
   const sim = initializeSimulation();

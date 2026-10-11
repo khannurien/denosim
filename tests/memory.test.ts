@@ -32,8 +32,8 @@ Deno.test("createDelta emits no state delta when state is reconstructed with ide
   const sim2 = initializeSimulation();
 
   const eventId = crypto.randomUUID();
-  const stateA = { type: "proc", step: "step1", data: { x: 42 } };
-  const stateB = { type: "proc", step: "step1", data: { x: 42 } }; // same content, new object
+  const stateA = { id: eventId, type: "proc", step: "step1", data: { x: 42 } };
+  const stateB = { id: eventId, type: "proc", step: "step1", data: { x: 42 } }; // same content, new object
 
   sim1.state = { [eventId]: stateA };
   sim2.state = { [eventId]: stateB };
@@ -283,8 +283,18 @@ Deno.test("pruneWorkingState filters out finished events and their transitions",
   sim.timeline = scheduleEvent(sim, waitingEvent);
 
   // Set up states and transitions
-  sim.state[finishedEvent.id] = { type: "p", step: "done", data: {} };
-  sim.state[waitingEvent.id] = { type: "p", step: "waiting", data: {} };
+  sim.state[finishedEvent.id] = {
+    id: finishedEvent.id,
+    type: "p",
+    step: "done",
+    data: {},
+  };
+  sim.state[waitingEvent.id] = {
+    id: waitingEvent.id,
+    type: "p",
+    step: "waiting",
+    data: {},
+  };
 
   sim.timeline.status[finishedEvent.id] = EventState.Finished;
   sim.timeline.status[waitingEvent.id] = EventState.Waiting;
@@ -338,8 +348,18 @@ Deno.test("pruneWorkingState preserves state only for events with parent referen
   sim.timeline = scheduleEvent(sim, childEvent);
 
   // Set up states
-  sim.state[parentEvent.id] = { type: "p", step: "parent", data: {} };
-  sim.state[childEvent.id] = { type: "p", step: "child", data: {} };
+  sim.state[parentEvent.id] = {
+    id: parentEvent.id,
+    type: "p",
+    step: "parent",
+    data: {},
+  };
+  sim.state[childEvent.id] = {
+    id: childEvent.id,
+    type: "p",
+    step: "child",
+    data: {},
+  };
 
   // Mark parent as finished, child as waiting
   sim.timeline.status[parentEvent.id] = EventState.Finished;
@@ -385,9 +405,14 @@ Deno.test("pruneWorkingState handles complex parent-child relationships", () => 
   sim.timeline = scheduleEvent(sim, child);
 
   // Set up states
-  sim.state[grandparent.id] = { type: "p", step: "grandparent", data: {} };
-  sim.state[parent.id] = { type: "p", step: "parent", data: {} };
-  sim.state[child.id] = { type: "p", step: "child", data: {} };
+  sim.state[grandparent.id] = {
+    id: grandparent.id,
+    type: "p",
+    step: "grandparent",
+    data: {},
+  };
+  sim.state[parent.id] = { id: parent.id, type: "p", step: "parent", data: {} };
+  sim.state[child.id] = { id: child.id, type: "p", step: "child", data: {} };
 
   // Mark grandparent and parent as finished, child as waiting
   sim.timeline.status[grandparent.id] = EventState.Finished;

@@ -1,4 +1,4 @@
-import type { ProcessDefinition, StateData } from "../src/model.ts";
+import type { ProcessDefinition, StateData, StoreID } from "../src/model.ts";
 import { get, initializeStore, put, registerStore } from "../src/resources.ts";
 import { runSimulation } from "../src/runner.ts";
 import {
@@ -78,7 +78,7 @@ if (import.meta.main) {
   const cons: ProcessDefinition<{
     start: FooData;
     stop: FooData;
-  }> = {
+  }, Record<StoreID, FooData>> = {
     type: "cons",
     initial: "start",
     steps: {
@@ -88,7 +88,7 @@ if (import.meta.main) {
           `[${sim.currentTime}] cons @ start state = ${state.data.foo}`,
         );
 
-        const { step, resume, finish } = get(sim, event, store.id);
+        const { step, item, resume, finish } = get(sim, event, store.id);
 
         console.log(
           `[${sim.currentTime}] cons received: step = ${step} | resume = ${resume}`,
@@ -109,7 +109,7 @@ if (import.meta.main) {
         return {
           state: {
             ...state,
-            data: { ...step.process.data ?? state.data },
+            data: { ...item ?? state.data },
             step: "stop",
           },
           next: resume ? [step, ...resume] : [step],

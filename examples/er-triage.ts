@@ -223,7 +223,7 @@ async function runScenario(
           ],
         };
       },
-      treat(sim, event, state) {
+      treat(sim, _event, state) {
         const { patientId, doctorId, pool } = state.data;
         if (!doctorId) {
           throw new Error(`Missing doctorId for patient ${patientId}`);
@@ -239,18 +239,18 @@ async function runScenario(
           );
         }
 
+        // We only need `resume` (wakeup for a waiting patient) and `finish` (cleanup of its waiting placeholder)
         const releaseEvent = createEvent({
-          parent: event.id,
           scheduledAt: sim.currentTime,
           process: { type: "none" },
         });
-        const { step, resume, finish } = put(sim, releaseEvent, pool, {
+        const { resume, finish } = put(sim, releaseEvent, pool, {
           doctorId,
           pool,
         });
         return {
           state: { ...state, step: "done", data: finished },
-          next: resume ? [step, ...resume] : [step],
+          next: resume ?? [],
           finish: finish ?? [],
         };
       },
