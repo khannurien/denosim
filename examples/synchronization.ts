@@ -1,5 +1,5 @@
 import type { ProcessDefinition, StateData, StoreID } from "../src/model.ts";
-import { get, initializeStore, put, registerStore } from "../src/resources.ts";
+import { get, initializeStore, put, registerStore } from "../src/stores.ts";
 import { runSimulation } from "../src/runner.ts";
 import {
   createEvent,

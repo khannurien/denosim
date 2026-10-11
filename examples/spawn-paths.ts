@@ -1,7 +1,7 @@
 import type { Event, ProcessDefinition, StateData } from "../src/model.ts";
-import { continueEvent } from "../src/resources.ts";
 import { runSimulation } from "../src/runner.ts";
 import {
+  continueEvent,
   createEvent,
   initializeSimulation,
   registerProcess,
@@ -33,7 +33,7 @@ const driver: ProcessDefinition<{
       );
       const nextShared = 42;
 
-      // 1) CONTINUATION: same process type + inheritStep=true
+      // 1) CONTINUATION: same process type + continues=true
       const continuation: Event<DriverData> = continueEvent(event, 1, {
         shared: nextShared,
         tag: "continued",

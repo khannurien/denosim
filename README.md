@@ -28,8 +28,8 @@ Planned features:
 
 **Process representation**
 
-- Each process is a finite state machine: `ProcessDefinition` drives transitions; runtime snapshot is `ProcessState` containing process step and data;
-- Each step has a handler returning a `ProcessStep`: the updated state and the next event(s); user defines how their process transitions from one state to another;
+- Each process is a finite state machine: `ProcessDefinition` drives transitions; runtime state is `ProcessState` containing process step and data;
+- Each step has a handler returning a `StepResult`: the updated state and the next event(s); user defines how their process transitions from one state to another;
 - A process is a chain of events, each continuing from the state saved by its `parent` event; it is identified by the ID of the event that started it.
 
 **Scheduling and execution semantics**
@@ -39,7 +39,7 @@ Planned features:
 
 **Lifecycle and persistence**
 
-- Process state is stored in a global simulation state, one snapshot per handled event;
+- Process state is stored in a global simulation state, one saved state per handled event;
 - An event is never reprocessed: it is marked `Finished` once handled, or once the process it was blocking resumes;
 - Long runs are periodically dumped to disk, and finished events pruned from memory.
 
@@ -48,7 +48,7 @@ Planned features:
 - Processes are started and continued by emitting new events, linked through `parent`;
 - Four patterns supported: continuation (same process, next step); `fork` (several continuations from one step, each with its own copy of the state); spawn (new process at its initial step, inheriting parent data and recording its spawner) and root process (no parent, only explicitly provided data);
 - Forked copies share their process identifier; alternatives (*e.g.*, an item or a timeout) must cancel each other, through `finish` for a scheduled event and `cancel` for a store request;
-- Blocking is modeled by a `Waiting` event state and by resumption through newly emitted continuation events when conditions are satisfied.
+- Blocking is modeled by a `Waiting` event status and by resumption through newly emitted continuation events when conditions are satisfied.
 
 **Continuations and temporal patterns**
 

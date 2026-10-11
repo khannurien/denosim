@@ -2,7 +2,7 @@ import { assert, assertEquals, assertRejects } from "@std/assert";
 
 import type { DeltaEncodedSimulation } from "../src/memory.ts";
 import type { ProcessDefinition, Simulation, StateData } from "../src/model.ts";
-import { EventState } from "../src/model.ts";
+import { EventStatus } from "../src/model.ts";
 import {
   dumpToDisk,
   initializeRun,
@@ -13,8 +13,8 @@ import {
   shouldDump,
 } from "../src/runner.ts";
 import { serializeSimulation } from "../src/serialize.ts";
-import { continueEvent } from "../src/resources.ts";
 import {
+  continueEvent,
   createEvent,
   initializeSimulation,
   registerProcess,
@@ -37,7 +37,7 @@ Deno.test("shouldDump depends on local delta window only", () => {
   assertEquals(shouldDump(deltaEncoded, 2), true);
 });
 
-Deno.test("dumpToDisk writes a checkpoint file", async () => {
+Deno.test("dumpToDisk writes a dump file", async () => {
   const dir = "runs/test/run-dumps-test";
   await Deno.remove(dir, { recursive: true }).catch(() => {});
 
@@ -109,7 +109,7 @@ Deno.test("initializeRun rejects invalid run.json", async () => {
   await Deno.remove(dir, { recursive: true });
 });
 
-Deno.test("reconstructFullCurrent merges checkpoint files with in-memory state", async () => {
+Deno.test("reconstructFullCurrent merges dump files with in-memory state", async () => {
   const dir = "runs/test/reconstruct-full-current-test";
   await Deno.remove(dir, { recursive: true }).catch(() => {});
 
@@ -132,7 +132,7 @@ Deno.test("reconstructFullCurrent merges checkpoint files with in-memory state",
 
   sim.processes = registerProcess(sim, simpleProcess);
 
-  // Create and run first checkpoint
+  // Create and run first dump
   const e1 = createEvent({
     scheduledAt: 0,
     process: { type: "reconstruct-test" },
@@ -144,14 +144,14 @@ Deno.test("reconstructFullCurrent merges checkpoint files with in-memory state",
     dumpInterval: 1,
   });
 
-  // Create checkpoint file path
-  const checkpointFiles = [
+  // Create dump file path
+  const dumpFiles = [
     `${dir}/dumps/0-t0.json`,
   ];
 
-  // Verify checkpoint file exists
-  const checkpointStat = await Deno.stat(checkpointFiles[0]);
-  assert(checkpointStat.isFile);
+  // Verify dump file exists
+  const dumpStat = await Deno.stat(dumpFiles[0]);
+  assert(dumpStat.isFile);
 
   // Create in-memory tail with additional events
   const tailSim = initializeSimulation();
@@ -163,26 +163,26 @@ Deno.test("reconstructFullCurrent merges checkpoint files with in-memory state",
   tailSim.timeline = scheduleEvent(tailSim, e2);
   const { result } = await runSimulation(tailSim);
 
-  // Reconstruct full current state from checkpoints and tail
-  const reconstructed = await reconstructFullCurrent(checkpointFiles, result);
+  // Reconstruct full current state from dumps and tail
+  const reconstructed = await reconstructFullCurrent(dumpFiles, result);
 
-  // e1 comes from the checkpoint file, e2 from the tail; both must be present
+  // e1 comes from the dump file, e2 from the tail; both must be present
   assert(
     reconstructed.timeline.events[e1.id],
-    "e1 from checkpoint must be present",
+    "e1 from dump must be present",
   );
   assert(reconstructed.timeline.events[e2.id], "e2 from tail must be present");
-  assertEquals(reconstructed.timeline.status[e1.id], EventState.Finished);
-  assertEquals(reconstructed.timeline.status[e2.id], EventState.Finished);
+  assertEquals(reconstructed.timeline.status[e1.id], EventStatus.Finished);
+  assertEquals(reconstructed.timeline.status[e2.id], EventStatus.Finished);
 
   // Clean up
   await Deno.remove(dir, { recursive: true });
 });
 
-Deno.test("reconstructFullCurrent handles empty checkpoints", async () => {
+Deno.test("reconstructFullCurrent handles no dumps", async () => {
   const tail = initializeSimulation();
 
-  // Test with empty checkpoint array
+  // Test with empty dump array
   const reconstructed = await reconstructFullCurrent([], tail);
 
   // Should return the tail unchanged

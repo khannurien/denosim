@@ -7,15 +7,10 @@ import type {
   StateData,
 } from "../src/model.ts";
 import { QueueDiscipline } from "../src/model.ts";
-import {
-  continueEvent,
-  get,
-  initializeStore,
-  put,
-  registerStore,
-} from "../src/resources.ts";
+import { get, initializeStore, put, registerStore } from "../src/stores.ts";
 import { runSimulation } from "../src/runner.ts";
 import {
+  continueEvent,
   createEvent,
   initializeSimulation,
   registerProcess,
@@ -135,13 +130,11 @@ async function runScenario(
 
   const urgentPool = initializeStore({
     id: URGENT_POOL_ID,
-    blocking: false,
     capacity: URGENT_DOCTORS,
     discipline: QueueDiscipline.FIFO,
   });
   const generalPool = initializeStore({
     id: GENERAL_POOL_ID,
-    blocking: false,
     capacity: GENERAL_DOCTORS,
     discipline,
   });
@@ -239,7 +232,7 @@ async function runScenario(
           );
         }
 
-        // We only need `resume` (wakeup for a waiting patient) and `finish` (cleanup of its waiting placeholder)
+        // We only need `resume` (wakeup for a waiting patient) and `finish` (cleanup of its request)
         const releaseEvent = createEvent({
           scheduledAt: sim.currentTime,
           process: { type: "none" },
@@ -331,7 +324,7 @@ async function runScenario(
   const { result } = await runSimulation(sim, { untilEvent: stop });
 
   const latestByPatient = new Map<number, PatientData>();
-  for (const processState of Object.values(result.state)) {
+  for (const processState of Object.values(result.states)) {
     if (processState.type !== "patient") continue;
     const data = processState.data as Partial<PatientData>;
     if (typeof data.patientId !== "number") continue;

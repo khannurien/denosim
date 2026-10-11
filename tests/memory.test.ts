@@ -13,8 +13,8 @@ import type {
   ProcessDefinition,
   StateData,
 } from "../src/model.ts";
-import { EventState, QueueDiscipline } from "../src/model.ts";
-import { registerStore } from "../src/resources.ts";
+import { EventStatus, QueueDiscipline } from "../src/model.ts";
+import { registerStore } from "../src/stores.ts";
 import { runSimulationWithDeltas } from "../src/runner.ts";
 import {
   createEvent,
@@ -35,8 +35,8 @@ Deno.test("createDelta emits no state delta when state is reconstructed with ide
   const stateA = { id: eventId, type: "proc", step: "step1", data: { x: 42 } };
   const stateB = { id: eventId, type: "proc", step: "step1", data: { x: 42 } }; // same content, new object
 
-  sim1.state = { [eventId]: stateA };
-  sim2.state = { [eventId]: stateB };
+  sim1.states = { [eventId]: stateA };
+  sim2.states = { [eventId]: stateB };
 
   const delta = createDelta(sim1, sim2);
   assertEquals(delta.s.length, 0);
@@ -84,7 +84,7 @@ Deno.test("createDelta captures status transition and state mutations", async ()
   const prev = {
     ...sim,
     timeline: { ...sim.timeline },
-    state: { ...sim.state },
+    state: { ...sim.states },
   };
 
   const { result } = await runSimulationWithDeltas(sim);
@@ -96,10 +96,10 @@ Deno.test("createDelta captures status transition and state mutations", async ()
   assertEquals(delta.e.length, 0); // event was already in prev
   assertEquals(delta.es.length, 1); // Scheduled → Finished
   assertEquals(delta.es[0].key, e.id);
-  assertEquals(delta.es[0].status, EventState.Finished);
+  assertEquals(delta.es[0].status, EventStatus.Finished);
   assertEquals(delta.et.length, 1); // Finished transition appended
   assertEquals(delta.et[0].transition.id, e.id);
-  assertEquals(delta.et[0].transition.state, EventState.Finished);
+  assertEquals(delta.et[0].transition.status, EventStatus.Finished);
   assertEquals(delta.s.length, 1); // process state set for the event
   assertEquals(delta.s[0].key, e.id);
 });
@@ -124,13 +124,12 @@ Deno.test("applyDelta applies store set operations", () => {
   base.stores = {
     s1: {
       id: "s1",
-      capacity: 1,
-      blocking: true,
+      capacity: 0,
       discipline: QueueDiscipline.LIFO,
       buffer: { entries: [], seq: 0 },
       getRequests: { entries: [{ event: req, seq: 0 }], seq: 1 },
       putRequests: { entries: [], seq: 0 },
-      filteredGetRequests: [],
+      getWhereRequests: [],
     },
   };
 
@@ -146,7 +145,7 @@ Deno.test("applyDelta applies store set operations", () => {
         buffer: { entries: [], seq: 0 },
         getRequests: { entries: [], seq: 0 },
         putRequests: { entries: [], seq: 0 },
-        filteredGetRequests: [],
+        getWhereRequests: [],
       },
     ],
   }]);
@@ -171,7 +170,7 @@ Deno.test("applyDeltas applies store set operations across multiple deltas", () 
           buffer: { entries: [], seq: 0 },
           getRequests: { entries: [], seq: 0 },
           putRequests: { entries: [], seq: 0 },
-          filteredGetRequests: [],
+          getWhereRequests: [],
         },
       ],
     },
@@ -187,7 +186,7 @@ Deno.test("applyDeltas applies store set operations across multiple deltas", () 
           buffer: { entries: [], seq: 0 },
           getRequests: { entries: [], seq: 0 },
           putRequests: { entries: [], seq: 0 },
-          filteredGetRequests: [],
+          getWhereRequests: [],
         },
       ],
     },
@@ -206,13 +205,12 @@ Deno.test("diffStores emits only changed queue fields, not the full store", () =
   prev.stores = {
     s1: {
       id: "s1",
-      capacity: 1,
-      blocking: true,
+      capacity: 0,
       discipline: QueueDiscipline.FIFO,
       buffer: shared,
       getRequests: shared,
       putRequests: shared,
-      filteredGetRequests: [],
+      getWhereRequests: [],
     },
   };
 
@@ -232,7 +230,7 @@ Deno.test("diffStores emits only changed queue fields, not the full store", () =
   assertEquals(op.getRequests, newGetRequests);
   assert(!("buffer" in op));
   assert(!("putRequests" in op));
-  assert(!("filteredGetRequests" in op));
+  assert(!("getWhereRequests" in op));
 });
 
 Deno.test("runSimulation records only real steps and keeps full final state after dumps", async () => {
@@ -257,7 +255,7 @@ Deno.test("runSimulation records only real steps and keeps full final state afte
   assertEquals(result.current.currentTime, 4);
   assert(
     initial.every((event) =>
-      result.current.timeline.status[event.id] === EventState.Finished
+      result.current.timeline.status[event.id] === EventStatus.Finished
     ),
   );
   assertEquals(result.deltas.length, 0);
@@ -283,27 +281,27 @@ Deno.test("pruneWorkingState filters out finished events and their transitions",
   sim.timeline = scheduleEvent(sim, waitingEvent);
 
   // Set up states and transitions
-  sim.state[finishedEvent.id] = {
+  sim.states[finishedEvent.id] = {
     id: finishedEvent.id,
     type: "p",
     step: "done",
     data: {},
   };
-  sim.state[waitingEvent.id] = {
+  sim.states[waitingEvent.id] = {
     id: waitingEvent.id,
     type: "p",
     step: "waiting",
     data: {},
   };
 
-  sim.timeline.status[finishedEvent.id] = EventState.Finished;
-  sim.timeline.status[waitingEvent.id] = EventState.Waiting;
+  sim.timeline.status[finishedEvent.id] = EventStatus.Finished;
+  sim.timeline.status[waitingEvent.id] = EventStatus.Waiting;
 
   sim.timeline.transitions = [
-    { id: finishedEvent.id, state: EventState.Scheduled, at: 0 },
-    { id: finishedEvent.id, state: EventState.Finished, at: 1 },
-    { id: waitingEvent.id, state: EventState.Scheduled, at: 1 },
-    { id: waitingEvent.id, state: EventState.Waiting, at: 2 },
+    { id: finishedEvent.id, status: EventStatus.Scheduled, at: 0 },
+    { id: finishedEvent.id, status: EventStatus.Finished, at: 1 },
+    { id: waitingEvent.id, status: EventStatus.Scheduled, at: 1 },
+    { id: waitingEvent.id, status: EventStatus.Waiting, at: 2 },
   ];
 
   const pruned = pruneWorkingState(sim);
@@ -318,7 +316,7 @@ Deno.test("pruneWorkingState filters out finished events and their transitions",
   assert(!pruned.timeline.status[finishedEvent.id]);
 
   // Waiting event status should remain
-  assertEquals(pruned.timeline.status[waitingEvent.id], EventState.Waiting);
+  assertEquals(pruned.timeline.status[waitingEvent.id], EventStatus.Waiting);
 
   // Transitions for finished event should be filtered out
   const finishedTransitions = pruned.timeline.transitions.filter((
@@ -341,20 +339,20 @@ Deno.test("pruneWorkingState preserves state only for events with parent referen
   const childEvent = createEvent({
     scheduledAt: 1,
     parent: parentEvent.id,
-    process: { type: "test", inheritStep: true },
+    process: { type: "test", continues: true },
   });
 
   sim.timeline = scheduleEvent(sim, parentEvent);
   sim.timeline = scheduleEvent(sim, childEvent);
 
   // Set up states
-  sim.state[parentEvent.id] = {
+  sim.states[parentEvent.id] = {
     id: parentEvent.id,
     type: "p",
     step: "parent",
     data: {},
   };
-  sim.state[childEvent.id] = {
+  sim.states[childEvent.id] = {
     id: childEvent.id,
     type: "p",
     step: "child",
@@ -362,8 +360,8 @@ Deno.test("pruneWorkingState preserves state only for events with parent referen
   };
 
   // Mark parent as finished, child as waiting
-  sim.timeline.status[parentEvent.id] = EventState.Finished;
-  sim.timeline.status[childEvent.id] = EventState.Waiting;
+  sim.timeline.status[parentEvent.id] = EventStatus.Finished;
+  sim.timeline.status[childEvent.id] = EventStatus.Waiting;
 
   const pruned = pruneWorkingState(sim);
 
@@ -373,15 +371,15 @@ Deno.test("pruneWorkingState preserves state only for events with parent referen
 
   // Child should remain (not finished)
   assert(pruned.timeline.events[childEvent.id]);
-  assertEquals(pruned.timeline.status[childEvent.id], EventState.Waiting);
+  assertEquals(pruned.timeline.status[childEvent.id], EventStatus.Waiting);
 
   // Parent's state should be preserved because child references it
-  assert(pruned.state[parentEvent.id]);
-  assertEquals(pruned.state[parentEvent.id].step, "parent");
+  assert(pruned.states[parentEvent.id]);
+  assertEquals(pruned.states[parentEvent.id].step, "parent");
 
   // Child's state is not preserved because no other events reference it
   // (only parent references are tracked for state preservation)
-  assert(!pruned.state[childEvent.id]);
+  assert(!pruned.states[childEvent.id]);
 });
 
 Deno.test("pruneWorkingState handles complex parent-child relationships", () => {
@@ -392,12 +390,12 @@ Deno.test("pruneWorkingState handles complex parent-child relationships", () => 
   const parent = createEvent({
     scheduledAt: 1,
     parent: grandparent.id,
-    process: { type: "test", inheritStep: true },
+    process: { type: "test", continues: true },
   });
   const child = createEvent({
     scheduledAt: 2,
     parent: parent.id,
-    process: { type: "test", inheritStep: true },
+    process: { type: "test", continues: true },
   });
 
   sim.timeline = scheduleEvent(sim, grandparent);
@@ -405,19 +403,24 @@ Deno.test("pruneWorkingState handles complex parent-child relationships", () => 
   sim.timeline = scheduleEvent(sim, child);
 
   // Set up states
-  sim.state[grandparent.id] = {
+  sim.states[grandparent.id] = {
     id: grandparent.id,
     type: "p",
     step: "grandparent",
     data: {},
   };
-  sim.state[parent.id] = { id: parent.id, type: "p", step: "parent", data: {} };
-  sim.state[child.id] = { id: child.id, type: "p", step: "child", data: {} };
+  sim.states[parent.id] = {
+    id: parent.id,
+    type: "p",
+    step: "parent",
+    data: {},
+  };
+  sim.states[child.id] = { id: child.id, type: "p", step: "child", data: {} };
 
   // Mark grandparent and parent as finished, child as waiting
-  sim.timeline.status[grandparent.id] = EventState.Finished;
-  sim.timeline.status[parent.id] = EventState.Finished;
-  sim.timeline.status[child.id] = EventState.Waiting;
+  sim.timeline.status[grandparent.id] = EventStatus.Finished;
+  sim.timeline.status[parent.id] = EventStatus.Finished;
+  sim.timeline.status[child.id] = EventStatus.Waiting;
 
   const pruned = pruneWorkingState(sim);
 
@@ -431,14 +434,14 @@ Deno.test("pruneWorkingState handles complex parent-child relationships", () => 
   assert(pruned.timeline.events[child.id]);
 
   // Parent's state should be preserved (directly referenced by child)
-  assert(pruned.state[parent.id]);
-  assertEquals(pruned.state[parent.id].step, "parent");
+  assert(pruned.states[parent.id]);
+  assertEquals(pruned.states[parent.id].step, "parent");
 
   // Grandparent's state should NOT be preserved (not directly referenced by child)
-  assert(!pruned.state[grandparent.id]);
+  assert(!pruned.states[grandparent.id]);
 
   // Child's state should NOT be preserved (no other events reference it)
-  assert(!pruned.state[child.id]);
+  assert(!pruned.states[child.id]);
 });
 
 Deno.test("runSimulation keeps base immutable and reconstructs current from deltas", async () => {
@@ -456,31 +459,30 @@ Deno.test("runSimulation keeps base immutable and reconstructs current from delt
   });
 
   assertEquals(Object.keys(result.base.timeline.events).length, 1);
-  assertEquals(result.base.timeline.status[event.id], EventState.Scheduled);
-  assertEquals(Object.keys(result.base.state).length, 0);
+  assertEquals(result.base.timeline.status[event.id], EventStatus.Scheduled);
+  assertEquals(Object.keys(result.base.states).length, 0);
 
   const replay = reconstructFromDeltas(result.base, result.deltas);
   const replayStop = replay[replay.length - 1];
   assertEquals(replayStop, result.current);
-  assertEquals(replayStop.timeline.status[event.id], EventState.Finished);
-  assertEquals(Object.keys(replayStop.state).length, 1);
+  assertEquals(replayStop.timeline.status[event.id], EventStatus.Finished);
+  assertEquals(Object.keys(replayStop.states).length, 1);
 
   await Deno.remove(dir, { recursive: true });
 });
 
-Deno.test("checkpoints preserve full replay state by default", async () => {
+Deno.test("dumps preserve full replay state by default", async () => {
   const sim = initializeSimulation();
   const req1 = createEvent({ scheduledAt: 0 });
   const req2 = createEvent({ scheduledAt: 0 });
   sim.stores = registerStore(sim, {
     id: "s1",
-    capacity: 1,
-    blocking: true,
+    capacity: 0,
     discipline: QueueDiscipline.FIFO,
     buffer: { entries: [], seq: 0 },
     getRequests: { entries: [{ event: req1, seq: 0 }], seq: 1 },
     putRequests: { entries: [{ event: req2, seq: 0 }], seq: 1 },
-    filteredGetRequests: [],
+    getWhereRequests: [],
   });
   const e1 = createEvent({ scheduledAt: 0 });
   const e2 = createEvent({ scheduledAt: 1 });
@@ -496,13 +498,13 @@ Deno.test("checkpoints preserve full replay state by default", async () => {
   const stop = result.current;
 
   assertEquals(Object.keys(stop.timeline.events).length, 2);
-  assertEquals(stop.timeline.status[e1.id], EventState.Finished);
-  assertEquals(stop.timeline.status[e2.id], EventState.Finished);
-  assertEquals(Object.keys(stop.state).length, 2);
+  assertEquals(stop.timeline.status[e1.id], EventStatus.Finished);
+  assertEquals(stop.timeline.status[e2.id], EventStatus.Finished);
+  assertEquals(Object.keys(stop.states).length, 2);
   await Deno.remove(dir, { recursive: true });
 });
 
-Deno.test("checkpoints keep untilEvent semantics with full replay state", async () => {
+Deno.test("dumps keep untilEvent semantics with full replay state", async () => {
   const sim = initializeSimulation();
   const e1 = createEvent({ scheduledAt: 10 });
   const e2 = createEvent({ scheduledAt: 20 });
@@ -529,13 +531,13 @@ Deno.test("checkpoints keep untilEvent semantics with full replay state", async 
   );
   assert(handledE1);
   assert(handledE2);
-  assertEquals(stop.timeline.status[handledE1.id], EventState.Finished);
-  assertEquals(stop.timeline.status[handledE2.id], EventState.Finished);
+  assertEquals(stop.timeline.status[handledE1.id], EventStatus.Finished);
+  assertEquals(stop.timeline.status[handledE2.id], EventStatus.Finished);
   const remaining = Object.values(stop.timeline.events).find((event) =>
     event.id === e3.id
   );
   assert(remaining);
-  assertEquals(stop.timeline.status[remaining.id], EventState.Scheduled);
+  assertEquals(stop.timeline.status[remaining.id], EventStatus.Scheduled);
   await Deno.remove(dir, { recursive: true });
 });
 
@@ -554,20 +556,19 @@ Deno.test("pruneWorkingState preserves stores, processes, disciplines, and predi
 
   const e = createEvent({ scheduledAt: 0 });
   sim.timeline = scheduleEvent(sim, e);
-  sim.timeline.status[e.id] = EventState.Finished;
+  sim.timeline.status[e.id] = EventStatus.Finished;
 
   // Attach a store so we can assert it survives pruning
   const storeId = "s1";
   sim.stores = {
     [storeId]: {
       id: storeId,
-      capacity: 1,
-      blocking: true,
+      capacity: 0,
       discipline: "LIFO",
       buffer: { entries: [], seq: 0 },
       getRequests: { entries: [], seq: 0 },
       putRequests: { entries: [], seq: 0 },
-      filteredGetRequests: [],
+      getWhereRequests: [],
     },
   };
 

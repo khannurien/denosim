@@ -1,5 +1,5 @@
 import type { EventID, Simulation, Timestamp } from "./model.ts";
-import { EventState } from "./model.ts";
+import { EventStatus } from "./model.ts";
 
 /** Entry stored in the event min-heap */
 interface HeapEntry {
@@ -146,13 +146,13 @@ export function heapPopWith<T>(
 
 /**
  * Builds a min-heap from all currently scheduled events in the simulation in `O(N)`.
- * Used to initialize or rebuild the heap (e.g., after a checkpoint prune).
+ * Used to initialize or rebuild the heap (e.g., after pruning on a dump).
  * `seq` values are assigned in `timeline.status` iteration order (i.e. original scheduling order), which preserves FIFO semantics across rebuilds.
  */
 export function buildHeap(sim: Simulation): EventHeap {
   const heap = createHeap();
   for (const [id, status] of Object.entries(sim.timeline.status)) {
-    if (status === EventState.Scheduled) {
+    if (status === EventStatus.Scheduled) {
       const event = sim.timeline.events[id];
       if (event && event.scheduledAt >= sim.currentTime) {
         heap.entries.push({

@@ -2,7 +2,7 @@ import type {
   Event,
   EventID,
   EventTransition,
-  FilteredGetRequest,
+  GetWhereRequest,
   ProcessState,
   Simulation,
   Store,
@@ -10,13 +10,13 @@ import type {
   StoreQueue,
   Timestamp,
 } from "./model.ts";
-import { EventState } from "./model.ts";
+import { EventStatus } from "./model.ts";
 
 /** Delta operations for events */
 type EventDeltaOp = { key: EventID; event: Event };
 
 /** Delta operations for status */
-type StatusDeltaOp = { key: EventID; status: EventState };
+type StatusDeltaOp = { key: EventID; status: EventStatus };
 
 /** Delta operations for transitions */
 type TransitionDeltaOp = { transition: EventTransition };
@@ -33,7 +33,7 @@ type StoreDeltaOp = {
   buffer?: StoreQueue;
   getRequests?: StoreQueue;
   putRequests?: StoreQueue;
-  filteredGetRequests?: FilteredGetRequest[];
+  getWhereRequests?: GetWhereRequest[];
 };
 
 /** Compact delta representation between simulation states */
@@ -85,7 +85,7 @@ export function createDelta(
       prev.timeline.transitions,
       current.timeline.transitions,
     ),
-    s: diffState(prev.state, current.state),
+    s: diffState(prev.states, current.states),
     st: diffStores(prev.stores, current.stores),
   };
 }
@@ -109,8 +109,8 @@ function diffEvents(
 }
 
 function diffStatus(
-  prev: Record<EventID, EventState>,
-  current: Record<EventID, EventState>,
+  prev: Record<EventID, EventStatus>,
+  current: Record<EventID, EventStatus>,
 ): StatusDeltaOp[] {
   const ops: StatusDeltaOp[] = [];
   for (const [id, status] of Object.entries(current)) {
@@ -177,8 +177,8 @@ function diffStores(
     if (!p || p.buffer !== c.buffer) op.buffer = c.buffer;
     if (!p || p.getRequests !== c.getRequests) op.getRequests = c.getRequests;
     if (!p || p.putRequests !== c.putRequests) op.putRequests = c.putRequests;
-    if (!p || p.filteredGetRequests !== c.filteredGetRequests) {
-      op.filteredGetRequests = c.filteredGetRequests;
+    if (!p || p.getWhereRequests !== c.getWhereRequests) {
+      op.getWhereRequests = c.getWhereRequests;
     }
     ops.push(op);
   }
@@ -220,7 +220,7 @@ export function reconstructFromDeltas(
 
 /**
  * Applies deltas to `base` and returns only the final state.
- * Use when intermediate states are not needed (e.g. checkpoint resume).
+ * Use when intermediate states are not needed (e.g. resuming from a dump).
  */
 export function applyDeltas(
   base: Simulation,
@@ -233,7 +233,7 @@ export function applyDeltas(
       status: { ...base.timeline.status },
       transitions: [...base.timeline.transitions],
     },
-    state: { ...base.state },
+    states: { ...base.states },
     stores: { ...base.stores },
   };
   for (const delta of deltas) {
@@ -241,7 +241,7 @@ export function applyDeltas(
     for (const op of delta.e) sim.timeline.events[op.key] = op.event;
     for (const op of delta.es) sim.timeline.status[op.key] = op.status;
     for (const op of delta.et) sim.timeline.transitions.push(op.transition);
-    for (const op of delta.s) sim.state[op.key] = op.value;
+    for (const op of delta.s) sim.states[op.key] = op.value;
     for (const op of delta.st) {
       const { key, ...fields } = op;
       sim.stores[key] = { ...sim.stores[key], ...fields };
@@ -251,25 +251,25 @@ export function applyDeltas(
 }
 
 /**
- * Prunes finished and unreachable working data after a checkpoint to reduce memory usage mid-run.
- * Full replay remains available through persisted checkpoint files.
+ * Prunes finished and unreachable working data after a dump to reduce memory usage mid-run.
+ * Full replay remains available through persisted dump files.
  */
 export function pruneWorkingState(sim: Simulation): Simulation {
   const events = Object.fromEntries(
     Object.entries(sim.timeline.events).filter(([_id, event]) =>
-      sim.timeline.status[event.id] !== EventState.Finished
+      sim.timeline.status[event.id] !== EventStatus.Finished
     ),
   );
 
   const status = Object.fromEntries(
     Object.entries(sim.timeline.status).filter(([id, status]) =>
-      events[id] !== undefined && status !== EventState.Finished
+      events[id] !== undefined && status !== EventStatus.Finished
     ),
   );
 
   const transitions = sim.timeline.transitions.filter((transition) =>
     events[transition.id] !== undefined &&
-    status[transition.id] !== EventState.Finished
+    status[transition.id] !== EventStatus.Finished
   );
 
   const referencedState = new Set<string>();
@@ -286,8 +286,8 @@ export function pruneWorkingState(sim: Simulation): Simulation {
       status: { ...status },
       transitions: [...transitions],
     },
-    state: Object.fromEntries(
-      Object.entries(sim.state).filter(([id]) => referencedState.has(id)),
+    states: Object.fromEntries(
+      Object.entries(sim.states).filter(([id]) => referencedState.has(id)),
     ),
     stores: sim.stores,
   };

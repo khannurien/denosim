@@ -51,7 +51,7 @@ export function deserializeSimulation(
 
 /**
  * Like `deserializeSimulation` but returns only the final reconstructed state.
- * Use when intermediate states are not needed (e.g. checkpoint resume in reconstructFullCurrent).
+ * Use when intermediate states are not needed (e.g. resuming from a dump in reconstructFullCurrent).
  */
 export function deserializeLastSimulation(
   data: string,

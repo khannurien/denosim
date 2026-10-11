@@ -6,16 +6,16 @@ import type {
   ProcessDefinition,
   StateData,
 } from "../src/model.ts";
-import { EventState } from "../src/model.ts";
-import { continueEvent } from "../src/resources.ts";
+import { EventStatus } from "../src/model.ts";
 import { runSimulation } from "../src/runner.ts";
 import {
+  advance,
+  continueEvent,
   createEvent,
   finishEvent,
   initializeSimulation,
   registerPredicate,
   registerProcess,
-  run,
   scheduleEvent,
   shouldTerminate,
 } from "../src/simulation.ts";
@@ -33,14 +33,14 @@ Deno.test("basic event scheduling", async () => {
   const { result } = await runSimulation(sim);
   const finished = [...result.timeline.transitions].reverse().find((
     transition,
-  ) => transition.id === e1.id && transition.state === EventState.Finished);
+  ) => transition.id === e1.id && transition.status === EventStatus.Finished);
 
   assertEquals(Object.keys(result.timeline.events).length, 1);
   assert(finished);
   assertEquals(finished.at, 10);
   assert(
     Object.values(result.timeline.events).every((event) =>
-      result.timeline.status[event.id] === EventState.Finished
+      result.timeline.status[event.id] === EventStatus.Finished
     ),
   );
 });
@@ -52,8 +52,8 @@ Deno.test("createEvent with waiting: true produces an unscheduled event", () => 
   sim.timeline = scheduleEvent(sim, event);
 
   // The event is in the timeline but its initial status is Waiting, not Scheduled.
-  assertEquals(sim.timeline.status[event.id], EventState.Waiting);
-  assertEquals(sim.timeline.transitions.at(-1)?.state, EventState.Waiting);
+  assertEquals(sim.timeline.status[event.id], EventStatus.Waiting);
+  assertEquals(sim.timeline.transitions.at(-1)?.status, EventStatus.Waiting);
   assertEquals(event.waiting, true);
 });
 
@@ -66,7 +66,7 @@ Deno.test("zero-duration events", async () => {
   const { result } = await runSimulation(sim);
   const finished = [...result.timeline.transitions].reverse().find((
     transition,
-  ) => transition.id === e1.id && transition.state === EventState.Finished);
+  ) => transition.id === e1.id && transition.status === EventStatus.Finished);
 
   assert(finished);
   assertEquals(finished.at, 0);
@@ -90,7 +90,7 @@ Deno.test("basic out of order scheduling", async () => {
   assertEquals(Object.keys(result.timeline.events).length, 3);
   assert(
     Object.values(result.timeline.events).every((event) =>
-      result.timeline.status[event.id] === EventState.Finished
+      result.timeline.status[event.id] === EventStatus.Finished
     ),
   );
 });
@@ -139,7 +139,7 @@ Deno.test("basic event ordering", async () => {
   assertEquals(processedOrder, [0, 2, 5, 10, 15, 50]);
   assert(
     Object.values(result.timeline.events).every((event) =>
-      result.timeline.status[event.id] === EventState.Finished
+      result.timeline.status[event.id] === EventStatus.Finished
     ),
   );
 });
@@ -219,7 +219,7 @@ Deno.test("event process scheduling", async () => {
 
   assert(
     Object.values(result.timeline.events).every((event) =>
-      result.timeline.status[event.id] === EventState.Finished
+      result.timeline.status[event.id] === EventStatus.Finished
     ),
   );
 });
@@ -237,9 +237,9 @@ Deno.test("simulation until time condition", async () => {
   const { result, stats } = await runSimulation(sim, { untilTime: 20 });
 
   assertEquals(stats.end, 20);
-  assertEquals(result.timeline.status[e1.id], EventState.Finished);
-  assertEquals(result.timeline.status[e2.id], EventState.Finished);
-  assertEquals(result.timeline.status[e3.id], EventState.Scheduled);
+  assertEquals(result.timeline.status[e1.id], EventStatus.Finished);
+  assertEquals(result.timeline.status[e2.id], EventStatus.Finished);
+  assertEquals(result.timeline.status[e3.id], EventStatus.Scheduled);
 });
 
 Deno.test("simulation until event condition", async () => {
@@ -255,9 +255,9 @@ Deno.test("simulation until event condition", async () => {
   const { result, stats } = await runSimulation(sim, { untilEvent: e2 });
 
   assertEquals(stats.end, 20);
-  assertEquals(result.timeline.status[e1.id], EventState.Finished);
-  assertEquals(result.timeline.status[e2.id], EventState.Finished);
-  assertEquals(result.timeline.status[e3.id], EventState.Scheduled);
+  assertEquals(result.timeline.status[e1.id], EventStatus.Finished);
+  assertEquals(result.timeline.status[e2.id], EventStatus.Finished);
+  assertEquals(result.timeline.status[e3.id], EventStatus.Scheduled);
 });
 
 Deno.test("events with same time process by priority order (lower number = higher priority)", async () => {
@@ -569,9 +569,9 @@ Deno.test("process state initialization", async () => {
   sim.timeline = scheduleEvent(sim, e1);
 
   const { result } = await runSimulation(sim);
-  assertEquals(result.state[e1.id].step, "foo");
-  assertEquals(result.state[e1.id].data.foo, "baz");
-  assertEquals(result.state[e1.id].data.bar, 42.1337);
+  assertEquals(result.states[e1.id].step, "foo");
+  assertEquals(result.states[e1.id].data.foo, "baz");
+  assertEquals(result.states[e1.id].data.bar, 42.1337);
 });
 
 Deno.test("process state across steps", async () => {
@@ -596,7 +596,7 @@ Deno.test("process state across steps", async () => {
           scheduledAt: sim.currentTime + 1,
           process: {
             type: "foobar",
-            inheritStep: true,
+            continues: true,
           },
         });
 
@@ -615,7 +615,7 @@ Deno.test("process state across steps", async () => {
           scheduledAt: sim.currentTime + 1,
           process: {
             type: "foobar",
-            inheritStep: true,
+            continues: true,
           },
         });
 
@@ -653,7 +653,7 @@ Deno.test("process state across steps", async () => {
   sim.timeline = scheduleEvent(sim, e1);
 
   const { result } = await runSimulation(sim);
-  const terminal = Object.values(result.state).find((state) =>
+  const terminal = Object.values(result.states).find((state) =>
     state.type === "foobar" && state.step === "baz"
   );
   assert(terminal);
@@ -837,7 +837,7 @@ Deno.test("process state inheritance (spawn)", async () => {
   sim.timeline = scheduleEvent(sim, e1);
 
   const { result } = await runSimulation(sim);
-  const barStates = Object.values(result.state).filter((state) =>
+  const barStates = Object.values(result.states).filter((state) =>
     state.type === "bar"
   );
   assertEquals(barStates.length, 2);
@@ -911,7 +911,7 @@ Deno.test("process state inheritance (root process)", async () => {
   sim.timeline = scheduleEvent(sim, e1);
 
   const { result } = await runSimulation(sim);
-  const barState = Object.values(result.state).find((state) =>
+  const barState = Object.values(result.states).find((state) =>
     state.type === "bar"
   );
   assert(barState);
@@ -970,27 +970,27 @@ Deno.test("process identifiers across continuation, spawn and root process", asy
   sim.timeline = scheduleEvent(sim, e1);
 
   const { result } = await runSimulation(sim);
-  const states = Object.values(result.state);
+  const states = Object.values(result.states);
 
   // Both driver steps belong to the same process, identified by the event that started it
   const driverStates = states.filter((state) => state.type === "driver");
   assertEquals(driverStates.length, 2);
   assert(driverStates.every((state) => state.id === e1.id));
-  assert(driverStates.every((state) => state.parent === undefined));
+  assert(driverStates.every((state) => state.spawner === undefined));
 
   // A spawned process has its own ID and records its spawner, including on its continuation
   const spawned = states.filter((state) => state.type === "spawned");
   assertEquals(spawned.length, 2);
   assert(spawned[0].id !== e1.id);
   assert(spawned.every((state) => state.id === spawned[0].id));
-  assert(spawned.every((state) => state.parent === e1.id));
+  assert(spawned.every((state) => state.spawner === e1.id));
 
-  // A root process has its own ID and no parent
+  // A root process has its own ID and no spawner
   const root = states.filter((state) => state.type === "root");
   assertEquals(root.length, 2);
   assert(root[0].id !== e1.id && root[0].id !== spawned[0].id);
   assert(root.every((state) => state.id === root[0].id));
-  assert(root.every((state) => state.parent === undefined));
+  assert(root.every((state) => state.spawner === undefined));
 });
 
 Deno.test("continuation without data sees the state returned by the handler", async () => {
@@ -1049,9 +1049,9 @@ Deno.test("default none process is a no-op", async () => {
 
   const { result } = await runSimulation(sim);
 
-  assertEquals(result.timeline.status[e1.id], EventState.Finished);
-  assertEquals(result.state[e1.id].type, "none");
-  assertEquals(result.state[e1.id].step, "none");
+  assertEquals(result.timeline.status[e1.id], EventStatus.Finished);
+  assertEquals(result.states[e1.id].type, "none");
+  assertEquals(result.states[e1.id].step, "none");
   // none handler returns next: [] so no new events are spawned
   assertEquals(Object.keys(result.timeline.events).length, 1);
 });
@@ -1118,12 +1118,12 @@ Deno.test("simulation rate acts as best-effort wall-clock throttling", async () 
 
   assert(
     Object.values(slowStop.result.timeline.events).every((event) =>
-      slowStop.result.timeline.status[event.id] === EventState.Finished
+      slowStop.result.timeline.status[event.id] === EventStatus.Finished
     ),
   );
   assert(
     Object.values(fastStop.result.timeline.events).every((event) =>
-      fastStop.result.timeline.status[event.id] === EventState.Finished
+      fastStop.result.timeline.status[event.id] === EventStatus.Finished
     ),
   );
 
@@ -1173,7 +1173,7 @@ Deno.test("runSimulation rejects when a continuation changes process type", asyn
         const other = createEvent({
           parent: event.id,
           scheduledAt: 1,
-          process: { type: "none", inheritStep: true },
+          process: { type: "none", continues: true },
         });
 
         return { state, next: [other] };
@@ -1191,6 +1191,22 @@ Deno.test("runSimulation rejects when a continuation changes process type", asyn
     () => runSimulation(sim),
     TypeError,
     "Event cannot continue a process of another type",
+  );
+});
+
+Deno.test("runSimulation rejects when a continuation has no parent", async () => {
+  const sim = initializeSimulation();
+
+  const event = createEvent({
+    scheduledAt: 0,
+    process: { type: "none", continues: true },
+  });
+  sim.timeline = scheduleEvent(sim, event);
+
+  await assertRejects(
+    () => runSimulation(sim),
+    TypeError,
+    "Event cannot continue a process without a parent",
   );
 });
 
@@ -1239,16 +1255,16 @@ Deno.test("finishEvent marks event as Finished and appends a transition", () => 
   const event = createEvent({ scheduledAt: 0 });
   sim.timeline = scheduleEvent(sim, event);
 
-  assertEquals(sim.timeline.status[event.id], EventState.Scheduled);
+  assertEquals(sim.timeline.status[event.id], EventStatus.Scheduled);
   const transitionsBefore = sim.timeline.transitions.length;
 
   sim.timeline = finishEvent(sim, event);
 
-  assertEquals(sim.timeline.status[event.id], EventState.Finished);
+  assertEquals(sim.timeline.status[event.id], EventStatus.Finished);
   assertEquals(sim.timeline.transitions.length, transitionsBefore + 1);
   const last = sim.timeline.transitions.at(-1)!;
   assertEquals(last.id, event.id);
-  assertEquals(last.state, EventState.Finished);
+  assertEquals(last.status, EventStatus.Finished);
   assertEquals(last.at, sim.currentTime);
 });
 
@@ -1297,7 +1313,7 @@ Deno.test("shouldTerminate returns false when neither condition is provided", ()
   assert(!shouldTerminate(sim, {}));
 });
 
-Deno.test("run() skips Waiting events and processes the next Scheduled event", () => {
+Deno.test("advance() skips Waiting events and processes the next Scheduled event", () => {
   const sim = initializeSimulation();
 
   const waiting = createEvent({ scheduledAt: 0, waiting: true });
@@ -1305,21 +1321,21 @@ Deno.test("run() skips Waiting events and processes the next Scheduled event", (
   sim.timeline = scheduleEvent(sim, waiting);
   sim.timeline = scheduleEvent(sim, scheduled);
 
-  assertEquals(sim.timeline.status[waiting.id], EventState.Waiting);
-  assertEquals(sim.timeline.status[scheduled.id], EventState.Scheduled);
+  assertEquals(sim.timeline.status[waiting.id], EventStatus.Waiting);
+  assertEquals(sim.timeline.status[scheduled.id], EventStatus.Scheduled);
 
-  // Build a heap that contains both events; run() must skip the Waiting one
+  // Build a heap that contains both events; advance() must skip the Waiting one
   const heap = buildHeap(sim);
   // Waiting events are excluded from buildHeap: push it manually to verify the skip
   heap.entries.push({ scheduledAt: 0, priority: 0, seq: -1, id: waiting.id });
 
-  const [next, continuation] = run(sim, heap);
+  const [next, more] = advance(sim, heap);
 
   // The waiting event was skipped; the scheduled one was processed
-  assertEquals(continuation, true);
-  assertEquals(next.timeline.status[scheduled.id], EventState.Finished);
+  assertEquals(more, true);
+  assertEquals(next.timeline.status[scheduled.id], EventStatus.Finished);
   // The waiting event status is unchanged
-  assertEquals(next.timeline.status[waiting.id], EventState.Waiting);
+  assertEquals(next.timeline.status[waiting.id], EventStatus.Waiting);
 });
 
 Deno.test("runSimulation stats.end equals the final simulation currentTime", async () => {

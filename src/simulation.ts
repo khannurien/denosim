@@ -10,16 +10,17 @@ import type {
   ProcessDefinition,
   ProcessRegistry,
   ProcessState,
-  ProcessStep,
   ProcessType,
   RunSimulationOptions,
   Simulation,
   StateData,
+  StepResult,
   StepStateMap,
-  StoreRegistry,
+  StoreItemMap,
   Timeline,
+  Timestamp,
 } from "./model.ts";
-import { EventState, QueueDiscipline } from "./model.ts";
+import { EventStatus, QueueDiscipline } from "./model.ts";
 import { type EventHeap, heapPop } from "./heap.ts";
 
 /**
@@ -29,7 +30,7 @@ import { type EventHeap, heapPop } from "./heap.ts";
  * - Process registry populated with a dummy process (`none`)
  * - Discipline registry pre-populated with `FIFO` and `LIFO`
  * - Empty predicate registry
- * - Empty state array (no running processes)
+ * - Empty state (no handled events)
  */
 export function initializeSimulation(): Simulation {
   const sim: Simulation = {
@@ -42,7 +43,7 @@ export function initializeSimulation(): Simulation {
     processes: {},
     disciplines: {},
     predicates: {},
-    state: {},
+    states: {},
     stores: {},
   };
 
@@ -65,12 +66,12 @@ export function initializeSimulation(): Simulation {
 
   const fifoDiscipline: DisciplineDefinition = {
     type: QueueDiscipline.FIFO,
-    comparator: (a, b) => a.index - b.index,
+    comparator: (a, b) => a.seq - b.seq,
   };
 
   const lifoDiscipline: DisciplineDefinition = {
     type: QueueDiscipline.LIFO,
-    comparator: (a, b) => b.index - a.index,
+    comparator: (a, b) => b.seq - a.seq,
   };
 
   sim.disciplines = registerDiscipline(sim, fifoDiscipline);
@@ -95,7 +96,7 @@ export function shouldTerminate(
 
   const untilEvent = options.untilEvent;
   const eventMet = untilEvent !== undefined &&
-    sim.timeline.status[untilEvent.id] === EventState.Finished;
+    sim.timeline.status[untilEvent.id] === EventStatus.Finished;
 
   return timeMet || eventMet;
 }
@@ -105,7 +106,7 @@ export function shouldTerminate(
  * Returns a boolean indicating whether the simulation should continue.
  * Simulation should continue if there are more events to process in queue.
  */
-export function run(
+export function advance(
   current: Simulation,
   heap: EventHeap,
 ): [Simulation, boolean] {
@@ -116,9 +117,9 @@ export function run(
       return [current, false]; // No more events to process
     }
 
-    // Only handle `Scheduled` events: lazily skip `Waiting` ones
-    if (current.timeline.status[event.id] === EventState.Scheduled) {
-      const next = step(current, current.timeline.events[event.id]);
+    // Only handle `Scheduled` events: lazily skip those finished since they were pushed
+    if (current.timeline.status[event.id] === EventStatus.Scheduled) {
+      const next = handleEvent(current, current.timeline.events[event.id]);
 
       return [next, true];
     }
@@ -126,29 +127,28 @@ export function run(
 }
 
 /**
- * Processes the simulation for one step, i.e. handles the current event,
- * and possibly schedules a next one.
+ * Handles the current event, and possibly schedules next ones.
  * Advances the simulation time to the current event scheduled time.
  * Updates the state of the process associated with the current event.
  * Updates the event queue with the current event marked as `Finished`.
  * Returns an updated copy of the original simulation container.
  */
-function step(sim: Simulation, event: Event): Simulation {
+function handleEvent(sim: Simulation, event: Event): Simulation {
   // Advance simulation time to this event's scheduled time
   // Start with a shallow copy of the timeline; finishEvent and scheduleEvent will do deep copies
   // Shallow-copy the stores registry; store objects are copied on write by put/get
   const nextSim: Simulation = {
     ...sim,
     currentTime: event.scheduledAt,
-    state: { ...sim.state },
+    states: { ...sim.states },
     stores: { ...sim.stores },
   };
 
   // Handle the event by executing its process, which may yield new events to schedule and old events to finish
-  const { state, next, finish } = handleEvent(nextSim, event);
+  const { state, next, finish } = runStep(nextSim, event);
 
   // Update the event's process state in the simulation container
-  nextSim.state[event.id] = { ...state };
+  nextSim.states[event.id] = { ...state };
 
   // Mark the events as finished and append a lifecycle transition
   const finished = finish ? [...finish, event] : [event];
@@ -157,7 +157,7 @@ function step(sim: Simulation, event: Event): Simulation {
   }
 
   // Schedule the next events yielded by the current process if necessary
-  // `Waiting` events are not automatically scheduled. This allows processes to yield events that are triggered by external conditions or other processes, rather than automatically handled at their scheduled time.
+  // `Waiting` events are added to the timeline but never handled: they stand for a blocked process until another step finishes them and emits its continuation.
   for (const nextEvent of next) {
     nextSim.timeline = scheduleEvent(nextSim, nextEvent);
   }
@@ -166,16 +166,15 @@ function step(sim: Simulation, event: Event): Simulation {
 }
 
 /**
- * Handles an event by executing its associated process.
- * Returns the intermediate result for the completed simulation step:
- * - Handled event with updated status and timestamps reflecting process state;
+ * Runs the process step associated with an event.
+ * Returns the step result:
  * - Updated state for the process associated to the event;
  * - Optional next events for process continuation or spawning new processes.
  */
-function handleEvent(
+function runStep(
   sim: Simulation,
   event: Event,
-): ProcessStep {
+): StepResult {
   // Retrieve process definition from the registry
   const definition = sim.processes[event.process.type];
   if (!definition) {
@@ -185,16 +184,23 @@ function handleEvent(
   }
 
   // Retrieve parent process state if the event has a parent
-  const parentState = event.parent ? sim.state[event.parent] : undefined;
+  const parentState = event.parent ? sim.states[event.parent] : undefined;
   if (event.parent && !parentState) {
     throw new RangeError(
       `Parent state not found for event: ${event.id} (parent: ${event.parent})`,
     );
   }
 
+  // A continuation needs a parent to continue from
+  if (event.process.continues && !event.parent) {
+    throw new TypeError(
+      `Event cannot continue a process without a parent: ${event.id}`,
+    );
+  }
+
   // A process can only be continued under its own type
   if (
-    parentState && event.process.inheritStep &&
+    parentState && event.process.continues &&
     parentState.type !== event.process.type
   ) {
     throw new TypeError(
@@ -212,10 +218,10 @@ function handleEvent(
     // - The same process advances through multiple events, keeping its ID
     // Several continuations emitted from the same step each get their own copy of the state (UNIX `fork`).
     // Used for temporal patterns (timeouts), synchronous I/O (synchronization).
-    (parentState && event.process.inheritStep)
+    (parentState && event.process.continues)
       ? {
         id: parentState.id,
-        ...(parentState.parent && { parent: parentState.parent }),
+        ...(parentState.spawner && { spawner: parentState.spawner }),
         type: parentState.type,
         step: parentState.step,
         data: {
@@ -232,7 +238,7 @@ function handleEvent(
       : parentState
       ? {
         id: event.id,
-        parent: parentState.id,
+        spawner: parentState.id,
         type: definition.type,
         step: definition.initial,
         data: {
@@ -303,7 +309,7 @@ export function registerPredicate<
 export function registerProcess<
   M extends StepStateMap,
   K extends ProcessType,
-  S extends StoreRegistry = StoreRegistry,
+  S extends StoreItemMap = StoreItemMap,
 >(
   sim: Simulation,
   process: ProcessDefinition<M, S> & { type: K },
@@ -339,9 +345,51 @@ export function createEvent<T extends StateData>(
 }
 
 /**
+ * Advances `event` to its next step, at `scheduledAt`. `event.id` becomes the parent of the new event.
+ * Pass `data` to attach a payload, merged over the process data on the next step; without it, the next step sees the state returned by the handler as is.
+ * Use `options` to set `waiting`, `priority`, etc.
+ */
+export function continueEvent<T extends StateData>(
+  event: Event,
+  scheduledAt: Timestamp,
+  data?: T,
+  options?: Pick<CreateEventOptions, "waiting" | "priority">,
+): Event<T> {
+  return createEvent({
+    parent: event.id,
+    scheduledAt,
+    ...options,
+    process: data !== undefined
+      ? { type: event.process.type, continues: true, data: { ...data } }
+      : { type: event.process.type, continues: true },
+  });
+}
+
+/**
+ * Resumes the process blocked on a waiting event, at `scheduledAt`. `blocked.parent` becomes the parent of the new event.
+ * Used when a producer delivers to a blocked consumer, or vice-versa: the blocked event provides the process step to resume.
+ * Pass `data` to deliver a payload (an item to a blocked consumer); without it, the resumed step sees the state returned by the handler as is (a blocked producer).
+ */
+export function resumeEvent<T extends StateData>(
+  blocked: Event<StateData>,
+  scheduledAt: Timestamp,
+  data?: T,
+  options?: Pick<CreateEventOptions, "priority">,
+): Event<T> {
+  return createEvent({
+    parent: blocked.parent,
+    scheduledAt,
+    ...options,
+    process: data !== undefined
+      ? { type: blocked.process.type, continues: true, data: { ...data } }
+      : { type: blocked.process.type, continues: true },
+  });
+}
+
+/**
  * Schedules an event for future processing in the simulation.
  * Validates that the event isn't scheduled in the past.
- * `initialState` defaults to `EventState.Scheduled` unless `waiting` is specified at event creation, in which case the event blocks until explicitly resumed (e.g. via store synchronization primitives).
+ * `initialStatus` defaults to `EventStatus.Scheduled` unless `waiting` is specified at event creation, in which case the event is never handled (see `EventStatus.Waiting`).
  * Returns an updated Timeline reflecting the new event and its initial transition.
  */
 export function scheduleEvent<T extends StateData>(
@@ -355,20 +403,20 @@ export function scheduleEvent<T extends StateData>(
     );
   }
 
-  const initialState: EventState = event.waiting
-    ? EventState.Waiting
-    : EventState.Scheduled;
+  const initialStatus: EventStatus = event.waiting
+    ? EventStatus.Waiting
+    : EventStatus.Scheduled;
 
   return {
     ...sim.timeline,
     events: { ...sim.timeline.events, [event.id]: event },
     status: {
       ...sim.timeline.status,
-      [event.id]: initialState,
+      [event.id]: initialStatus,
     },
     transitions: [
       ...sim.timeline.transitions,
-      { id: event.id, state: initialState, at: sim.currentTime },
+      { id: event.id, status: initialStatus, at: sim.currentTime },
     ],
   };
 }
@@ -383,16 +431,16 @@ export function finishEvent<T extends StateData>(
   event: Event<T>,
 ): Timeline {
   // Already finished: nothing to record
-  if (sim.timeline.status[event.id] === EventState.Finished) {
+  if (sim.timeline.status[event.id] === EventStatus.Finished) {
     return sim.timeline;
   }
 
   return {
     ...sim.timeline,
-    status: { ...sim.timeline.status, [event.id]: EventState.Finished },
+    status: { ...sim.timeline.status, [event.id]: EventStatus.Finished },
     transitions: [
       ...sim.timeline.transitions,
-      { id: event.id, state: EventState.Finished, at: sim.currentTime },
+      { id: event.id, status: EventStatus.Finished, at: sim.currentTime },
     ],
   };
 }

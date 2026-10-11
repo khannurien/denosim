@@ -7,20 +7,20 @@ import type {
   StateData,
   Store,
 } from "../src/model.ts";
-import { EventState, QueueDiscipline } from "../src/model.ts";
+import { EventStatus, QueueDiscipline } from "../src/model.ts";
 import {
-  continueEvent,
   getWhere,
   initializeStore,
   put,
   registerStore,
-} from "../src/resources.ts";
+} from "../src/stores.ts";
 import { runSimulationWithDeltas } from "../src/runner.ts";
 import {
   deserializeSimulation,
   serializeSimulation,
 } from "../src/serialize.ts";
 import {
+  continueEvent,
   createEvent,
   initializeSimulation,
   registerProcess,
@@ -54,7 +54,7 @@ const counter: ProcessDefinition<{
 };
 
 function maxCount(state: Simulation): number {
-  return Object.values(state.state).reduce((max, process) => {
+  return Object.values(state.states).reduce((max, process) => {
     const count = process.data["count"];
     return typeof count === "number" ? Math.max(max, count) : max;
   }, 0);
@@ -62,7 +62,7 @@ function maxCount(state: Simulation): number {
 
 function finishedCount(state: Simulation): number {
   return Object.values(state.timeline.events).filter((event) =>
-    state.timeline.status[event.id] === EventState.Finished
+    state.timeline.status[event.id] === EventStatus.Finished
   ).length;
 }
 
@@ -116,7 +116,7 @@ Deno.test("basic serialization", async () => {
     Object.keys(recovered[recovered.length - 1].timeline.events).length,
     1,
   );
-  assertEquals(recovered[recovered.length - 1].state[e.id].data.value, 42);
+  assertEquals(recovered[recovered.length - 1].states[e.id].data.value, 42);
 
   const restoredHandler = recovered[0].processes["dummy"].steps["start"];
   assert(typeof restoredHandler === "function");
@@ -169,9 +169,9 @@ Deno.test("process resume across runs", async () => {
     partial.result.current.disciplines,
     partial.result.current.predicates,
   );
-  const checkpoint = recovered[recovered.length - 1];
+  const restored = recovered[recovered.length - 1];
 
-  const resumed = await runSimulationWithDeltas(checkpoint);
+  const resumed = await runSimulationWithDeltas(restored);
 
   const fullRun = initializeSimulation();
   fullRun.processes = registerProcess(fullRun, counter);
@@ -285,7 +285,6 @@ Deno.test("store state survives serialization roundtrip", async () => {
   const store: Store<StateData, "tag-store"> = {
     id: "tag-store",
     capacity: 3,
-    blocking: false,
     discipline: QueueDiscipline.LIFO,
     buffer: {
       entries: [{ event: bufA, seq: 0 }, { event: bufB, seq: 1 }],
@@ -293,7 +292,7 @@ Deno.test("store state survives serialization roundtrip", async () => {
     },
     getRequests: { entries: [], seq: 0 },
     putRequests: { entries: [], seq: 0 },
-    filteredGetRequests: [],
+    getWhereRequests: [],
   };
 
   // Bypass the typed API to inject the store directly
@@ -330,7 +329,7 @@ Deno.test("recovered handler executes correctly on continued simulation", async 
   assertEquals(partial.result.current.currentTime, 2);
   assert(
     Object.values(partial.result.current.timeline.status).some(
-      (s) => s === EventState.Scheduled,
+      (s) => s === EventStatus.Scheduled,
     ),
   );
 
@@ -340,10 +339,10 @@ Deno.test("recovered handler executes correctly on continued simulation", async 
     partial.result.current.disciplines,
     partial.result.current.predicates,
   );
-  const checkpoint = recovered[recovered.length - 1];
+  const restored = recovered[recovered.length - 1];
 
   // Continuing the simulation requires the recovered handler to fire
-  const { result } = await runSimulationWithDeltas(checkpoint);
+  const { result } = await runSimulationWithDeltas(restored);
 
   // Handler must have advanced the counter to its limit
   assertEquals(result.current.currentTime, 4);
@@ -351,10 +350,10 @@ Deno.test("recovered handler executes correctly on continued simulation", async 
   assertEquals(finishedCount(result.current), 5); // count 0→4 = 5 events
 });
 
-Deno.test("filteredGetRequests survives serialization roundtrip", async () => {
-  // Inject a store with a pre-populated filteredGetRequests entry and verify
+Deno.test("getWhereRequests survives serialization roundtrip", async () => {
+  // Inject a store with a pre-populated getWhereRequests entry and verify
   // that the predicateType string is preserved across serialize → deserialize.
-  const waiterEvent = createEvent({
+  const requestEvent = createEvent({
     scheduledAt: 0,
     waiting: true,
     process: { type: "none" },
@@ -362,14 +361,13 @@ Deno.test("filteredGetRequests survives serialization roundtrip", async () => {
 
   const store: Store<StateData, "fgr-store"> = {
     id: "fgr-store",
-    capacity: 1,
-    blocking: true,
+    capacity: 0,
     discipline: QueueDiscipline.LIFO,
     buffer: { entries: [], seq: 0 },
     getRequests: { entries: [], seq: 0 },
     putRequests: { entries: [], seq: 0 },
-    filteredGetRequests: [{
-      event: waiterEvent,
+    getWhereRequests: [{
+      event: requestEvent,
       predicateType: "myPredicate",
       seq: 0,
     }],
@@ -387,14 +385,14 @@ Deno.test("filteredGetRequests survives serialization roundtrip", async () => {
   );
   const stop = recovered[recovered.length - 1];
 
-  assertEquals(stop.stores["fgr-store"].filteredGetRequests.length, 1);
+  assertEquals(stop.stores["fgr-store"].getWhereRequests.length, 1);
   assertEquals(
-    stop.stores["fgr-store"].filteredGetRequests[0].predicateType,
+    stop.stores["fgr-store"].getWhereRequests[0].predicateType,
     "myPredicate",
   );
 });
 
-Deno.test("pause/resume correctly resolves getWhere waiter after deserialization", async () => {
+Deno.test("pause/resume correctly resolves getWhere request after deserialization", async () => {
   interface TaskData extends StateData {
     taskId: number;
     urgent: boolean;
@@ -431,9 +429,9 @@ Deno.test("pause/resume correctly resolves getWhere waiter after deserialization
     initial: "go",
     steps: {
       go(sim, event, state) {
-        // Seed non-urgent task to buffer; result discarded (non-blocking store seed).
+        // Seed non-urgent task to buffer; result discarded (buffered store seed).
         put(sim, event, TASK_STORE, { taskId: 1, urgent: false });
-        // Urgent task resolves the scheduler's getWhere waiter.
+        // Urgent task resolves the scheduler's getWhere request.
         const { step, resume, finish } = put(sim, event, TASK_STORE, {
           taskId: 2,
           urgent: true,
@@ -459,7 +457,6 @@ Deno.test("pause/resume correctly resolves getWhere waiter after deserialization
   sim.predicates = predicateRegistry;
   const store = initializeStore({
     id: TASK_STORE,
-    blocking: false,
     capacity: 10,
   });
   sim.stores = registerStore(sim, store);
@@ -480,13 +477,13 @@ Deno.test("pause/resume correctly resolves getWhere waiter after deserialization
   const partial = await runSimulationWithDeltas(sim, { untilTime: 0 });
   assertEquals(partial.result.current.currentTime, 0);
 
-  // Scheduler must be blocked: waiter recorded with the predicate key.
+  // Scheduler must be blocked: request recorded with the predicate key.
   assertEquals(
-    partial.result.current.stores[TASK_STORE].filteredGetRequests.length,
+    partial.result.current.stores[TASK_STORE].getWhereRequests.length,
     1,
   );
   assertEquals(
-    partial.result.current.stores[TASK_STORE].filteredGetRequests[0]
+    partial.result.current.stores[TASK_STORE].getWhereRequests[0]
       .predicateType,
     PREDICATE_KEY,
   );
@@ -499,18 +496,18 @@ Deno.test("pause/resume correctly resolves getWhere waiter after deserialization
     sim.disciplines,
     sim.predicates,
   );
-  const checkpoint = recovered[recovered.length - 1];
+  const restored = recovered[recovered.length - 1];
 
-  // filteredGetRequests must survive the roundtrip.
-  assertEquals(checkpoint.stores[TASK_STORE].filteredGetRequests.length, 1);
+  // getWhereRequests must survive the roundtrip.
+  assertEquals(restored.stores[TASK_STORE].getWhereRequests.length, 1);
   assertEquals(
-    checkpoint.stores[TASK_STORE].filteredGetRequests[0].predicateType,
+    restored.stores[TASK_STORE].getWhereRequests[0].predicateType,
     PREDICATE_KEY,
   );
 
-  // Resume: producer fires at t=1, resolves the getWhere waiter with taskId=2.
-  const { result } = await runSimulationWithDeltas(checkpoint);
-  const schedulerState = Object.values(result.current.state).find(
+  // Resume: producer fires at t=1, resolves the getWhere request with taskId=2.
+  const { result } = await runSimulationWithDeltas(restored);
+  const schedulerState = Object.values(result.current.states).find(
     (s) => s.type === "scheduler" && s.data["taskId"] === 2,
   );
   assert(

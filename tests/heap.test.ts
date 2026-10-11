@@ -8,7 +8,7 @@ import {
   heapPush,
   heapPushWith,
 } from "../src/heap.ts";
-import { EventState } from "../src/model.ts";
+import { EventStatus } from "../src/model.ts";
 import {
   createEvent,
   initializeSimulation,
@@ -88,7 +88,7 @@ Deno.test("buildHeap returns empty heap when no Scheduled events exist", () => {
   // Add a Waiting event; buildHeap must skip it
   const e = createEvent({ scheduledAt: 10, waiting: true });
   sim.timeline = scheduleEvent(sim, e);
-  assertEquals(sim.timeline.status[e.id], EventState.Waiting);
+  assertEquals(sim.timeline.status[e.id], EventStatus.Waiting);
 
   const heap = buildHeap(sim);
   assertEquals(heap.entries.length, 0);
@@ -103,7 +103,7 @@ Deno.test("buildHeap skips Finished events", () => {
   sim.timeline = scheduleEvent(sim, e2);
 
   // Manually finish e1
-  sim.timeline.status[e1.id] = EventState.Finished;
+  sim.timeline.status[e1.id] = EventStatus.Finished;
 
   const heap = buildHeap(sim);
   assertEquals(heap.entries.length, 1);

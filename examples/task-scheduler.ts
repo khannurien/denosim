@@ -2,15 +2,15 @@ import { randomIntegerBetween, randomSeeded } from "@std/random";
 
 import type { Event, ProcessDefinition, StateData } from "../src/model.ts";
 import {
-  continueEvent,
   get,
   getWhere,
   initializeStore,
   put,
   registerStore,
-} from "../src/resources.ts";
+} from "../src/stores.ts";
 import { runSimulation } from "../src/runner.ts";
 import {
+  continueEvent,
   createEvent,
   initializeSimulation,
   registerDiscipline,
@@ -25,7 +25,7 @@ import {
  * - `registerPredicate` + `getWhere`: sync-workers selectively dequeue only sync tasks;
  * - `get`: any-worker serves all remaining tasks in EDF order.
  *
- * Two dedicated sync-workers and one general any-worker pull from a shared non-blocking queue.
+ * Two dedicated sync-workers and one general any-worker pull from a shared buffered queue.
  * Because sync tasks have their own workers, they see lower wait times; EDF on the general worker keeps deadline misses low for the async tasks that spill over.
  */
 
@@ -96,10 +96,9 @@ if (import.meta.main) {
     predicate: (event: Event<Task>) => event.process?.data?.kind === "sync",
   });
 
-  // Shared task queue: non-blocking, EDF
+  // Shared task queue: buffered, EDF
   const queue = initializeStore<Task>({
     id: QUEUE_ID,
-    blocking: false,
     capacity: Number.MAX_SAFE_INTEGER,
     discipline: EDF,
   });
@@ -130,7 +129,7 @@ if (import.meta.main) {
         };
 
         // Use a dummy "none" event as the producer so the put's own continuation (step) carries the correct process type and can be safely discarded
-        // We only need `resume` (wakeup for a blocked worker) and `finish` (cleanup of the old waiting placeholder)
+        // We only need `resume` (wakeup for a blocked worker) and `finish` (cleanup of the old request)
         // `step` is skipped because the generator schedules its own next arrival event instead
         const putEvent = createEvent({
           scheduledAt: sim.currentTime,
