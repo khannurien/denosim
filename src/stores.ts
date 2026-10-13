@@ -4,6 +4,7 @@ import type {
   Event,
   GetWhereRequest,
   Predicate,
+  PredicateDefinition,
   PredicateType,
   Simulation,
   StateData,
@@ -116,19 +117,25 @@ function storeQueueReorder<T extends StateData>(
 
 /**
  * Creates a new store with:
- * - Unique ID
  * - Optional capacity (defaults to 0: synchronous)
- * - A queue discipline key (defaults to `FIFO`)
+ * - A discipline for its items and one for its blocked consumers (both default to `FIFO`)
  * All queues (`buffer`, `getRequests`, `putRequests`, `getWhereRequests`) start empty.
- * The returned store must be registered with `registerStore` before use in a simulation.
+ * The returned store holds no ID: it takes the one it is registered under, with `registerStore` or as a key of `sim.stores`.
+ * `T`, the type of its items, is inferred from the simulation the store is written into (e.g. `const sim: Simulation<Stores> = { ...initializeSimulation(), stores: { ... } }`).
  */
 export function initializeStore<T extends StateData = StateData>(
-  options: CreateStoreOptions,
+  options: CreateStoreOptions<T>,
 ): Store<T> {
+  const { capacity, discipline, consumerDiscipline } = options;
+
   return {
-    id: options.id ?? crypto.randomUUID(),
-    capacity: options.capacity ?? 0,
-    discipline: options.discipline ?? "FIFO",
+    capacity: capacity ?? 0,
+    discipline: typeof discipline === "object"
+      ? discipline.type
+      : discipline ?? "FIFO",
+    consumerDiscipline: typeof consumerDiscipline === "object"
+      ? consumerDiscipline.type
+      : consumerDiscipline ?? "FIFO",
     buffer: { entries: [], seq: 0 },
     getRequests: { entries: [], seq: 0 },
     putRequests: { entries: [], seq: 0 },
@@ -137,28 +144,25 @@ export function initializeStore<T extends StateData = StateData>(
 }
 
 /**
- * Adds a store to the simulation's store registry and returns the updated store definitions.
- * Specify `T` explicitly to declare the item type held by the store (e.g. `registerStore<MyData>(sim, store)`).
- * The store's ID and item type are reflected in the return type, enabling typed access via `sim.stores[id]` in subsequent calls.
+ * Adds a store to the simulation's store registry, under `id`, and returns the updated store definitions.
+ * `id` is one of the stores the simulation declares, and the store holds its items: a handler can register a store this way, assigning the result to `sim.stores`.
+ * A store registered under an ID already taken replaces the one that was there.
  */
 export function registerStore<
-  T extends StateData = StateData,
-  S extends StoreItemMap = StoreItemMap,
-  K extends StoreID = StoreID,
+  S extends StoreItemMap,
+  K extends keyof S & StoreID,
 >(
   sim: Simulation<S>,
-  store: Store<StateData, K>,
-): StoreRegistry<S & Record<K, T>> {
-  return {
-    ...sim.stores,
-    [store.id]: { ...store },
-  } as StoreRegistry<S & Record<K, T>>;
+  id: K,
+  store: Store<S[K]>,
+): StoreRegistry<S> {
+  return { ...sim.stores, [id]: { ...store } };
 }
 
 /**
- * Reorders the queues of a store (`buffer`, `getRequests`, `putRequests`) under the discipline it now points to.
+ * Reorders the queues of a store under the disciplines it now points to: `buffer` and `putRequests` under `discipline`, `getRequests` under `consumerDiscipline`.
  * Queues are ordered as entries come in: a store pointed to another discipline, or a discipline registered again under the same key (e.g. on a branch, to compare two policies), leaves the queued entries in their former order until this is called.
- * Throws `RangeError` if the store or its discipline is missing.
+ * Throws `RangeError` if the store or one of its disciplines is missing.
  * Returns the updated store definitions.
  */
 export function reorderStore<
@@ -168,55 +172,58 @@ export function reorderStore<
   sim: Simulation<S>,
   id: K,
 ): StoreRegistry<S> {
-  const store = sim.stores[id];
-  if (!store) {
-    throw new RangeError(`Store not found in registry: ${id}`);
-  }
-  const discipline = sim.disciplines[store.discipline];
-  if (!discipline) {
-    throw new RangeError(
-      `Discipline definition not found in registry: ${store.discipline}`,
-    );
-  }
+  const { store, discipline, consumerDiscipline } = resolveStore(sim, id);
 
   return {
     ...sim.stores,
-    [store.id]: {
+    [id]: {
       ...store,
       buffer: storeQueueReorder(store.buffer, discipline),
-      getRequests: storeQueueReorder(store.getRequests, discipline),
+      getRequests: storeQueueReorder(store.getRequests, consumerDiscipline),
       putRequests: storeQueueReorder(store.putRequests, discipline),
     },
   };
 }
 
 /**
- * Looks up a store and its discipline from the simulation registries.
- * Throws `RangeError` if either is missing.
+ * Looks up a store and its disciplines from the simulation registries: `discipline` orders its items, `consumerDiscipline` its blocked consumers.
+ * Throws `RangeError` if any is missing; `event`, when the lookup is made on its behalf, is added to the message.
  */
 function resolveStore<
   S extends StoreItemMap,
   K extends keyof S & StoreID,
 >(
   sim: Simulation<S>,
-  event: Event,
   id: K,
-): { store: Store<S[K]>; discipline: DisciplineDefinition } {
+  event?: Event,
+): {
+  store: Store<S[K]>;
+  discipline: DisciplineDefinition;
+  consumerDiscipline: DisciplineDefinition;
+} {
+  const context = event
+    ? ` (scheduled at: ${event.scheduledAt}; current time: ${sim.currentTime})`
+    : "";
+
   const store = sim.stores[id];
   if (!store) {
-    throw new RangeError(
-      `Store not found in registry: ${id}` +
-        ` (scheduled at: ${event.scheduledAt}; current time: ${sim.currentTime})`,
-    );
+    throw new RangeError(`Store not found in registry: ${id}${context}`);
   }
-  const discipline = sim.disciplines[store.discipline];
-  if (!discipline) {
-    throw new RangeError(
-      `Discipline definition not found in registry: ${store.discipline}` +
-        ` (scheduled at: ${event.scheduledAt}; current time: ${sim.currentTime})`,
-    );
-  }
-  return { store, discipline };
+
+  const [discipline, consumerDiscipline] = [
+    store.discipline,
+    store.consumerDiscipline,
+  ].map((key) => {
+    const definition = sim.disciplines[key];
+    if (!definition) {
+      throw new RangeError(
+        `Discipline definition not found in registry: ${key}${context}`,
+      );
+    }
+    return definition;
+  });
+
+  return { store, discipline, consumerDiscipline };
 }
 
 /**
@@ -240,7 +247,7 @@ function resolvePredicate(
 
 /**
  * Data of the process `event` belongs to, as the handler of `event` received it: the state saved by its parent, or the event's own data when it starts a process.
- * This is what a consumer's request carries, for disciplines and predicates to rank or filter consumers on.
+ * This is what a consumer's request carries, for consumer disciplines and predicates to rank or filter consumers on.
  * Returns `undefined` when the event has neither a handled parent nor data.
  */
 function resolveProcessData<S extends StoreItemMap>(
@@ -296,7 +303,7 @@ function resolvePayload<T extends StateData>(
 
 /**
  * Sends `data` to a store on behalf of `event`. Three cases:
- * - Pending consumer, unconditional or filtered with a predicate accepting the item: immediate handoff to the best one by discipline;
+ * - Pending consumer, unconditional or filtered with a predicate accepting the item: immediate handoff to the best one by consumer discipline;
  * - Store at capacity (always, with a capacity of `0`): the producer blocks;
  * - Available capacity: the data is buffered.
  * Mutates `sim.stores` directly and returns a `StoreResult` describing the continuation.
@@ -311,14 +318,18 @@ export function put<
   id: K,
   data: T,
 ): StoreResult {
-  const { store, discipline } = resolveStore<S, K>(sim, event, id);
+  const { store, discipline, consumerDiscipline } = resolveStore<S, K>(
+    sim,
+    id,
+    event,
+  );
 
   // Carries `data` so the predicate can inspect it; only built when a getWhere request is pending
   const itemEvent = store.getWhereRequests.length > 0
     ? continueEvent(event, sim.currentTime, data)
     : undefined;
 
-  // Scan all getWhere requests; keep the discipline-best one whose predicate accepts the item
+  // Scan all getWhere requests; keep the best one by consumer discipline whose predicate accepts the item
   const best = itemEvent === undefined ? null : store.getWhereRequests.reduce<
     { req: GetWhereRequest; index: number } | null
   >((best, req, index) => {
@@ -328,23 +339,23 @@ export function put<
     // Skip requests whose predicate rejects the item
     if (!predicate(itemEvent, req.event)) return best;
 
-    // Among those that accept, keep the discipline-best
-    return !best || discipline.comparator(req, best.req) < 0
+    // Among those that accept, keep the best one
+    return !best || consumerDiscipline.comparator(req, best.req) < 0
       ? { req, index }
       : best;
   }, null);
 
-  // Unconditional pending get requests: the best one by discipline is at the root of the heap
+  // Unconditional pending get requests: the best one by consumer discipline is at the root of the heap
   const unconditional = store.getRequests.entries.at(0);
 
-  // The getWhere request is served if it wins over the unconditional one under the store discipline
+  // The getWhere request is served if it wins over the unconditional one under the consumer discipline
   if (
     best && (
       !unconditional ||
-      discipline.comparator(best.req, unconditional) < 0
+      consumerDiscipline.comparator(best.req, unconditional) < 0
     )
   ) {
-    checkRequest(sim, event, best.req.event, store.id);
+    checkRequest(sim, event, best.req.event, id);
 
     const remaining = [
       ...store.getWhereRequests.slice(0, best.index),
@@ -353,7 +364,7 @@ export function put<
 
     sim.stores = {
       ...sim.stores,
-      [store.id]: { ...store, getWhereRequests: remaining },
+      [id]: { ...store, getWhereRequests: remaining },
     };
 
     const updatedGet = resumeEvent(best.req.event, sim.currentTime, data);
@@ -370,13 +381,13 @@ export function put<
   if (unconditional) {
     const [getRequest, remaining] = storeQueuePop(
       store.getRequests,
-      discipline,
+      consumerDiscipline,
     );
-    checkRequest(sim, event, getRequest, store.id);
+    checkRequest(sim, event, getRequest, id);
 
     sim.stores = {
       ...sim.stores,
-      [store.id]: { ...store, getRequests: remaining },
+      [id]: { ...store, getRequests: remaining },
     };
 
     const updatedGet = resumeEvent(getRequest, sim.currentTime, data);
@@ -393,7 +404,7 @@ export function put<
 
     sim.stores = {
       ...sim.stores,
-      [store.id]: {
+      [id]: {
         ...store,
         putRequests: storeQueuePush(store.putRequests, blockedPut, discipline),
       },
@@ -410,7 +421,7 @@ export function put<
 
   sim.stores = {
     ...sim.stores,
-    [store.id]: {
+    [id]: {
       ...store,
       buffer: storeQueuePush(store.buffer, item, discipline),
     },
@@ -428,12 +439,11 @@ export function put<
 function tryGetImmediate<T extends StateData>(
   sim: Simulation<StoreItemMap>,
   event: Event,
+  id: StoreID,
   store: Store<T>,
   discipline: DisciplineDefinition,
   predicate?: (event: Event<T>) => boolean,
 ): StoreResult<T> | null {
-  const id = store.id;
-
   // Scan buffer first, as buffered items entered the store before any blocked producer
   if (store.buffer.entries.length > 0) {
     const result = predicate
@@ -459,7 +469,7 @@ function tryGetImmediate<T extends StateData>(
         store.putRequests,
         discipline,
       );
-      checkRequest(sim, event, putRequest, store.id);
+      checkRequest(sim, event, putRequest, id);
 
       // Its request, which carries the item, becomes the buffered item
       const updatedPut = resumeEvent(putRequest, sim.currentTime);
@@ -491,7 +501,7 @@ function tryGetImmediate<T extends StateData>(
     // Match found: dequeue the producer, hand off the payload, resume both sides
     if (result) {
       const [putRequest, remaining] = result;
-      checkRequest(sim, event, putRequest, store.id);
+      checkRequest(sim, event, putRequest, id);
 
       sim.stores = {
         ...sim.stores,
@@ -529,14 +539,18 @@ export function get<
   event: Event,
   id: K,
 ): StoreResult<S[K]> {
-  const { store, discipline } = resolveStore<S, K>(sim, event, id);
+  const { store, discipline, consumerDiscipline } = resolveStore<S, K>(
+    sim,
+    id,
+    event,
+  );
 
   // Check putRequests and buffer for an available item; return immediately on a match
-  const immediate = tryGetImmediate(sim, event, store, discipline);
+  const immediate = tryGetImmediate(sim, event, id, store, discipline);
   if (immediate) return immediate;
 
   // No data available: block get (in getRequests)
-  // The request carries the data of the caller's process so disciplines can rank waiting consumers by data
+  // The request carries the data of the caller's process so the consumer discipline can rank waiting consumers by data
   const blockedGet = continueEvent(
     event,
     sim.currentTime,
@@ -546,9 +560,13 @@ export function get<
 
   sim.stores = {
     ...sim.stores,
-    [store.id]: {
+    [id]: {
       ...store,
-      getRequests: storeQueuePush(store.getRequests, blockedGet, discipline),
+      getRequests: storeQueuePush(
+        store.getRequests,
+        blockedGet,
+        consumerDiscipline,
+      ),
     },
   };
 
@@ -557,6 +575,8 @@ export function get<
 
 /**
  * Retrieves an item from a store only if it satisfies a caller-supplied predicate.
+ * The predicate is passed as its definition, checked against the items of the store (a store whose items are not typed takes any).
+ * It has to be the one registered under its key: throws `RangeError` if none is, or if another one is.
  * The predicate also receives the caller's side: `event`, or the blocked request made from it, both carrying the data of the caller's process as the handler of `event` received it.
  * Looks for a match among buffered items first, then among blocked producers, whose item is handed off directly.
  * Selection among multiple matching items follows the store's discipline (including custom comparators), applied to each queue separately.
@@ -566,14 +586,25 @@ export function get<
 export function getWhere<
   S extends StoreItemMap,
   K extends keyof S & StoreID,
+  R extends StateData = StateData,
 >(
   sim: Simulation<S>,
   event: Event,
   id: K,
-  predicateType: PredicateType,
+  definition: PredicateDefinition<
+    StateData extends S[K] ? never : S[K],
+    PredicateType,
+    R
+  >,
 ): StoreResult<S[K]> {
-  const { store, discipline } = resolveStore<S, K>(sim, event, id);
-  const predicate = resolvePredicate(sim, event, predicateType);
+  const { store, discipline } = resolveStore<S, K>(sim, id, event);
+  const predicate = resolvePredicate(sim, event, definition.type);
+  if (predicate !== definition.predicate) {
+    throw new RangeError(
+      `Predicate in registry is not the one of the definition: ${definition.type}` +
+        ` (scheduled at: ${event.scheduledAt}; current time: ${sim.currentTime})`,
+    );
+  }
 
   // The caller's side, as the predicate sees it: carries the data of the caller's process, like the request made from it if the caller blocks
   const data = resolveProcessData(sim, event);
@@ -583,6 +614,7 @@ export function getWhere<
   const immediate = tryGetImmediate(
     sim,
     event,
+    id,
     store,
     discipline,
     (item) => predicate(item, caller),
@@ -590,7 +622,7 @@ export function getWhere<
   if (immediate) return immediate;
 
   // No match: block get (in getWhereRequests)
-  // The request carries the data of the caller's process so disciplines and predicates can rank and filter waiting consumers by data
+  // The request carries the data of the caller's process so the consumer discipline and predicates can rank and filter waiting consumers by data
   const blockedGet = continueEvent(
     event,
     sim.currentTime,
@@ -600,13 +632,17 @@ export function getWhere<
 
   sim.stores = {
     ...sim.stores,
-    [store.id]: {
+    [id]: {
       ...store,
       // getWhere requests draw their arrival order from the `getRequests` counter
       getRequests: { ...store.getRequests, seq: store.getRequests.seq + 1 },
       getWhereRequests: [
         ...store.getWhereRequests,
-        { event: blockedGet, predicateType, seq: store.getRequests.seq },
+        {
+          event: blockedGet,
+          predicateType: definition.type,
+          seq: store.getRequests.seq,
+        },
       ],
     },
   };
@@ -630,9 +666,17 @@ export function cancel<
   id: K,
   request: Event,
 ): StoreResult<T> | null {
-  const { store, discipline } = resolveStore<S, K>(sim, event, id);
+  const { store, discipline, consumerDiscipline } = resolveStore<S, K>(
+    sim,
+    id,
+    event,
+  );
 
-  const getRequests = storeQueueRemove(store.getRequests, request, discipline);
+  const getRequests = storeQueueRemove(
+    store.getRequests,
+    request,
+    consumerDiscipline,
+  );
   const putRequests = storeQueueRemove(store.putRequests, request, discipline);
   const getWhereRequests = store.getWhereRequests.filter((req) =>
     req.event.id !== request.id
@@ -649,7 +693,7 @@ export function cancel<
 
   sim.stores = {
     ...sim.stores,
-    [store.id]: { ...store, getRequests, putRequests, getWhereRequests },
+    [id]: { ...store, getRequests, putRequests, getWhereRequests },
   };
 
   return { step: continueEvent(event, sim.currentTime), finish: [request] };

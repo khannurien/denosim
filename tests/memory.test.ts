@@ -125,9 +125,9 @@ Deno.test("applyDelta applies store set operations", () => {
   const req = createEvent({ scheduledAt: 0 });
   base.stores = {
     s1: {
-      id: "s1",
       capacity: 0,
       discipline: QueueDiscipline.LIFO,
+      consumerDiscipline: QueueDiscipline.LIFO,
       buffer: { entries: [], seq: 0 },
       getRequests: { entries: [{ event: req, seq: 0 }], seq: 1 },
       putRequests: { entries: [], seq: 0 },
@@ -206,9 +206,9 @@ Deno.test("diffStores emits only changed queue fields, not the full store", () =
   const prev = initializeSimulation();
   prev.stores = {
     s1: {
-      id: "s1",
       capacity: 0,
       discipline: QueueDiscipline.FIFO,
+      consumerDiscipline: QueueDiscipline.FIFO,
       buffer: shared,
       getRequests: shared,
       putRequests: shared,
@@ -474,10 +474,10 @@ Deno.test("dumps preserve full replay state by default", async () => {
   const sim = initializeSimulation();
   const req1 = createEvent({ scheduledAt: 0 });
   const req2 = createEvent({ scheduledAt: 0 });
-  sim.stores = registerStore(sim, {
-    id: "s1",
+  sim.stores = registerStore(sim, "s1", {
     capacity: 0,
     discipline: QueueDiscipline.FIFO,
+    consumerDiscipline: QueueDiscipline.FIFO,
     buffer: { entries: [], seq: 0 },
     getRequests: { entries: [{ event: req1, seq: 0 }], seq: 1 },
     putRequests: { entries: [{ event: req2, seq: 0 }], seq: 1 },
@@ -557,9 +557,9 @@ Deno.test("pruneWorkingState preserves stores, processes, disciplines, and predi
   const storeId = "s1";
   sim.stores = {
     [storeId]: {
-      id: storeId,
       capacity: 0,
       discipline: "LIFO",
+      consumerDiscipline: "LIFO",
       buffer: { entries: [], seq: 0 },
       getRequests: { entries: [], seq: 0 },
       putRequests: { entries: [], seq: 0 },

@@ -1,0 +1,19 @@
+{
+  "features": {
+    "ghcr.io/khannurien/devcontainer-features/claude-code:1": {
+      "version": "1.2.0",
+      "resolved": "ghcr.io/khannurien/devcontainer-features/claude-code@sha256:17eb69bfd15ff5206c0bff2945935a4349f7423cabee461a0ba2681d52205db9",
+      "integrity": "sha256:17eb69bfd15ff5206c0bff2945935a4349f7423cabee461a0ba2681d52205db9"
+    },
+    "ghcr.io/khannurien/devcontainer-features/opencode:1": {
+      "version": "1.1.0",
+      "resolved": "ghcr.io/khannurien/devcontainer-features/opencode@sha256:8df3f8c98a104ce7e089ba3e8df39e0d3890753c8dc92e03deb54527d30d3574",
+      "integrity": "sha256:8df3f8c98a104ce7e089ba3e8df39e0d3890753c8dc92e03deb54527d30d3574"
+    },
+    "ghcr.io/khannurien/devcontainer-features/rtk:1": {
+      "version": "1.1.0",
+      "resolved": "ghcr.io/khannurien/devcontainer-features/rtk@sha256:4a60b3a1d1b64904de3d856c61cdf7e5943e3c74d114609787dc88d9db7c788f",
+      "integrity": "sha256:4a60b3a1d1b64904de3d856c61cdf7e5943e3c74d114609787dc88d9db7c788f"
+    }
+  }
+}

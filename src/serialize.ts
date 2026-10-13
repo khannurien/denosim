@@ -1,5 +1,9 @@
 import type { HistoryWindow } from "./memory.ts";
-import type { Simulation, SimulationRegistries } from "./model.ts";
+import type {
+  Simulation,
+  SimulationRegistries,
+  StoreItemMap,
+} from "./model.ts";
 
 /**
  * The whole simulation should be completely serializable to JSON.
@@ -22,12 +26,13 @@ export function serializeSimulation(sim: Simulation): string {
  * Restores a simulation from a JSON string produced by `serializeSimulation`.
  * Registries that are initialized in user code must be passed to the function.
  * The simulation can then be resumed from the point where it was serialized.
+ * `S` types its stores, when given (e.g. `deserializeSimulation<Stores>(data, sim)`): the data is trusted to hold them.
  */
-export function deserializeSimulation(
+export function deserializeSimulation<S extends StoreItemMap = StoreItemMap>(
   data: string,
   registries: SimulationRegistries,
-): Simulation {
-  const sim: Simulation = JSON.parse(data);
+): Simulation<S> {
+  const sim: Simulation<S> = JSON.parse(data);
 
   return {
     ...sim,
@@ -48,11 +53,11 @@ export function serializeForDump(window: HistoryWindow): string {
  * Restores a history window from a JSON string produced by `serializeForDump`.
  * Registries that are initialized in user code must be passed to the function.
  */
-export function deserializeDump(
+export function deserializeDump<S extends StoreItemMap = StoreItemMap>(
   data: string,
   registries: SimulationRegistries,
-): HistoryWindow {
-  const window: HistoryWindow = JSON.parse(data);
+): HistoryWindow<S> {
+  const window: HistoryWindow<S> = JSON.parse(data);
 
   return {
     base: {

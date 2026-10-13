@@ -1,4 +1,11 @@
-import type { Event, ProcessDefinition, StateData } from "../mod.ts";
+import type {
+  DisciplineDefinition,
+  Event,
+  PredicateDefinition,
+  ProcessDefinition,
+  Simulation,
+  StateData,
+} from "../mod.ts";
 import {
   cancel,
   continueEvent,
@@ -11,7 +18,6 @@ import {
   registerDiscipline,
   registerPredicate,
   registerProcess,
-  registerStore,
   runSimulation,
   scheduleEvent,
 } from "../mod.ts";
@@ -69,6 +75,21 @@ interface Busy extends Loaded {
 
 type Stores = { ready: Task; done: Task };
 
+const priority: DisciplineDefinition<"priority", Task> = {
+  type: "priority",
+  comparator: (a, b) =>
+    (a.event.process.data?.priority ?? 0) -
+      (b.event.process.data?.priority ?? 0) || a.seq - b.seq,
+};
+
+/** More urgent than the task the CPU runs, carried by its request */
+const urgent: PredicateDefinition<Task, "urgent", Loaded> = {
+  type: "urgent",
+  predicate: (item, request) =>
+    (item.process.data?.priority ?? 0) <
+      (request.process.data?.running.priority ?? 0),
+};
+
 const cpu: ProcessDefinition<
   {
     idle: StateData;
@@ -77,7 +98,8 @@ const cpu: ProcessDefinition<
     run: Busy;
   },
   Stores,
-  { load: Task; run: Task | undefined }
+  { load: Task; run: Task | undefined },
+  "idle"
 > = {
   type: "cpu",
   initial: "idle",
@@ -114,7 +136,7 @@ const cpu: ProcessDefinition<
         sim,
         event,
         "ready",
-        "urgent",
+        urgent,
       );
 
       return {
@@ -195,42 +217,26 @@ const arrival: ProcessDefinition<{ arrive: Task }, Stores> = {
 };
 
 if (import.meta.main) {
-  const sim = initializeSimulation();
+  const sim: Simulation<Stores> = {
+    ...initializeSimulation(),
+    stores: {
+      ready: initializeStore({
+        capacity: Number.MAX_SAFE_INTEGER,
+        discipline: priority,
+      }),
+      done: initializeStore({ capacity: Number.MAX_SAFE_INTEGER }),
+    },
+  };
 
-  sim.disciplines = registerDiscipline<Task>(sim, {
-    type: "priority",
-    comparator: (a, b) =>
-      (a.event.process.data?.priority ?? 0) -
-        (b.event.process.data?.priority ?? 0) || a.seq - b.seq,
-  });
-
-  // More urgent than the task the CPU runs, carried by its request
-  sim.predicates = registerPredicate<Task, "urgent", Loaded>(sim, {
-    type: "urgent",
-    predicate: (item, request) =>
-      (item.process.data?.priority ?? 0) <
-        (request.process.data?.running.priority ?? 0),
-  });
-
-  sim.stores = registerStore<Task>(
-    sim,
-    initializeStore({
-      id: "ready",
-      capacity: Number.MAX_SAFE_INTEGER,
-      discipline: "priority",
-    }),
-  );
-  sim.stores = registerStore<Task>(
-    sim,
-    initializeStore({ id: "done", capacity: Number.MAX_SAFE_INTEGER }),
-  );
+  sim.disciplines = registerDiscipline(sim, priority);
+  sim.predicates = registerPredicate(sim, urgent);
 
   sim.processes = registerProcess(sim, cpu);
   sim.processes = registerProcess(sim, arrival);
 
   sim.timeline = scheduleEvent(
     sim,
-    createEvent({ scheduledAt: 0, process: { type: "cpu" } }),
+    createEvent({ scheduledAt: 0, process: { type: cpu, data: {} } }),
   );
 
   const tasks = [
@@ -243,7 +249,7 @@ if (import.meta.main) {
   for (const { at, ...data } of tasks) {
     sim.timeline = scheduleEvent(
       sim,
-      createEvent({ scheduledAt: at, process: { type: "arrival", data } }),
+      createEvent({ scheduledAt: at, process: { type: arrival, data: data } }),
     );
   }
 

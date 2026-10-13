@@ -210,13 +210,7 @@ export interface GetWhereRequest<T extends StateData = StateData> {
  * Stores are used through `get`, `put`, `getWhere` and `cancel` primitives.
  * Used for inter-process synchronization, producer-consumer patterns, resource sharing, etc.
  */
-export interface Store<
-  T extends StateData = StateData,
-  K extends StoreID = StoreID,
-> {
-  /** Unique identifier for this store */
-  id: K;
-
+export interface Store<T extends StateData = StateData> {
   /**
    * Maximum items the store can hold before `put` operations block.
    * Defaults to `0`: synchronous, a `put` waits for a `get`.
@@ -224,11 +218,17 @@ export interface Store<
   capacity: number;
 
   /**
-   * Discipline key for managing the selection order among available items.
+   * Discipline key for managing the selection order among available items (`buffer`, `putRequests`).
    * Must be registered in `sim.disciplines`. Defaults to `FIFO`.
    * Built-in keys `FIFO` and `LIFO` are always available.
    */
   discipline: DisciplineType;
+
+  /**
+   * Discipline key for managing the selection order among blocked consumers (`getRequests`, `getWhereRequests`).
+   * Must be registered in `sim.disciplines`. Defaults to `FIFO`.
+   */
+  consumerDiscipline: DisciplineType;
 
   /** Items currently held by the store and awaiting consumption */
   buffer: StoreQueue<T>;
@@ -285,7 +285,7 @@ export type Timestamp = number;
 /** Unique, random identifier for an event */
 export type EventID = string;
 
-/** Unique, random identifier for a store */
+/** Unique, user-defined identifier for a store: its key in `sim.stores` */
 export type StoreID = string;
 
 /** Unique, user-defined identifier for a process */
@@ -305,7 +305,7 @@ export type StoreItemMap = Record<StoreID, StateData>;
 
 /** Dynamically maps store IDs to their corresponding stores */
 export type StoreRegistry<R extends StoreItemMap> = {
-  [K in keyof R]: Store<R[K], Extract<K, StoreID>>;
+  [K in keyof R]: Store<R[K]>;
 };
 
 /**
@@ -352,17 +352,19 @@ export type ProcessRegistry = Record<
  * Used to model workflows, state machines, and temporal patterns in the simulation.
  * `S` optionally declares the stores used by the process (store ID to item type), so that store operations in its handlers are checked.
  * `I` optionally declares what the event running a step brings (step to data type), so that its handler reads it typed.
+ * `N` optionally names the initial step, so that `createEvent` checks the data of a process started by its definition; a process with a single step needs none.
  */
 export interface ProcessDefinition<
   M extends StepStateMap,
   S extends StoreItemMap = StoreItemMap,
   I extends StepEventMap<M> = Record<never, never>,
+  N extends keyof M = keyof M,
 > {
   /** Unique identifier for this process type */
   type: ProcessType;
 
   /** Starting step in the state machine when process is first created */
-  initial: keyof M;
+  initial: N;
 
   /** Step handlers defining the process behavior */
   steps: StepsDefinition<M, S, I>;
@@ -457,7 +459,10 @@ export interface StepResult<M extends StepStateMap = StepStateMap> {
  * - No parent: New process with provided process definition;
  * - Parent: Continue parent's process, at its current step, under its process ID.
  */
-export interface CreateEventOptions<T extends StateData = StateData> {
+export interface CreateEventOptions<
+  T extends StateData = StateData,
+  N extends StepType = StepType,
+> {
   /** Optional parent event ID: the event this one continues the process of */
   parent?: EventID;
 
@@ -470,8 +475,33 @@ export interface CreateEventOptions<T extends StateData = StateData> {
   /** Simulation time when event will be processed */
   scheduledAt: Timestamp;
 
-  /** Process to execute, defaults to a dummy `none` process */
-  process?: ProcessCall<T>;
+  /**
+   * Process to execute, defaults to a dummy `none` process.
+   * Named by its type, or by its definition: the data is then checked against the state of its initial step.
+   */
+  process?: ProcessCall<T> | ProcessStart<N, T>;
+}
+
+/**
+ * A process to start, named by its definition: `data` is the state of its initial step, `N`.
+ * The initial step of a definition with several steps must be named in its type (see `ProcessDefinition`).
+ */
+export interface ProcessStart<
+  N extends StepType = StepType,
+  T extends StateData = StateData,
+> {
+  /** Definition of the process to start */
+  type: {
+    type: ProcessType;
+    initial: N;
+    steps: Record<
+      N,
+      (sim: never, event: never, state: ProcessState<T, N>) => unknown
+    >;
+  };
+
+  /** State of the initial step; `{}` for a process without data */
+  data: T;
 }
 
 /** Unique, user-defined identifier for a queue discipline */
@@ -480,7 +510,7 @@ export type DisciplineType = string;
 /**
  * An entry presented to a discipline comparator.
  * `seq` is the entry's arrival order in its queue (lower = arrived earlier); it is not a position.
- * `event` carries the full event, including `process.data`: the item, or the data of a blocked consumer.
+ * `event` carries the full event, including `process.data`: the item under a store's `discipline`, the data of a blocked consumer under its `consumerDiscipline`.
  *
  * The `seq` field enables arrival-order policies (FIFO/LIFO).
  * The `event` field enables data-based policies (priority, EDF, etc.).
@@ -583,18 +613,33 @@ export interface PredicateDefinition<
  * Defaults to a capacity of `0`: synchronous, a `put` waits for a `get`.
  * Capacity determines how many items the store can hold before `put` operations block.
  * Blocking operations use `EventStatus.Waiting` to pause processes until conditions resolve.
- * Stores default to `FIFO` discipline. Custom disciplines must be registered in `sim.disciplines`.
+ * Stores default to `FIFO` disciplines. A custom discipline is given as its definition, and must be registered in `sim.disciplines`.
+ * `T` is the type of the store's items.
  */
-export interface CreateStoreOptions {
-  /** Optional store ID for deterministic typing/registration */
-  id?: StoreID;
-
+export interface CreateStoreOptions<T extends StateData = StateData> {
   /** Maximum items the store can hold before `put` operations block; defaults to `0` */
   capacity?: number;
 
   /**
-   * Discipline key controlling selection order among available items.
-   * Must be registered in `sim.disciplines` using `registerDiscipline`. Defaults to `FIFO`.
+   * Discipline controlling selection order among available items: a built-in key, or a definition over the items of the store.
+   * The definition is checked against `T`, and does not decide it; a store whose items are not typed takes any.
+   * A definition must be registered in `sim.disciplines` using `registerDiscipline`. Defaults to `FIFO`.
    */
-  discipline?: DisciplineType;
+  discipline?:
+    | QueueDiscipline
+    | `${QueueDiscipline}`
+    | DisciplineDefinition<
+      DisciplineType,
+      StateData extends T ? never : NoInfer<T>
+    >;
+
+  /**
+   * Discipline controlling selection order among blocked consumers: a built-in key, or a definition over the data their requests carry.
+   * That data is the one of any process that blocks on the store: it is not checked.
+   * A definition must be registered in `sim.disciplines` using `registerDiscipline`. Defaults to `FIFO`.
+   */
+  consumerDiscipline?:
+    | QueueDiscipline
+    | `${QueueDiscipline}`
+    | DisciplineDefinition<DisciplineType, never>;
 }

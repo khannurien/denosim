@@ -7,7 +7,6 @@ import {
   initializeStore,
   put,
   registerProcess,
-  registerStore,
   runSimulation,
   scheduleEvent,
 } from "../mod.ts";
@@ -51,7 +50,8 @@ const job: ProcessDefinition<
     release: Running;
   },
   Stores,
-  { run: Node }
+  { run: Node },
+  "queue"
 > = {
   type: "job",
   initial: "queue",
@@ -122,16 +122,13 @@ const rent: ProcessDefinition<{ decide: StateData }, Stores> = {
 };
 
 if (import.meta.main) {
-  const sim = initializeSimulation();
-
-  sim.stores = registerStore<Node>(
-    sim,
-    initializeStore({ id: "nodes", capacity: 3 }),
-  );
-  sim.stores = registerStore<Running>(
-    sim,
-    initializeStore({ id: "done", capacity: Number.MAX_SAFE_INTEGER }),
-  );
+  const sim: Simulation<Stores> = {
+    ...initializeSimulation(),
+    stores: {
+      nodes: initializeStore({ capacity: 3 }),
+      done: initializeStore({ capacity: Number.MAX_SAFE_INTEGER }),
+    },
+  };
   for (const node of ["n1", "n2"]) {
     put(sim, createEvent({ scheduledAt: 0 }), "nodes", { node });
   }
@@ -144,10 +141,7 @@ if (import.meta.main) {
       sim,
       createEvent({
         scheduledAt: 2 * i,
-        process: {
-          type: "job",
-          data: { job: i + 1, arrival: 2 * i, duration },
-        },
+        process: { type: job, data: { job: i + 1, arrival: 2 * i, duration } },
       }),
     );
   }
@@ -170,16 +164,15 @@ if (import.meta.main) {
 
   // One run per side, each from a copy of the paused state holding its own operator; `paused` is left untouched
   for (const [side, operator] of Object.entries({ keep, rent })) {
-    const branch: Simulation = {
+    const branch = {
       ...paused,
       processes: registerProcess(paused, operator),
     };
 
     const { result } = await runSimulation(branch);
 
-    const waits = result.stores["done"].buffer.entries.map(({ event }) =>
-      Number(event.process.data?.["start"]) -
-      Number(event.process.data?.["arrival"])
+    const waits = result.stores.done.buffer.entries.map(({ event }) =>
+      (event.process.data?.start ?? 0) - (event.process.data?.arrival ?? 0)
     );
     const mean = waits.reduce((sum, wait) => sum + wait, 0) / waits.length;
 

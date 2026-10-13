@@ -3,6 +3,7 @@ import { randomIntegerBetween, randomSeeded } from "@std/random";
 import type {
   DisciplineComparator,
   DisciplineDefinition,
+  PredicateDefinition,
   ProcessDefinition,
   Simulation,
   StateData,
@@ -17,7 +18,6 @@ import {
   registerDiscipline,
   registerPredicate,
   registerProcess,
-  registerStore,
   reorderStore,
   runSimulation,
   scheduleEvent,
@@ -76,6 +76,17 @@ interface Allocator extends StateData {
 
 type Stores = { queue: Message; done: Running };
 
+/** A job fits if what is free, carried by the allocator's request, covers what it needs */
+const fits: PredicateDefinition<Message, "fits", Allocator> = {
+  type: "fits",
+  predicate: ({ process: { data: message } }, { process: { data } }) =>
+    message !== undefined && data !== undefined && (
+      "released" in message ||
+      message.cpus <= data.free.cpus.length &&
+        message.gpus <= data.free.gpus.length
+    ),
+};
+
 const submit: ProcessDefinition<{ submit: Workload }, Stores> = {
   type: "submit",
   initial: "submit",
@@ -107,14 +118,15 @@ const allocator: ProcessDefinition<
     serve: Allocator;
   },
   Stores,
-  { serve: Message }
+  { serve: Message },
+  "wait"
 > = {
   type: "allocator",
   initial: "wait",
   steps: {
     wait(sim, event, state) {
       // Units handed back, or the best queued job that fits: the request carries the allocator's data, for the predicate to compare
-      const { step, resume, finish } = getWhere(sim, event, "queue", "fits");
+      const { step, resume, finish } = getWhere(sim, event, "queue", fits);
 
       return {
         state: { ...state, step: "serve" },
@@ -141,14 +153,13 @@ const allocator: ProcessDefinition<
       }
 
       // A job fits: start it, as a new process, with everything it needs
-      const job = message;
       const held: Units = {
-        cpus: free.cpus.slice(0, job.cpus),
-        gpus: free.gpus.slice(0, job.gpus),
+        cpus: free.cpus.slice(0, message.cpus),
+        gpus: free.gpus.slice(0, message.gpus),
       };
       const left: Units = {
-        cpus: free.cpus.slice(job.cpus),
-        gpus: free.gpus.slice(job.gpus),
+        cpus: free.cpus.slice(message.cpus),
+        gpus: free.gpus.slice(message.gpus),
       };
 
       return {
@@ -157,8 +168,8 @@ const allocator: ProcessDefinition<
           createEvent({
             scheduledAt: sim.currentTime,
             process: {
-              type: "job",
-              data: { ...job, held, start: sim.currentTime },
+              type: job,
+              data: { ...message, held, start: sim.currentTime },
             },
           }),
           continueEvent(event, sim.currentTime),
@@ -168,10 +179,15 @@ const allocator: ProcessDefinition<
   },
 };
 
-const job: ProcessDefinition<{
-  run: Running;
-  finish: Running;
-}, Stores> = {
+const job: ProcessDefinition<
+  {
+    run: Running;
+    finish: Running;
+  },
+  Stores,
+  Record<never, never>,
+  "run"
+> = {
   type: "job",
   initial: "run",
   steps: {
@@ -225,22 +241,20 @@ const policies: Record<string, DisciplineDefinition<"policy", Message>> = {
 /** Metrics of a finished run, read from the `done` store */
 function report(
   policy: string,
-  result: Simulation,
+  result: Simulation<Stores>,
   total: Record<keyof Units, number>,
 ): string {
-  const jobs = result.stores["done"].buffer.entries.map(({ event }) =>
-    event.process.data
+  const jobs = result.stores.done.buffer.entries.flatMap(({ event }) =>
+    event.process.data ?? []
   );
 
-  const waits = jobs.map((job) =>
-    Number(job?.["start"]) - Number(job?.["submitted"])
-  );
+  const waits = jobs.map((job) => job.start - job.submitted);
   const mean = waits.reduce((sum, wait) => sum + wait, 0) / waits.length;
 
   // Share of the unit-time in use, over the whole run
   const use = (kind: keyof Units) =>
     100 * jobs.reduce(
-      (sum, job) => sum + Number(job?.[kind]) * Number(job?.["duration"]),
+      (sum, job) => sum + job[kind] * job.duration,
       0,
     ) / (total[kind] * result.currentTime);
 
@@ -252,36 +266,23 @@ function report(
 }
 
 if (import.meta.main) {
-  const sim = initializeSimulation();
+  const sim: Simulation<Stores> = {
+    ...initializeSimulation(),
+    stores: {
+      queue: initializeStore({
+        capacity: Number.MAX_SAFE_INTEGER,
+        discipline: policies["first come, first served"],
+      }),
+      done: initializeStore({ capacity: Number.MAX_SAFE_INTEGER }),
+    },
+  };
 
   sim.disciplines = registerDiscipline(
     sim,
     policies["first come, first served"],
   );
 
-  // A job fits if what is free, carried by the allocator's request, covers what it needs
-  sim.predicates = registerPredicate<Message, "fits", Allocator>(sim, {
-    type: "fits",
-    predicate: ({ process: { data: message } }, { process: { data } }) =>
-      message !== undefined && data !== undefined && (
-        "released" in message ||
-        message.cpus <= data.free.cpus.length &&
-          message.gpus <= data.free.gpus.length
-      ),
-  });
-
-  sim.stores = registerStore<Message>(
-    sim,
-    initializeStore({
-      id: "queue",
-      capacity: Number.MAX_SAFE_INTEGER,
-      discipline: "policy",
-    }),
-  );
-  sim.stores = registerStore<Running>(
-    sim,
-    initializeStore({ id: "done", capacity: Number.MAX_SAFE_INTEGER }),
-  );
+  sim.predicates = registerPredicate(sim, fits);
 
   sim.processes = registerProcess(sim, submit);
   sim.processes = registerProcess(sim, allocator);
@@ -295,7 +296,7 @@ if (import.meta.main) {
     sim,
     createEvent({
       scheduledAt: 0,
-      process: { type: "allocator", data: { free } },
+      process: { type: allocator, data: { free } },
     }),
   );
 
@@ -312,12 +313,12 @@ if (import.meta.main) {
     sim,
     createEvent({
       scheduledAt: 0,
-      process: { type: "submit", data: { jobs: workload, next: 0 } },
+      process: { type: submit, data: { jobs: workload, next: 0 } },
     }),
   );
 
   const { result: paused } = await runSimulation(sim, {
-    until: (_sim, next) => next.scheduledAt > 15,
+    until: (_sim, next) => next.scheduledAt > 1500,
   });
 
   console.log(
@@ -328,11 +329,11 @@ if (import.meta.main) {
 
   // One run per policy, each from a copy of the paused state: its own discipline, and the jobs already queued reordered under it
   for (const [name, policy] of Object.entries(policies)) {
-    const swapped: Simulation = {
+    const swapped = {
       ...paused,
       disciplines: registerDiscipline(paused, policy),
     };
-    const branch: Simulation = {
+    const branch = {
       ...swapped,
       stores: reorderStore(swapped, "queue"),
     };

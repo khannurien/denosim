@@ -8,7 +8,6 @@ import {
   initializeStore,
   put,
   registerProcess,
-  registerStore,
   runSimulation,
   scheduleEvent,
   serializeSimulation,
@@ -69,7 +68,8 @@ const customer: ProcessDefinition<
     leave: Customer & Clerk;
   },
   Stores,
-  { order: Clerk }
+  { order: Clerk },
+  "arrive"
 > = {
   type: "customer",
   initial: "arrive",
@@ -124,7 +124,7 @@ function quits(key: ReadableStreamReadResult<Uint8Array>): boolean {
  * Plays `sim` until no event is left, or until a key is pressed.
  * Calls itself to resume: once per pause.
  */
-async function play(sim: Simulation): Promise<void> {
+async function play(sim: Simulation<Stores>): Promise<void> {
   // Pause asked from outside the run: the signal stops it, and its clock, even during the wait before an event
   const pause = new AbortController();
   const pressed = keys.read().then((key) => {
@@ -158,7 +158,10 @@ async function play(sim: Simulation): Promise<void> {
 }
 
 if (import.meta.main) {
-  const sim = initializeSimulation();
+  const sim: Simulation<Stores> = {
+    ...initializeSimulation(),
+    stores: { clerks: initializeStore({ capacity: 2 }) },
+  };
 
   sim.processes = registerProcess(sim, customer);
 
@@ -167,15 +170,14 @@ if (import.meta.main) {
 
   if (Deno.args.includes("--resume")) {
     // The state comes from the file, the registries from `sim`
-    const paused = deserializeSimulation(await Deno.readTextFile(FILE), sim);
+    const paused = deserializeSimulation<Stores>(
+      await Deno.readTextFile(FILE),
+      sim,
+    );
 
     console.log(`Resumed at ${paused.currentTime.toFixed(1)}`);
     await play(paused);
   } else {
-    sim.stores = registerStore<Clerk>(
-      sim,
-      initializeStore({ id: "clerks", capacity: 2 }),
-    );
     for (const clerk of ["Ada", "Bob"]) {
       put(sim, createEvent({ scheduledAt: 0 }), "clerks", { clerk });
     }
@@ -187,7 +189,7 @@ if (import.meta.main) {
         createEvent({
           scheduledAt: 2 * i,
           process: {
-            type: "customer",
+            type: customer,
             data: { customer: i + 1, minutes: duration },
           },
         }),

@@ -1,7 +1,7 @@
 import { assert, assertEquals } from "@std/assert";
 
 import type {
-  Event,
+  PredicateDefinition,
   ProcessDefinition,
   Simulation,
   StateData,
@@ -256,10 +256,10 @@ Deno.test("store state survives serialization roundtrip", async () => {
     process: { type: "none", data: { tag: "beta" } },
   });
 
-  const store: Store<StateData, "tag-store"> = {
-    id: "tag-store",
+  const store: Store = {
     capacity: 3,
     discipline: QueueDiscipline.LIFO,
+    consumerDiscipline: QueueDiscipline.LIFO,
     buffer: {
       entries: [{ event: bufA, seq: 0 }, { event: bufB, seq: 1 }],
       seq: 2,
@@ -326,10 +326,10 @@ Deno.test("getWhereRequests survives serialization roundtrip", async () => {
     process: { type: "none" },
   });
 
-  const store: Store<StateData, "fgr-store"> = {
-    id: "fgr-store",
+  const store: Store = {
     capacity: 0,
     discipline: QueueDiscipline.LIFO,
+    consumerDiscipline: QueueDiscipline.LIFO,
     buffer: { entries: [], seq: 0 },
     getRequests: { entries: [], seq: 0 },
     putRequests: { entries: [], seq: 0 },
@@ -361,6 +361,10 @@ Deno.test("pause/resume correctly resolves getWhere request after deserializatio
 
   const TASK_STORE = "tasks" as const;
   const PREDICATE_KEY = "isUrgent";
+  const isUrgent: PredicateDefinition = {
+    type: PREDICATE_KEY,
+    predicate: (event) => event.process?.data?.["urgent"] === true,
+  };
 
   const scheduler: ProcessDefinition<
     { wait: TaskData; run: TaskData },
@@ -375,7 +379,7 @@ Deno.test("pause/resume correctly resolves getWhere request after deserializatio
           sim,
           event,
           TASK_STORE,
-          PREDICATE_KEY,
+          isUrgent,
         );
         return {
           state: { ...state, step: "run" },
@@ -413,18 +417,15 @@ Deno.test("pause/resume correctly resolves getWhere request after deserializatio
     },
   };
 
-  const predicateRegistry = {
-    [PREDICATE_KEY]: (event: Event) => event.process?.data?.["urgent"] === true,
-  };
+  const predicateRegistry = { [PREDICATE_KEY]: isUrgent.predicate };
 
   // First run: stop after t=0 so the scheduler blocks; producer (t=1) has not yet fired.
   const sim = initializeSimulation();
   sim.predicates = predicateRegistry;
   const store = initializeStore({
-    id: TASK_STORE,
     capacity: 10,
   });
-  sim.stores = registerStore(sim, store);
+  sim.stores = registerStore(sim, TASK_STORE, store);
   sim.processes = registerProcess(sim, scheduler);
   sim.processes = registerProcess(sim, producer);
 

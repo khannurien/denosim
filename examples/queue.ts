@@ -1,4 +1,4 @@
-import type { ProcessDefinition, StateData } from "../mod.ts";
+import type { ProcessDefinition, Simulation, StateData } from "../mod.ts";
 import {
   continueEvent,
   createEvent,
@@ -7,7 +7,6 @@ import {
   initializeStore,
   put,
   registerProcess,
-  registerStore,
   runSimulation,
   scheduleEvent,
 } from "../mod.ts";
@@ -51,7 +50,8 @@ const customer: ProcessDefinition<
     leave: Customer & Barista;
   },
   Stores,
-  { order: Barista }
+  { order: Barista },
+  "arrive"
 > = {
   type: "customer",
   initial: "arrive",
@@ -95,12 +95,10 @@ const customer: ProcessDefinition<
 };
 
 if (import.meta.main) {
-  const sim = initializeSimulation();
-
-  sim.stores = registerStore<Barista>(
-    sim,
-    initializeStore({ id: "counter", capacity: 1 }),
-  );
+  const sim: Simulation<Stores> = {
+    ...initializeSimulation(),
+    stores: { counter: initializeStore({ capacity: 1 }) },
+  };
   put(sim, createEvent({ scheduledAt: 0 }), "counter", { barista: "Sam" });
 
   sim.processes = registerProcess(sim, customer);
@@ -113,7 +111,7 @@ if (import.meta.main) {
   for (const { at, ...data } of customers) {
     sim.timeline = scheduleEvent(
       sim,
-      createEvent({ scheduledAt: at, process: { type: "customer", data } }),
+      createEvent({ scheduledAt: at, process: { type: customer, data: data } }),
     );
   }
 

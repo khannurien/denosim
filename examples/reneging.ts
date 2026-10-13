@@ -1,4 +1,9 @@
-import type { Event, ProcessDefinition, StateData } from "../mod.ts";
+import type {
+  Event,
+  ProcessDefinition,
+  Simulation,
+  StateData,
+} from "../mod.ts";
 import {
   cancel,
   continueEvent,
@@ -8,7 +13,6 @@ import {
   initializeStore,
   put,
   registerProcess,
-  registerStore,
   runSimulation,
   scheduleEvent,
 } from "../mod.ts";
@@ -61,7 +65,8 @@ const caller: ProcessDefinition<
     hangup: Caller & Agent;
   },
   Stores,
-  { answer: Agent | undefined }
+  { answer: Agent | undefined },
+  "call"
 > = {
   type: "caller",
   initial: "call",
@@ -126,12 +131,10 @@ const caller: ProcessDefinition<
 };
 
 if (import.meta.main) {
-  const sim = initializeSimulation();
-
-  sim.stores = registerStore<Agent>(
-    sim,
-    initializeStore({ id: "agents", capacity: 1 }),
-  );
+  const sim: Simulation<Stores> = {
+    ...initializeSimulation(),
+    stores: { agents: initializeStore({ capacity: 1 }) },
+  };
   put(sim, createEvent({ scheduledAt: 0 }), "agents", { agent: "Sam" });
 
   sim.processes = registerProcess(sim, caller);
@@ -145,7 +148,7 @@ if (import.meta.main) {
   for (const { at, ...data } of callers) {
     sim.timeline = scheduleEvent(
       sim,
-      createEvent({ scheduledAt: at, process: { type: "caller", data } }),
+      createEvent({ scheduledAt: at, process: { type: caller, data: data } }),
     );
   }
 

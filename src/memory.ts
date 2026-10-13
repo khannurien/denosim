@@ -1,4 +1,5 @@
 import type {
+  DisciplineType,
   Event,
   EventID,
   EventTransition,
@@ -7,6 +8,7 @@ import type {
   Simulation,
   Store,
   StoreID,
+  StoreItemMap,
   StoreQueue,
   Timestamp,
 } from "./model.ts";
@@ -30,6 +32,9 @@ export type StateDeltaOp = { key: EventID; value: ProcessState };
  */
 export type StoreDeltaOp = {
   key: StoreID;
+  capacity?: number;
+  discipline?: DisciplineType;
+  consumerDiscipline?: DisciplineType;
   buffer?: StoreQueue;
   getRequests?: StoreQueue;
   putRequests?: StoreQueue;
@@ -61,9 +66,9 @@ export interface SimulationDelta {
  * A window of the history of a run: a state, and the deltas of the events handled from it.
  * The history of a run is a sequence of windows, kept in memory or written to disk, one dump per window.
  */
-export interface HistoryWindow {
+export interface HistoryWindow<S extends StoreItemMap = StoreItemMap> {
   /** Base snapshot -- state the window starts from */
-  base: Simulation;
+  base: Simulation<S>;
 
   /** Sequence of deltas from base, one per handled event */
   deltas: SimulationDelta[];
@@ -174,6 +179,12 @@ function diffStores(
     if (prev[key] === current[key]) continue; // Structural sharing: whole store unchanged
     const p = prev[key], c = current[key];
     const op: StoreDeltaOp = { key };
+    // A store registered since `prev` (e.g. by a handler) is carried whole
+    if (!p || p.capacity !== c.capacity) op.capacity = c.capacity;
+    if (!p || p.discipline !== c.discipline) op.discipline = c.discipline;
+    if (!p || p.consumerDiscipline !== c.consumerDiscipline) {
+      op.consumerDiscipline = c.consumerDiscipline;
+    }
     if (!p || p.buffer !== c.buffer) op.buffer = c.buffer;
     if (!p || p.getRequests !== c.getRequests) op.getRequests = c.getRequests;
     if (!p || p.putRequests !== c.putRequests) op.putRequests = c.putRequests;
@@ -190,9 +201,9 @@ function diffStores(
  * Given a sequence of simulation states, create a history window that captures the initial state as a base and the subsequent states as a series of deltas representing the changes from one state to the next.
  * This allows for efficient storage and reconstruction of the simulation history by only recording the differences between states rather than the full state at each step.
  */
-export function createHistoryWindow(
-  states: Simulation[],
-): HistoryWindow {
+export function createHistoryWindow<S extends StoreItemMap>(
+  states: Simulation<S>[],
+): HistoryWindow<S> {
   const base = states[0];
   const deltas = states.slice(1).map((state, index) =>
     createDelta(states[index], state)
@@ -204,11 +215,11 @@ export function createHistoryWindow(
 /**
  * Given a base simulation state and a sequence of deltas, reconstruct the full sequence of simulation states by applying each delta in order to the base state.
  */
-export function reconstructFromDeltas(
-  base: Simulation,
+export function reconstructFromDeltas<S extends StoreItemMap>(
+  base: Simulation<S>,
   deltas: SimulationDelta[],
-): Simulation[] {
-  const states: Simulation[] = [base];
+): Simulation<S>[] {
+  const states: Simulation<S>[] = [base];
   for (const delta of deltas) {
     states.push(applyDeltas(states[states.length - 1], [delta]));
   }
@@ -220,11 +231,11 @@ export function reconstructFromDeltas(
  * Applies deltas to `base` and returns only the final state.
  * Use when intermediate states are not needed (e.g. resuming from a dump).
  */
-export function applyDeltas(
-  base: Simulation,
+export function applyDeltas<S extends StoreItemMap>(
+  base: Simulation<S>,
   deltas: SimulationDelta[],
-): Simulation {
-  const sim: Simulation = {
+): Simulation<S> {
+  const sim: Simulation<S> = {
     ...base,
     timeline: {
       events: { ...base.timeline.events },
@@ -232,8 +243,11 @@ export function applyDeltas(
       transitions: [...base.timeline.transitions],
     },
     states: { ...base.states },
-    stores: { ...base.stores },
   };
+
+  // Stores the deltas change: they are trusted to hold the items the stores of `base` are typed with
+  const changed: Record<StoreID, Store> = {};
+
   for (const delta of deltas) {
     sim.currentTime = delta.c;
     for (const op of delta.e) sim.timeline.events[op.key] = op.event;
@@ -242,17 +256,20 @@ export function applyDeltas(
     for (const op of delta.s) sim.states[op.key] = op.value;
     for (const op of delta.st) {
       const { key, ...fields } = op;
-      sim.stores[key] = { ...sim.stores[key], ...fields };
+      changed[key] = { ...(changed[key] ?? base.stores[key]), ...fields };
     }
   }
-  return sim;
+
+  return { ...sim, stores: { ...base.stores, ...changed } };
 }
 
 /**
  * Prunes finished and unreachable working data after a dump to reduce memory usage mid-run.
  * Full replay remains available through persisted dump files.
  */
-export function pruneWorkingState(sim: Simulation): Simulation {
+export function pruneWorkingState<S extends StoreItemMap>(
+  sim: Simulation<S>,
+): Simulation<S> {
   const events = Object.fromEntries(
     Object.entries(sim.timeline.events).filter(([_id, event]) =>
       sim.timeline.status[event.id] !== EventStatus.Finished
@@ -315,8 +332,10 @@ export function absorbWorkingState(
  * Every state is complete: it holds every event since the base of the first window, whether the windows were pruned or not.
  * Windows of a run resumed from the result of another can be passed one after the other.
  */
-export function historyStates(windows: HistoryWindow[]): Simulation[] {
-  const states: Simulation[] = [];
+export function historyStates<S extends StoreItemMap>(
+  windows: HistoryWindow<S>[],
+): Simulation<S>[] {
+  const states: Simulation<S>[] = [];
 
   // Complete state at the end of the windows already replayed
   const full: Pick<Simulation, "timeline" | "states"> = {

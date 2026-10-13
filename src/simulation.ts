@@ -16,6 +16,7 @@ import type {
   StepEventMap,
   StepResult,
   StepStateMap,
+  StepType,
   StoreItemMap,
   Timeline,
   Timestamp,
@@ -110,10 +111,10 @@ export function nextEvent(
  * Returns a boolean indicating whether the simulation should continue.
  * Simulation should continue if there are more events to process in queue.
  */
-export function advance(
-  current: Simulation,
+export function advance<S extends StoreItemMap>(
+  current: Simulation<S>,
   heap: EventHeap,
-): [Simulation, boolean] {
+): [Simulation<S>, boolean] {
   const event = nextEvent(current, heap);
 
   if (!event) {
@@ -132,11 +133,14 @@ export function advance(
  * Updates the event queue with the current event marked as `Finished`.
  * Returns an updated copy of the original simulation container.
  */
-function handleEvent(sim: Simulation, event: Event): Simulation {
+function handleEvent<S extends StoreItemMap>(
+  sim: Simulation<S>,
+  event: Event,
+): Simulation<S> {
   // Advance simulation time to this event's scheduled time
   // Start with a shallow copy of the timeline; finishEvent and scheduleEvent will do deep copies
   // Shallow-copy the stores registry; store objects are copied on write by put/get
-  const nextSim: Simulation = {
+  const nextSim: Simulation<S> = {
     ...sim,
     currentTime: event.scheduledAt,
     states: { ...sim.states },
@@ -282,7 +286,7 @@ export function registerProcess<
   S extends StoreItemMap = StoreItemMap,
   I extends StepEventMap<M> = Record<never, never>,
 >(
-  sim: Simulation,
+  sim: Simulation<S>,
   process: ProcessDefinition<M, S, I> & { type: K },
 ): ProcessRegistry {
   return {
@@ -298,20 +302,29 @@ export function registerProcess<
  * - Initial event status optionally set to `Waiting`
  * - An optional priority value (the lower the value, the higher the priority; defaults to 0)
  * - Scheduled timestamp
- * - Optional process to run on event handling (defaults to `none`, the dummy process)
+ * - Optional process to run on event handling (defaults to `none`, the dummy process), named by its type or by its definition
  */
-export function createEvent<T extends StateData>(
-  options: CreateEventOptions<T>,
+export function createEvent<
+  T extends StateData,
+  N extends StepType = StepType,
+>(
+  options: CreateEventOptions<T, N>,
 ): Event<T> {
+  const call = options.process;
+
   return {
     id: crypto.randomUUID(),
     parent: options.parent,
     waiting: options.waiting,
     priority: options.priority ?? 0,
     scheduledAt: options.scheduledAt,
-    process: options.process ? { ...options.process } : {
-      type: "none",
-    },
+    process: call
+      // A process named by its definition is started under the type of that definition
+      ? {
+        ...call,
+        type: typeof call.type === "string" ? call.type : call.type.type,
+      }
+      : { type: "none" },
   };
 }
 

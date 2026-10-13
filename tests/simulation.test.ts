@@ -1416,3 +1416,129 @@ Deno.test("runSimulation with no initial events completes immediately with valid
   assertEquals(stats.end, 0);
   assert(stats.duration >= 0);
 });
+
+Deno.test("createEvent checks the data of a process named by its definition", async () => {
+  interface Order extends StateData {
+    item: string;
+  }
+
+  interface Packed extends Order {
+    box: number;
+  }
+
+  const seen: string[] = [];
+
+  // Several steps: the initial one is named in the type
+  const order: ProcessDefinition<
+    { pack: Order; ship: Packed },
+    StoreItemMap,
+    Record<never, never>,
+    "pack"
+  > = {
+    type: "order",
+    initial: "pack",
+    steps: {
+      pack(sim, event, state) {
+        return {
+          state: { ...state, step: "ship", data: { ...state.data, box: 1 } },
+          next: [continueEvent(event, sim.currentTime + 1)],
+        };
+      },
+      ship(sim, _event, state) {
+        seen.push(`${state.data.item} in box ${state.data.box}`);
+
+        // A process started from a handler is checked the same way
+        return {
+          state,
+          next: state.data.item === "book"
+            ? [
+              createEvent({
+                scheduledAt: sim.currentTime,
+                process: { type: order, data: { item: "pen" } },
+              }),
+            ]
+            : [],
+        };
+      },
+    },
+  };
+
+  // A single step: nothing to name
+  const ping: ProcessDefinition<{ only: StateData }> = {
+    type: "ping",
+    initial: "only",
+    steps: {
+      only(_sim, _event, state) {
+        seen.push("ping");
+        return { state, next: [] };
+      },
+    },
+  };
+
+  // Several steps, none named: cannot be started by its definition
+  const unnamed: ProcessDefinition<{ pack: Order; ship: Packed }> = {
+    ...order,
+    type: "unnamed",
+  };
+
+  const event = createEvent({
+    scheduledAt: 3,
+    process: { type: order, data: { item: "book" } },
+  });
+  assertEquals(event.parent, undefined);
+  assertEquals(event.scheduledAt, 3);
+  assertEquals(event.process, { type: "order", data: { item: "book" } });
+
+  // Never called: only checks what the compiler rejects
+  const _rejected = () => {
+    // @ts-expect-error: `item` is missing
+    createEvent({ scheduledAt: 0, process: { type: order, data: {} } });
+    // @ts-expect-error: the state of another step
+    createEvent({ scheduledAt: 0, process: { type: order, data: { box: 1 } } });
+    // @ts-expect-error: no data
+    createEvent({ scheduledAt: 0, process: { type: order } });
+    createEvent({
+      scheduledAt: 0,
+      // @ts-expect-error: the initial step is not named
+      process: { type: unnamed, data: { item: "book" } },
+    });
+
+    // Named by its type, a process is not checked: its definition may be registered later
+    createEvent({ scheduledAt: 0, process: { type: "order", data: {} } });
+  };
+
+  const sim = initializeSimulation();
+  sim.processes = registerProcess(sim, order);
+  sim.processes = registerProcess(sim, ping);
+  sim.timeline = scheduleEvent(sim, event);
+  sim.timeline = scheduleEvent(
+    sim,
+    createEvent({ scheduledAt: 0, process: { type: ping, data: {} } }),
+  );
+
+  const { result } = await runSimulation(sim);
+
+  assertEquals(seen, ["ping", "book in box 1", "pen in box 1"]);
+  assertEquals(result.currentTime, 5);
+});
+
+Deno.test("the initial step named in the type of a definition is the one it starts at", () => {
+  const _named: ProcessDefinition<
+    { a: StateData; b: StateData },
+    StoreItemMap,
+    Record<never, never>,
+    "a"
+  > = {
+    type: "named",
+    // @ts-expect-error: `a` is named in the type
+    initial: "b",
+    steps: {
+      a(_sim, _event, state) {
+        return { state, next: [] };
+      },
+      b(_sim, _event, state) {
+        return { state, next: [] };
+      },
+    },
+  };
+});

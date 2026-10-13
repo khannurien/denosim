@@ -8,6 +8,7 @@ import type {
   Event,
   Simulation,
   SimulationRegistries,
+  StoreItemMap,
   Timestamp,
 } from "./model.ts";
 import { EventStatus } from "./model.ts";
@@ -33,9 +34,9 @@ export interface SimulationStats {
  * Return value of a simulation run.
  * Bundles the final simulation along with run statistics.
  */
-export interface SimulationResult {
+export interface SimulationResult<S extends StoreItemMap = StoreItemMap> {
   /** Final simulation state: complete, with every event since the state the run started from */
-  result: Simulation;
+  result: Simulation<S>;
 
   /** Statistics for the completed run */
   stats: SimulationStats;
@@ -44,7 +45,7 @@ export interface SimulationResult {
   next?: Event;
 
   /** History windows of the run, in order; only set when `history` is asked without a `directory` */
-  history?: HistoryWindow[];
+  history?: HistoryWindow<S>[];
 }
 
 /**
@@ -71,13 +72,13 @@ export interface HistoryOptions {
  * Allows setting the rate of simulation to map wall-clock speed to the virtual passing of time.
  * Allows keeping the history of the run, in memory or on disk.
  */
-export interface RunSimulationOptions {
+export interface RunSimulationOptions<S extends StoreItemMap = StoreItemMap> {
   /**
    * Stop condition, checked before each event is handled: `next` is the event about to be handled.
    * When it returns `true` the simulation stops and `next` stays `Scheduled`; running the result again resumes from there.
    * Must have no side effect: with a `rate`, it is checked again after the wait. If it then stops the run, the clock is at `next.scheduledAt`.
    */
-  until?: (sim: Simulation, next: Event) => boolean;
+  until?: (sim: Simulation<S>, next: Event) => boolean;
 
   /** Simulation speed, in simulation time units per wall-clock second */
   rate?: number;
@@ -305,10 +306,10 @@ export async function persistRunManifest(
  * Layers on memory management: the working state is compacted every `COMPACTION_INTERVAL` handled events, and the complete final state is put back together at the end.
  * Nothing touches the disk unless `history.directory` is given.
  */
-export async function runSimulation(
-  init: Simulation,
-  options?: RunSimulationOptions,
-): Promise<SimulationResult> {
+export async function runSimulation<S extends StoreItemMap>(
+  init: Simulation<S>,
+  options?: RunSimulationOptions<S>,
+): Promise<SimulationResult<S>> {
   const history = options?.history;
   const context = history?.directory !== undefined
     ? await initializeRun(history.directory, history)
@@ -325,15 +326,15 @@ export async function runSimulation(
 
   // Working state since the last compaction: `current` is the state the loop advances, finished events are pruned from it at each compaction
   // Every transition of `base` is already held by `full`
-  const working: HistoryWindow & { current: Simulation } = {
+  const working: HistoryWindow<S> & { current: Simulation<S> } = {
     base: init,
     deltas: [],
     current: init,
   };
 
   // Current history window, and the windows kept in memory
-  const window: HistoryWindow = { base: init, deltas: [] };
-  const windows: HistoryWindow[] = [];
+  const window: HistoryWindow<S> = { base: init, deltas: [] };
+  const windows: HistoryWindow<S>[] = [];
 
   // Closes the current history window: writes it to disk, or keeps it in memory
   const closeWindow = async () => {
@@ -446,7 +447,7 @@ export async function runSimulation(
     working.current,
     working.base.timeline.transitions.length,
   );
-  const result: Simulation = { ...working.current, ...full };
+  const result: Simulation<S> = { ...working.current, ...full };
 
   return {
     result,
@@ -481,12 +482,13 @@ function delay(ms: number, signal?: AbortSignal): Promise<number> {
  * Loads the history windows written to `directory` by previous `runSimulation` runs, in order.
  * Each dump file is a self-contained window. Pass the result to `historyStates` to reconstruct the intermediate states, as with the windows of a run that kept its history in memory.
  * Registries that are initialized in user code must be passed to the function.
+ * `S` types the stores of the windows, when given (e.g. `loadHistory<Stores>(directory, sim)`): the dumps are trusted to hold them.
  * Returns an empty array if the directory or its dumps do not exist.
  */
-export async function loadHistory(
+export async function loadHistory<S extends StoreItemMap = StoreItemMap>(
   directory: string,
   registries: SimulationRegistries,
-): Promise<HistoryWindow[]> {
+): Promise<HistoryWindow<S>[]> {
   // Read the manifest to find the dump directory
   // May differ from the default if the run was initialized with a custom path
   const manifestPath = `${directory}/run.json`;
@@ -515,9 +517,9 @@ export async function loadHistory(
     return parseInt(nameA, 10) - parseInt(nameB, 10);
   });
 
-  const windows: HistoryWindow[] = [];
+  const windows: HistoryWindow<S>[] = [];
   for (const file of dumps) {
-    windows.push(deserializeDump(await Deno.readTextFile(file), registries));
+    windows.push(deserializeDump<S>(await Deno.readTextFile(file), registries));
   }
 
   return windows;
