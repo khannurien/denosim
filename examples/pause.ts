@@ -74,6 +74,8 @@ const customer: ProcessDefinition<
   type: "customer",
   initial: "arrive",
   steps: {
+    // First step, run by the event that starts the customer
+    // Blocks until a clerk is free; the token arrives with the event that runs the next step
     arrive(sim, event, state) {
       console.log(
         `[${sim.currentTime}] customer ${state.data.customer} arrives`,
@@ -87,6 +89,8 @@ const customer: ProcessDefinition<
         finish,
       };
     },
+    // Run once a clerk is handed over: read from the event, and kept in the data to be put back
+    // Timeout: the next step runs once the order is ready
     order(sim, event, state) {
       const { clerk } = event.process.data;
       console.log(
@@ -98,6 +102,7 @@ const customer: ProcessDefinition<
         next: [continueEvent(event, sim.currentTime + state.data.minutes)],
       };
     },
+    // Run by the timeout: last step
     leave(sim, event, state) {
       console.log(
         `[${sim.currentTime}] customer ${state.data.customer} leaves`,

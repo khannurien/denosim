@@ -56,18 +56,25 @@ const customer: ProcessDefinition<
   type: "customer",
   initial: "arrive",
   steps: {
+    // First step, run by the event that starts the customer
+    // A step never waits: it returns the events that carry the process on, and the step the next one runs
     arrive(sim, event, state) {
       console.log(`[${sim.currentTime}] ${state.data.name} arrives`);
 
       // Blocks until the barista is free; the token arrives with the event that runs the next step
+      // `step` carries the customer on: scheduled now if the barista is there, left waiting in the store otherwise
+      // `resume` and `finish` are for the processes the operation unblocked, passed on as they are
       const { step, resume, finish } = get(sim, event, "counter");
 
       return {
+        // The step the next event of the customer runs
         state: { ...state, step: "order" },
         next: resume ? [step, ...resume] : [step],
         finish,
       };
     },
+    // Run once the barista is handed over: right away, or when the customer ahead leaves
+    // The token is read from the event, and kept in the data to be put back
     order(sim, event, state) {
       const { barista } = event.process.data;
       console.log(
@@ -80,6 +87,7 @@ const customer: ProcessDefinition<
         next: [continueEvent(event, sim.currentTime + state.data.minutes)],
       };
     },
+    // Run by the timeout: last step
     leave(sim, event, state) {
       console.log(`[${sim.currentTime}] ${state.data.name} leaves`);
 

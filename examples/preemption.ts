@@ -104,6 +104,8 @@ const cpu: ProcessDefinition<
   type: "cpu",
   initial: "idle",
   steps: {
+    // First step, run by the event that starts the CPU, then each time it has nothing left to run: the CPU never ends
+    // Blocks until a task is ready: the most urgent one, by the discipline of the store
     idle(sim, event, state) {
       const { step, resume, finish } = get(sim, event, "ready");
 
@@ -113,6 +115,8 @@ const cpu: ProcessDefinition<
         finish,
       };
     },
+    // Run once a task is handed over
+    // Only moves it from the event to the data, and goes on at the same time: a request carries the data its step received, not the data it returns
     load(sim, event, state) {
       // The task arrives with the event: kept in the data, where the next step and its request find it
       return {
@@ -124,6 +128,8 @@ const cpu: ProcessDefinition<
         next: [continueEvent(event, sim.currentTime)],
       };
     },
+    // Run with the task in the data: after `load`, or after a preemption
+    // Starts the task, then waits for whichever comes first: its end, or a more urgent one
     dispatch(sim, event, state) {
       const { running } = state.data;
       console.log(`[${sim.currentTime}] ${running.task} runs`);
@@ -154,6 +160,8 @@ const cpu: ProcessDefinition<
         finish,
       };
     },
+    // Run by whichever comes first: the timeout, with nothing on the event, or the request once served, with the more urgent task
+    // Both find the same data: the timeout and the request, kept by the previous step
     run(sim, event, state) {
       const { running, since, timeout, request } = state.data;
       const urgent = event.process.data;
@@ -205,6 +213,8 @@ const arrival: ProcessDefinition<{ arrive: Task }, Stores> = {
   type: "arrival",
   initial: "arrive",
   steps: {
+    // Only step, run by the event that starts the process, at the arrival time of the task
+    // The task goes straight to the CPU if the CPU's request takes it (`resume`), and waits in the store otherwise
     arrive(sim, event, state) {
       console.log(`[${sim.currentTime}] ${state.data.task} arrives`);
 

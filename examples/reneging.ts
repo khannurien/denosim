@@ -71,6 +71,8 @@ const caller: ProcessDefinition<
   type: "caller",
   initial: "call",
   steps: {
+    // First step, run by the event that starts the caller
+    // Returns two events of the caller: each would run the next step, so the one that comes first cancels the other
     call(sim, event, state) {
       console.log(`[${sim.currentTime}] ${state.data.caller} calls`);
 
@@ -91,6 +93,8 @@ const caller: ProcessDefinition<
         finish,
       };
     },
+    // Run by whichever comes first: the request once served, with the agent on the event, or the timeout, with nothing
+    // Both find the same data: the request and the timeout, kept by the previous step
     answer(sim, event, state) {
       const { caller, minutes, request, timeout } = state.data;
       const item = event.process.data;
@@ -117,6 +121,7 @@ const caller: ProcessDefinition<
 
       return { state, next: [], finish: withdrawn.finish };
     },
+    // Run by the timeout that ends the call: last step
     hangup(sim, event, state) {
       console.log(`[${sim.currentTime}] ${state.data.caller} hangs up`);
 

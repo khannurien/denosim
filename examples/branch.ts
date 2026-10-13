@@ -56,6 +56,8 @@ const job: ProcessDefinition<
   type: "job",
   initial: "queue",
   steps: {
+    // First step, run by the event that starts the job
+    // Blocks until a node is free; the token arrives with the event that runs the next step
     queue(sim, event, state) {
       const { step, resume, finish } = get(sim, event, "nodes");
 
@@ -65,6 +67,8 @@ const job: ProcessDefinition<
         finish,
       };
     },
+    // Run once a node is handed over: read from the event, and kept in the data with the start time
+    // Timeout: the next step runs once the job is over
     run(sim, event, state) {
       return {
         state: {
@@ -79,6 +83,8 @@ const job: ProcessDefinition<
         next: [continueEvent(event, sim.currentTime + state.data.duration)],
       };
     },
+    // Run by the timeout: last step
+    // Puts the node back, and leaves what the job went through in `done`
     release(sim, event, state) {
       // Two store operations in one step: only their `resume` and `finish` are passed on, the job ends here
       // Sound as neither store is ever full
@@ -101,6 +107,7 @@ const keep: ProcessDefinition<{ decide: StateData }, Stores> = {
   type: "operator",
   initial: "decide",
   steps: {
+    // Only step, run by the operator's event: scheduled under a type, it runs the definition registered under that type when it is handled
     decide(_sim, _event, state) {
       return { state, next: [] };
     },
@@ -112,6 +119,7 @@ const rent: ProcessDefinition<{ decide: StateData }, Stores> = {
   type: "operator",
   initial: "decide",
   steps: {
+    // Same event, other definition
     decide(sim, event, state) {
       // `step` is not passed on, the operator ends here: sound as the store has room for a third node
       const { resume, finish } = put(sim, event, "nodes", { node: "n3" });

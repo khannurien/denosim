@@ -77,6 +77,7 @@ Simple examples go through real-world use cases; run one with `deno run examples
 - `queue.ts` -- a coffee shop with one barista: processes, timeouts, a store holding a token;
 - `reneging.ts` -- callers give up when their patience runs out: wait for an item or a timeout, cancel the other;
 - `preemption.ts` -- one CPU, tasks with priorities: a running task is interrupted by a more urgent one and put back in the queue;
+- `takeaway.ts` -- two cooks, one pick-up slot per customer: a store registered by a handler during the run, named in the order it serves;
 - `allocator.ts` -- jobs needing CPUs and GPUs: a store as a task queue, an allocator process that starts a job once everything it needs is free, two queue policies compared, metrics;
 - `branch.ts` -- keep two nodes or rent a third: pause before a decision, one run per side from the same state;
 - `pause.ts` -- a counter played in real time: any key pauses and writes the state to disk, `--resume` reads it back.

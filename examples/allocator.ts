@@ -27,15 +27,15 @@ import {
  * A training cluster with 4 CPUs and 2 GPUs: each job needs some of both, held for its whole duration.
  * An allocator owns the units and decides alone. Submitted jobs wait in a store used as a task queue; the allocator takes the best one that fits in what is free, all at once, and starts it with its units.
  * A finished job hands its units back through the same store: one blocking request per step, and nothing is held while waiting for the rest.
- * The queue discipline is the scheduling policy. At t=15 jobs are piling up: the run is paused, then resumed once per policy, from the same state.
+ * The queue discipline is the scheduling policy. At t=1500 jobs are piling up: the run is paused, then resumed once per policy, from the same state.
  *
  * deno run examples/allocator.ts
  *
  * Expected output:
  *
- * Paused at 15: 7 jobs queued
- * first come, first served: 30 jobs done, mean wait 13.5, max wait 32, ended at 67, CPU 96%, GPU 65%
- * shortest job first: 30 jobs done, mean wait 11.7, max wait 47, ended at 70, CPU 91%, GPU 62%
+ * Paused at 1500: 926 jobs queued
+ * first come, first served: 3000 jobs done, mean wait 2455.0, max wait 5003, ended at 8013, CPU 100%, GPU 64%
+ * shortest job first: 3000 jobs done, mean wait 1681.9, max wait 6693, ended at 8017, CPU 100%, GPU 64%
  */
 
 interface Units {
@@ -91,6 +91,8 @@ const submit: ProcessDefinition<{ submit: Workload }, Stores> = {
   type: "submit",
   initial: "submit",
   steps: {
+    // Only step: run by the event that starts the process, then by its own timeout, once per job
+    // The data says which job is due: the step is the same, the state moves
     submit(sim, event, state) {
       const { jobs, next } = state.data;
 
@@ -124,6 +126,8 @@ const allocator: ProcessDefinition<
   type: "allocator",
   initial: "wait",
   steps: {
+    // First step, run by the event that starts the allocator, then after each message: the allocator never ends
+    // Blocks until the queue holds a message it can serve
     wait(sim, event, state) {
       // Units handed back, or the best queued job that fits: the request carries the allocator's data, for the predicate to compare
       const { step, resume, finish } = getWhere(sim, event, "queue", fits);
@@ -134,6 +138,8 @@ const allocator: ProcessDefinition<
         finish,
       };
     },
+    // Run once a message is handed over, read from the event: units handed back, or a job to start
+    // Either way the allocator goes back to the first step at the same time, with what is free now in its data, for its next request to carry
     serve(sim, event, state) {
       const { free } = state.data;
       const message = event.process.data;
@@ -191,12 +197,16 @@ const job: ProcessDefinition<
   type: "job",
   initial: "run",
   steps: {
+    // First step, run by the event the allocator returned: the job starts with its units, it never waits for them
+    // Timeout: the next step runs once the job is over
     run(sim, event, state) {
       return {
         state: { ...state, step: "finish" },
         next: [continueEvent(event, sim.currentTime + state.data.duration)],
       };
     },
+    // Run by the timeout: last step
+    // Hands the units back, and leaves what the job went through in `done`
     finish(sim, event, state) {
       // Two store operations in one step: only their `resume` and `finish` are passed on, the job ends here
       // Sound as neither store is ever full
